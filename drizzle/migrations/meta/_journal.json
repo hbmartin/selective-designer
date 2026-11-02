@@ -15,6 +15,13 @@
       "when": 1793658637771,
       "tag": "0001_upload_intents_and_provider_calls",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1793660820630,
+      "tag": "0002_designs_and_images",
+      "breakpoints": true
     }
   ]
 }

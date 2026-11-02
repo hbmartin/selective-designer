@@ -1,6 +1,12 @@
 import { notFound } from '@tanstack/react-router';
 
-import { toScopeKey, toUserId } from '@/modules/kernel';
+import { toDesignId, toScopeKey, toUserId } from '@/modules/kernel';
+
+export const parseRouteDesignId = (value: string) => {
+  const parsed = toDesignId(value);
+  if (parsed.isError()) throw notFound();
+  return parsed.get();
+};
 
 export const parseRouteUserId = (value: string) => {
   const parsed = toUserId(value);

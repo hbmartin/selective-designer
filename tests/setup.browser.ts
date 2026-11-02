@@ -11,7 +11,7 @@ vi.mock('@/platform/env/client', () => ({
     VITE_ENV_NAME: 'TEST',
     VITE_AUTH_SIGNUP_ENABLED: true,
     VITE_VISUAL_TEST: false,
-    VITE_S3_BUCKET_PUBLIC_URL: 'http://127.0.0.1:9000/default',
+    VITE_S3_BUCKET_URL: 'http://127.0.0.1:9000/default',
   },
 }));
 

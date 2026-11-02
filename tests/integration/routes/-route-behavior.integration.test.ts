@@ -19,7 +19,7 @@ const mocks = vi.hoisted(() => ({
   envClient: {
     VITE_BASE_URL: 'http://localhost:3000',
     VITE_AUTH_SIGNUP_ENABLED: true,
-    VITE_S3_BUCKET_PUBLIC_URL: 'http://localhost:9000/default',
+    VITE_S3_BUCKET_URL: 'http://localhost:9000/default',
     VITE_VISUAL_TEST: false,
   },
 }));

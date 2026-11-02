@@ -22,6 +22,15 @@ subgraph module_auth["auth"]
   node_auth_transport["transport"]
 end
 
+subgraph module_design["design"]
+  node_design_public["public"]
+  node_design_application["application"]
+  node_design_domain["domain"]
+  node_design_infrastructure["infrastructure"]
+  node_design_presentation["presentation"]
+  node_design_transport["transport"]
+end
+
 subgraph module_email["email"]
   node_email_public["public"]
   node_email_application["application"]
@@ -81,6 +90,26 @@ node_auth_transport --> node_auth_domain
 node_auth_transport --> node_auth_public
 node_auth_transport --> node_kernel_public
 node_auth_transport --> node_kernel_transport
+node_design_application --> node_design_domain
+node_design_application --> node_kernel_domain
+node_design_infrastructure --> node_auth_infrastructure
+node_design_infrastructure --> node_design_domain
+node_design_infrastructure --> node_kernel_domain
+node_design_infrastructure --> node_kernel_infrastructure
+node_design_presentation --> node_auth_public
+node_design_presentation --> node_design_domain
+node_design_presentation --> node_design_public
+node_design_presentation --> node_kernel_domain
+node_design_public --> node_design_application
+node_design_public --> node_design_domain
+node_design_public --> node_design_infrastructure
+node_design_public --> node_design_presentation
+node_design_public --> node_design_transport
+node_design_transport --> node_auth_public
+node_design_transport --> node_design_domain
+node_design_transport --> node_kernel_domain
+node_design_transport --> node_kernel_public
+node_design_transport --> node_kernel_transport
 node_email_application --> node_email_domain
 node_email_application --> node_kernel_domain
 node_email_infrastructure --> node_email_public
@@ -97,6 +126,7 @@ node_email_public --> node_kernel_public
 node_email_transport --> node_email_public
 node_email_transport --> node_kernel_domain
 node_kernel_infrastructure --> node_auth_infrastructure
+node_kernel_infrastructure --> node_design_infrastructure
 node_kernel_infrastructure --> node_email_infrastructure
 node_kernel_infrastructure --> node_kernel_domain
 node_kernel_infrastructure --> node_kernel_transport
@@ -126,16 +156,21 @@ linkStyle 7 stroke-dasharray: 1 4
 linkStyle 8 stroke-dasharray: 1 4
 linkStyle 10 stroke-dasharray: 6 4
 linkStyle 26 stroke-dasharray: 1 4
-linkStyle 42 stroke-dasharray: 1 4
-linkStyle 44 stroke-dasharray: 1 4
-linkStyle 50 stroke-dasharray: 1 4
-linkStyle 53 stroke-dasharray: 1 4
-linkStyle 54 stroke-dasharray: 1 4
-linkStyle 56 stroke-dasharray: 6 4
-linkStyle 66 stroke-dasharray: 1 4
-linkStyle 67 stroke-dasharray: 1 4
-linkStyle 68 stroke-dasharray: 1 4
-linkStyle 69 stroke-dasharray: 6 4
+linkStyle 45 stroke-dasharray: 1 4
+linkStyle 47 stroke-dasharray: 1 4
+linkStyle 48 stroke-dasharray: 1 4
+linkStyle 49 stroke-dasharray: 6 4
+linkStyle 62 stroke-dasharray: 1 4
+linkStyle 64 stroke-dasharray: 1 4
+linkStyle 70 stroke-dasharray: 1 4
+linkStyle 71 stroke-dasharray: 1 4
+linkStyle 74 stroke-dasharray: 1 4
+linkStyle 75 stroke-dasharray: 1 4
+linkStyle 77 stroke-dasharray: 6 4
+linkStyle 87 stroke-dasharray: 1 4
+linkStyle 88 stroke-dasharray: 1 4
+linkStyle 89 stroke-dasharray: 1 4
+linkStyle 90 stroke-dasharray: 6 4
 ```
 
 ## Edge Styles

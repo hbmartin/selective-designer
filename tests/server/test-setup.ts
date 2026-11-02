@@ -40,7 +40,7 @@ vi.mock('@/platform/env/client', () => ({
   envClient: {
     VITE_BASE_URL: 'http://localhost:3000',
     VITE_AUTH_SIGNUP_ENABLED: true,
-    VITE_S3_BUCKET_PUBLIC_URL: 'http://127.0.0.1:9000/default',
+    VITE_S3_BUCKET_URL: 'http://127.0.0.1:9000/default',
     VITE_SENTRY_DSN: undefined,
     VITE_SENTRY_ENVIRONMENT: undefined,
     VITE_SENTRY_TRACES_SAMPLE_RATE: 0,

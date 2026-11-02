@@ -30,7 +30,7 @@ describe('security headers', () => {
     const policy = buildContentSecurityPolicy({
       baseUrl: 'https://app.example',
       isProduction: true,
-      s3BucketPublicUrl: 'https://assets.example/designs',
+      s3BucketUrl: 'https://assets.example/designs',
     });
 
     expect(policy).toContain("default-src 'self'");

@@ -1,19 +1,17 @@
 import { linkOptions } from '@tanstack/react-router';
+import { ImagesIcon } from 'lucide-react';
 
 import {
-  IconHouseDuotone,
-  IconHouseFill,
   IconUserCircleDuotone,
   IconUserCircleFill,
 } from '@/platform/components/icons/generated';
 
 export const MAIN_NAV_LINKS = linkOptions([
   {
-    labelTranslationKey: 'layout:nav.home',
-    icon: IconHouseDuotone,
-    iconActive: IconHouseFill,
-    to: '/app',
-    activeOptions: { exact: true },
+    labelTranslationKey: 'layout:nav.designs',
+    icon: ImagesIcon,
+    iconActive: ImagesIcon,
+    to: '/app/designs',
   },
   {
     labelTranslationKey: 'layout:nav.account',

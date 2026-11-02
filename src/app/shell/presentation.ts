@@ -4,7 +4,6 @@ export {
   type NavLinkItem,
 } from './presentation/app/main-nav-config';
 export { useShouldShowNav } from './presentation/app/nav-visibility';
-export { PageHome } from './presentation/app/page-home';
 export { Layout as ManagerLayout } from './presentation/manager/layout';
 export { PageDashboard } from './presentation/manager/page-dashboard';
 export {

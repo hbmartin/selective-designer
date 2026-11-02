@@ -71,10 +71,10 @@ const clientSchema = () =>
       .string()
       .optional()
       .transform((value) => value ?? (isDev() ? 'gold' : 'plum')),
-    VITE_S3_BUCKET_PUBLIC_URL: z
+    VITE_S3_BUCKET_URL: z
       .url()
       .refine((value) => isSecureUrlForProduction(value, isProd()), {
-        message: httpsInProductionMessage('VITE_S3_BUCKET_PUBLIC_URL'),
+        message: httpsInProductionMessage('VITE_S3_BUCKET_URL'),
       }),
     VITE_SENTRY_DSN: z
       .string()

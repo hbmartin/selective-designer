@@ -415,7 +415,7 @@ describe('strict modular monolith layout', () => {
   });
 
   it('requires module public split barrels where modules expose adapters', () => {
-    for (const moduleName of ['account', 'auth', 'user']) {
+    for (const moduleName of ['account', 'auth', 'design', 'user']) {
       const moduleRoot = path.join(root, 'src/modules', moduleName);
       expect(fs.existsSync(path.join(moduleRoot, 'index.ts'))).toBe(true);
       expect(fs.existsSync(path.join(moduleRoot, 'presentation.ts'))).toBe(
@@ -428,7 +428,7 @@ describe('strict modular monolith layout', () => {
   });
 
   it('keeps core business modules in vertical hexagonal slices', () => {
-    for (const moduleName of ['account', 'user']) {
+    for (const moduleName of ['account', 'design', 'user']) {
       const moduleRoot = path.join(root, 'src/modules', moduleName);
 
       for (const expectedPath of [
@@ -443,7 +443,7 @@ describe('strict modular monolith layout', () => {
       }
     }
 
-    for (const moduleName of ['auth', 'email']) {
+    for (const moduleName of ['auth', 'design', 'email']) {
       expect(
         fs.existsSync(
           path.join(

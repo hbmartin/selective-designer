@@ -1,6 +1,3 @@
-export { default as IconBookOpen } from './icon-book-open';
-export { default as IconBookOpenDuotone } from './icon-book-open-duotone';
-export { default as IconBookOpenFill } from './icon-book-open-fill';
 export { default as IconGitBranch } from './icon-git-branch';
 export { default as IconGitBranchDuotone } from './icon-git-branch-duotone';
 export { default as IconGitBranchFill } from './icon-git-branch-fill';

@@ -7,9 +7,15 @@ import {
 import { describe, expect, it } from 'vitest';
 
 import { accountUpdateInfo } from '@/modules/account/server';
+import { designGetAll } from '@/modules/design/server';
 import { userGetAll } from '@/modules/user/server';
 
 const protectedReadCalls = [
+  {
+    data: { limit: 20, searchTerm: '' },
+    name: 'designGetAll',
+    serverFn: designGetAll,
+  },
   {
     data: { limit: 20, searchTerm: '' },
     name: 'userGetAll',

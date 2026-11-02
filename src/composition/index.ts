@@ -9,6 +9,12 @@ export {
   getAuthUseCases,
 } from './auth';
 export {
+  __resetDesignComposition,
+  type DesignOverrides,
+  getDesignPipelineUseCases,
+  getDesignUseCases,
+} from './design';
+export {
   __resetEmailComposition,
   type EmailOverrides,
   getEmailGateway,
@@ -27,6 +33,7 @@ export {
 } from './user';
 
 import { type AccountOverrides, getAccountUseCases } from './account';
+import { type DesignOverrides, getDesignUseCases } from './design';
 import { type EmailOverrides, getEmailServices } from './email';
 import { getKernel, type KernelOverrides } from './kernel';
 import { getUserUseCases, type UserOverrides } from './user';
@@ -34,6 +41,7 @@ import { getUserUseCases, type UserOverrides } from './user';
 export type ServicesOverrides = {
   kernel?: KernelOverrides;
   user?: Omit<UserOverrides, 'kernel'>;
+  design?: Omit<DesignOverrides, 'kernel'>;
   account?: Omit<AccountOverrides, 'kernel'>;
   email?: Omit<EmailOverrides, 'kernel' | 'db'>;
 };
@@ -43,6 +51,7 @@ export function getServices(overrides?: ServicesOverrides) {
     return {
       kernel: getKernel(),
       user: getUserUseCases(),
+      design: getDesignUseCases(),
       account: getAccountUseCases(),
       email: getEmailServices(),
     } as const;
@@ -52,6 +61,7 @@ export function getServices(overrides?: ServicesOverrides) {
   return {
     kernel,
     user: getUserUseCases({ ...overrides.user, kernel }),
+    design: getDesignUseCases({ ...overrides.design, kernel }),
     account: getAccountUseCases({ ...overrides.account, kernel }),
     email: getEmailServices({ ...overrides.email, kernel }),
   } as const;

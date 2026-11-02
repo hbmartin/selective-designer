@@ -7,8 +7,6 @@ import type { FieldProps } from '@/platform/components/form/types';
 import { useTfField } from '@/platform/components/form/use-tf-field';
 import { UploadInput } from '@/platform/components/upload/upload-input';
 
-import { envClient } from '@/platform/env/client';
-
 export const FieldUploadInput = (
   props: FieldProps<
     {
@@ -23,8 +21,8 @@ export const FieldUploadInput = (
 
   const getFieldUrl = (raw: unknown): string | undefined => {
     if (typeof raw !== 'string' || !raw) return undefined;
-    if (raw.startsWith('http')) return raw;
-    return `${envClient.VITE_S3_BUCKET_PUBLIC_URL}/${raw}`;
+    // The bucket is private: only already-signed URLs can be previewed.
+    return raw.startsWith('http') ? raw : undefined;
   };
 
   const value = getFieldUrl(field.value);

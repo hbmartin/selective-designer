@@ -1,11 +1,8 @@
-import { createFileRoute } from '@tanstack/react-router';
+import { createFileRoute, redirect } from '@tanstack/react-router';
 
-import { PageHome } from '@/app/shell/presentation';
-
+/** The app opens on the designs list. */
 export const Route = createFileRoute('/app/')({
-  component: RouteComponent,
+  beforeLoad: () => {
+    throw redirect({ to: '/app/designs', replace: true });
+  },
 });
-
-function RouteComponent() {
-  return <PageHome />;
-}

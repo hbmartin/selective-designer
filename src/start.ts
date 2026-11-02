@@ -84,7 +84,7 @@ const getSecurityHeaderOptions = (context?: unknown) => {
     baseUrl: envClient.VITE_BASE_URL,
     cspNonce: getCspNonceFromContext(context),
     isProduction: isProdRuntimeEnvironment(),
-    s3BucketPublicUrl: envClient.VITE_S3_BUCKET_PUBLIC_URL,
+    s3BucketUrl: envClient.VITE_S3_BUCKET_URL,
   };
 };
 

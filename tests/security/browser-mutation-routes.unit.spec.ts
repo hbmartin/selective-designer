@@ -59,6 +59,7 @@ describe('browser mutation route coverage', () => {
       '/api/telemetry/otel/v1/metrics',
       '/api/telemetry/otel/v1/traces',
       '/api/telemetry/sentry-tunnel',
+      '/api/upload',
       '/api/webhooks/resend',
       '/logout',
     ]);
@@ -67,6 +68,7 @@ describe('browser mutation route coverage', () => {
       '/api/telemetry/otel/v1/metrics',
       '/api/telemetry/otel/v1/traces',
       '/api/telemetry/sentry-tunnel',
+      '/api/upload',
       ...SIDE_EFFECT_ROUTE_PATHNAMES,
     ]);
     expect(externallyProtectedRoutes).toEqual([

@@ -6,7 +6,7 @@ type ContentSecurityPolicyOptions = {
   baseUrl?: string;
   cspNonce?: string;
   isProduction?: boolean;
-  s3BucketPublicUrl?: string;
+  s3BucketUrl?: string;
 };
 
 const PLAYWRIGHT_SCREENSHOT_STYLE_HASH_SOURCES = [
@@ -43,7 +43,7 @@ const formatDirective = (name: string, sources: string[]) =>
 export function buildContentSecurityPolicy(
   options: ContentSecurityPolicyOptions = {}
 ) {
-  const s3PublicOrigin = sourceOriginFromUrl(options.s3BucketPublicUrl);
+  const s3BucketOrigin = sourceOriginFromUrl(options.s3BucketUrl);
   const nonceSource = options.cspNonce
     ? `'nonce-${options.cspNonce}'`
     : undefined;
@@ -70,10 +70,10 @@ export function buildContentSecurityPolicy(
     "'self'",
     'data:',
     'blob:',
-    s3PublicOrigin,
+    s3BucketOrigin,
     'https://raw.githubusercontent.com',
   ]);
-  const connectSources = uniqueSources(["'self'", s3PublicOrigin]);
+  const connectSources = uniqueSources(["'self'", s3BucketOrigin]);
   const directives = [
     formatDirective('default-src', ["'self'"]),
     formatDirective('base-uri', ["'self'"]),

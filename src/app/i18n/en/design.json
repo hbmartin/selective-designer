@@ -1,0 +1,38 @@
+{
+  "list": {
+    "title": "Designs",
+    "archivedTitle": "Archived designs",
+    "archivedToggle": "Archived",
+    "newButton": "New design",
+    "empty": "No designs yet. Upload an architect's image to start.",
+    "emptySearch": "No designs match \"{{searchTerm}}\".",
+    "loadMore": "Load more"
+  },
+  "create": {
+    "title": "New design",
+    "description": "Upload the architect's image. It stays unchanged as the base image of this design.",
+    "dropzone": "Drop, paste or choose an image (PNG, JPEG or WebP)",
+    "previewAlt": "Selected base image",
+    "nameLabel": "Name",
+    "submitButton": "Create design",
+    "missingImage": "Choose a base image first.",
+    "unsupportedType": "Use a PNG, JPEG or WebP image.",
+    "errorMessage": "The design could not be created. Please try again."
+  },
+  "detail": {
+    "download": "Download",
+    "archive": "Archive",
+    "unarchive": "Restore",
+    "archived": "Design archived",
+    "unarchived": "Design restored",
+    "baseImageAlt": "Base image",
+    "dimensions": "Original size {{width}} × {{height}} px"
+  },
+  "upload": {
+    "errors": {
+      "NOT_AUTHENTICATED": "Sign in again to upload images.",
+      "UNAUTHORIZED": "You are not allowed to upload images.",
+      "invalid_file_type": "This file type is not allowed here."
+    }
+  }
+}

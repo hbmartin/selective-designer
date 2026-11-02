@@ -66,7 +66,7 @@ jobs:
     env:
       SKIP_ENV_VALIDATION: true
       VITE_BASE_URL: http://localhost:3000
-      VITE_S3_BUCKET_PUBLIC_URL: 'http://localhost:9000/default'
+      VITE_S3_BUCKET_URL: 'http://localhost:9000/default'
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
         with:
@@ -242,7 +242,7 @@ jobs:
     env:
       CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
       VITE_BASE_URL: http://localhost:3000
-      VITE_S3_BUCKET_PUBLIC_URL: 'http://localhost:9000/default'
+      VITE_S3_BUCKET_URL: 'http://localhost:9000/default'
       SKIP_ENV_VALIDATION: true
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
@@ -324,7 +324,7 @@ jobs:
     runs-on: ubuntu-latest
     env:
       VITE_BASE_URL: http://localhost:3000
-      VITE_S3_BUCKET_PUBLIC_URL: 'http://localhost:9000/default'
+      VITE_S3_BUCKET_URL: 'http://localhost:9000/default'
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
         with:
