@@ -1422,7 +1422,7 @@ rules:
     message: Construct branded IDs and domain strings with their toX parser instead of `as Brand` casts.
     severity: ERROR
     languages: [generic]
-    pattern-regex: '\bas\s+(?:AccountName|UserDisplayName|UserId|SessionId|ScopeKey|EmailStatusId|EmailProviderMessageId|EmailIdempotencyKey|EmailWebhookEventId|EmailRecipientList|OtpCode|LanguageCode|EmailAddress|GeneratedId|RequestId|CorrelationId|CacheKey)\b'
+    pattern-regex: '\bas\s+(?:AccountName|UserDisplayName|UserId|SessionId|ObjectKey|ProviderCallId|ScopeKey|EmailStatusId|EmailProviderMessageId|EmailIdempotencyKey|EmailWebhookEventId|EmailRecipientList|OtpCode|LanguageCode|EmailAddress|GeneratedId|RequestId|CorrelationId|CacheKey)\b'
     paths:
       include:
         - src/**/*.ts
@@ -1440,7 +1440,7 @@ rules:
     message: Branch on parser Result values before unwrapping; do not call toX(...).get() directly in production code.
     severity: ERROR
     languages: [generic]
-    pattern-regex: '\bto(?:AccountName|UserDisplayName|UserId|SessionId|ScopeKey|EmailStatusId|EmailProviderMessageId|EmailIdempotencyKey|EmailWebhookEventId|EmailRecipientList|OtpCode|LanguageCode|EmailAddress|GeneratedId|RequestId|CorrelationId|CacheKey)\s*\([^;]*?\)\s*\.get\s*\('
+    pattern-regex: '\bto(?:AccountName|UserDisplayName|UserId|SessionId|ObjectKey|ProviderCallId|ScopeKey|EmailStatusId|EmailProviderMessageId|EmailIdempotencyKey|EmailWebhookEventId|EmailRecipientList|OtpCode|LanguageCode|EmailAddress|GeneratedId|RequestId|CorrelationId|CacheKey)\s*\([^;]*?\)\s*\.get\s*\('
     paths:
       include:
         - src/**/*.ts

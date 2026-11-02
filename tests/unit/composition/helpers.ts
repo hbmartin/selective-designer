@@ -1,4 +1,9 @@
 import { Option, Result } from '@bloodyowl/boxed';
+import {
+  createFakeObjectStorage,
+  createFakeProviderCallLog,
+  createFakeUploadIntentStore,
+} from '@tests/support/fake-kernel-ports';
 
 import type { Kernel } from '@/composition/kernel';
 import { toGeneratedId } from '@/modules/kernel/domain/ids';
@@ -42,6 +47,9 @@ export function makeTestKernel(overrides: Partial<Kernel> = {}): Kernel {
     permissionChecker: {
       hasPermission: async () => Result.Ok({ type: 'permission_granted' }),
     },
+    objectStorage: createFakeObjectStorage().storage,
+    uploadIntentStore: createFakeUploadIntentStore().store,
+    providerCallLog: createFakeProviderCallLog().log,
     ...overrides,
   };
 }

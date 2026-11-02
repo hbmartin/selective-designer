@@ -1,4 +1,8 @@
 export {
+  DEFAULT_RENDER_MODEL_IDS,
+  getAiProvidersConfig,
+} from './infrastructure/config/ai-providers';
+export {
   getAuthProviderConfig,
   getBetterAuthConfig,
 } from './infrastructure/config/auth';
@@ -15,8 +19,10 @@ export {
   createTransactionRunner,
   getDefaultDbClient,
 } from './infrastructure/db/client';
+export { createProviderCallLog } from './infrastructure/db/provider-call-log-drizzle';
 export { user } from './infrastructure/db/schema';
 export { isRootDatabase } from './infrastructure/db/types';
+export { createUploadIntentStore } from './infrastructure/db/upload-intent-store-drizzle';
 export { createTelemetryLogger } from './infrastructure/logger/telemetry';
 export { BetterUploadObjectStorage } from './infrastructure/storage/better-upload';
 export { appErrorToResponse } from './transport/http/error-mapper';

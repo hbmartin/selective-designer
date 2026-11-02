@@ -1,3 +1,4 @@
+import { getAiProvidersConfig } from './ai-providers';
 import { getAuthConfig } from './auth';
 import { getDatabaseConfig } from './database';
 import { getEmailConfig } from './email';
@@ -19,4 +20,6 @@ export function validateServerConfig() {
   getRedisConfig();
   getStorageConfig();
   getTelemetryConfig();
+  // Last, so infrastructure secrets (auth, database, storage) fail first.
+  getAiProvidersConfig();
 }

@@ -77,3 +77,7 @@ triage_decisions.db
 *.pptx
 *.zip
 audio_docs/
+/.swc
+
+# Workflow SDK local world state
+/.workflow-data

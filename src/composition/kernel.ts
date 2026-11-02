@@ -5,8 +5,16 @@ import type { CacheGateway } from '@/modules/kernel/application/ports/cache-gate
 import type { Clock } from '@/modules/kernel/application/ports/clock';
 import type { IdGenerator } from '@/modules/kernel/application/ports/id-generator';
 import type { Logger } from '@/modules/kernel/application/ports/logger';
+import type { ObjectStoragePort } from '@/modules/kernel/application/ports/object-storage';
 import type { PermissionChecker } from '@/modules/kernel/application/ports/permission-checker';
+import type { ProviderCallLog } from '@/modules/kernel/application/ports/provider-call-log';
 import type { TransactionRunner } from '@/modules/kernel/application/ports/transaction-runner';
+import type { UploadIntentStore } from '@/modules/kernel/application/ports/upload-intent-store';
+import {
+  BetterUploadObjectStorage,
+  createProviderCallLog,
+  createUploadIntentStore,
+} from '@/modules/kernel/backend';
 import type { UserId } from '@/modules/kernel/domain/ids';
 import { systemClock } from '@/modules/kernel/infrastructure/clock/system-clock';
 import {
@@ -93,6 +101,9 @@ export type Kernel = {
   cacheGateway: CacheGateway;
   transactionRunner: TransactionRunner<DbTransaction>;
   permissionChecker: PermissionChecker;
+  objectStorage: ObjectStoragePort;
+  uploadIntentStore: UploadIntentStore;
+  providerCallLog: ProviderCallLog;
 };
 
 export type KernelOverrides = Overrides<Kernel>;
@@ -109,6 +120,9 @@ const buildDefaultKernel = (): Kernel => {
     cacheGateway: memoryCache(clock),
     transactionRunner: createTransactionRunner(db),
     permissionChecker: createProductionPermissionChecker(),
+    objectStorage: new BetterUploadObjectStorage(),
+    uploadIntentStore: createUploadIntentStore({ db }),
+    providerCallLog: createProviderCallLog({ db }),
   };
 };
 
@@ -137,6 +151,17 @@ export const getKernel = (overrides?: KernelOverrides): Kernel => {
         ? createTransactionRunner(db)
         : base.transactionRunner),
     permissionChecker: overrides.permissionChecker ?? base.permissionChecker,
+    objectStorage: overrides.objectStorage ?? base.objectStorage,
+    uploadIntentStore:
+      overrides.uploadIntentStore ??
+      (overrides.db !== undefined
+        ? createUploadIntentStore({ db })
+        : base.uploadIntentStore),
+    providerCallLog:
+      overrides.providerCallLog ??
+      (overrides.db !== undefined
+        ? createProviderCallLog({ db })
+        : base.providerCallLog),
   };
 };
 

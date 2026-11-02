@@ -350,6 +350,24 @@ module.exports = {
       to: { path: 'node_modules/better-auth/' },
     },
     {
+      name: 'workflow-sdk-confined',
+      severity: 'error',
+      comment:
+        'Workflow SDK imports stay in workflow transport entrypoints, infrastructure schedulers, composition and routes.',
+      from: {
+        pathNot:
+          '^src/(?:modules/[^/]+/(?:transport/workflows?|infrastructure)(?:/|$)|composition(?:/|$)|routes(?:/|$))',
+      },
+      to: { path: 'node_modules/(?:workflow|@workflow/[^/]+)/' },
+    },
+    {
+      name: 'fal-sdk-confined',
+      severity: 'error',
+      comment: 'The fal.ai client stays in provider infrastructure adapters.',
+      from: { pathNot: '^src/modules/[^/]+/infrastructure/' },
+      to: { path: 'node_modules/@fal-ai/' },
+    },
+    {
       name: 'resend-sdk-confined',
       severity: 'error',
       comment: 'Resend SDK imports stay in the email Resend adapter.',

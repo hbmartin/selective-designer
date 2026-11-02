@@ -29,8 +29,10 @@ peerDependencyRules:
 allowBuilds:
   '@parcel/watcher': true
   '@sentry/cli': true
+  '@swc/core': false
   '@tailwindcss/oxide': true
   bufferutil: false
+  cbor-extract: false
   cpu-features: false
   esbuild: true
   lefthook: true

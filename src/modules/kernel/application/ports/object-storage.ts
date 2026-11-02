@@ -45,6 +45,33 @@ export type ObjectUploadRequestHandler = (
  */
 export type ObjectDeleteOutcome = { type: 'object_deleted' };
 
+export type ObjectStoredOutcome = { type: 'object_stored'; objectKey: string };
+
+export type ObjectBytesOutcome =
+  | {
+      type: 'object_found';
+      bytes: Uint8Array;
+      contentType: string | undefined;
+    }
+  | { type: 'object_not_found' };
+
+export type SignedReadUrlOutcome = { type: 'signed_read_url'; url: string };
+
+export type ObjectCopyOutcome =
+  | {
+      type: 'object_copied';
+      objectKey: string;
+      contentType: string;
+      byteLength: number;
+    }
+  /** The source answered with a non-success status (e.g. expired link). */
+  | { type: 'copy_source_unavailable'; status: number }
+  /** The source answered, but its type or size breaks the given limits. */
+  | {
+      type: 'copy_source_rejected';
+      reason: 'content_type' | 'too_large' | 'insecure_url';
+    };
+
 export type ObjectStoragePort = {
   /**
    * Build an HTTP handler that serves presigned uploads for the given named
@@ -61,4 +88,36 @@ export type ObjectStoragePort = {
   deleteObject: (
     objectKey: string
   ) => Promise<ApplicationResult<ObjectDeleteOutcome>>;
+  /** Server-side write (e.g. a mask rewritten for a provider's polarity). */
+  putObject: (input: {
+    objectKey: string;
+    body: Uint8Array;
+    contentType: string;
+    cacheControl?: string;
+  }) => Promise<ApplicationResult<ObjectStoredOutcome>>;
+  /** Server-side read of a stored object's bytes. */
+  getObjectBytes: (
+    objectKey: string
+  ) => Promise<ApplicationResult<ObjectBytesOutcome>>;
+  /**
+   * Short-lived signed `GET` URL for the private bucket. Used by the browser
+   * and by model providers fetching request inputs. `attachmentFileName`
+   * forces a download with that filename.
+   */
+  createSignedReadUrl: (input: {
+    objectKey: string;
+    expiresInSeconds: number;
+    attachmentFileName?: string;
+  }) => Promise<ApplicationResult<SignedReadUrlOutcome>>;
+  /**
+   * Copy a provider-hosted result (HTTPS URL) into owned storage. Rejects
+   * non-HTTPS sources, unexpected content types and oversized bodies.
+   */
+  copyFromUrl: (input: {
+    sourceUrl: string;
+    objectKey: string;
+    acceptedContentTypes: readonly string[];
+    maxBytes: number;
+    cacheControl?: string;
+  }) => Promise<ApplicationResult<ObjectCopyOutcome>>;
 };

@@ -7,6 +7,7 @@ import { nitro } from 'nitro/vite';
 import { readFile } from 'node:fs/promises';
 import path from 'node:path';
 import { defineConfig, loadEnv, type Plugin } from 'vite';
+import { workflow } from 'workflow/vite';
 
 import { CSP_NONCE_PLACEHOLDER } from './src/platform/http/csp-nonce';
 
@@ -101,6 +102,9 @@ export default defineConfig(({ mode }) => {
       tsconfigPaths: true,
     },
     plugins: [
+      // Workflow SDK must run before the Start/Nitro plugins so its directive
+      // transform sees source modules first.
+      workflow({ dirs: ['src'] }),
       ...(isTestRuntime ? [] : devtools()),
       srcJsonImportPlugin(),
       tanstackStart(),

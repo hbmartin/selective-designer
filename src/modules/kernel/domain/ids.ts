@@ -12,6 +12,8 @@ const zBrandedNonEmptyString = <TBrand extends string>() =>
 
 export const zUserIdSchema = zBrandedNonEmptyString<'UserId'>();
 export const zSessionIdSchema = zBrandedNonEmptyString<'SessionId'>();
+export const zObjectKeySchema = zBrandedNonEmptyString<'ObjectKey'>();
+export const zProviderCallIdSchema = zBrandedNonEmptyString<'ProviderCallId'>();
 export const zScopeKeySchema = zBrandedNonEmptyString<'ScopeKey'>();
 export const zEmailStatusIdSchema = zBrandedNonEmptyString<'EmailStatusId'>();
 export const zEmailProviderMessageIdSchema =
@@ -32,6 +34,8 @@ export const zEmailAddressSchema = z
 
 export type UserId = z.infer<typeof zUserIdSchema>;
 export type SessionId = z.infer<typeof zSessionIdSchema>;
+export type ObjectKey = z.infer<typeof zObjectKeySchema>;
+export type ProviderCallId = z.infer<typeof zProviderCallIdSchema>;
 export type AuthSessionId = SessionId;
 export type ScopeKey = z.infer<typeof zScopeKeySchema>;
 export type EmailStatusId = z.infer<typeof zEmailStatusIdSchema>;
@@ -80,6 +84,10 @@ export const toUserId = (value: string): ParseResult<UserId> =>
   parseBrandedString(zUserIdSchema, value, 'UserId');
 export const toSessionId = (value: string): ParseResult<SessionId> =>
   parseBrandedString(zSessionIdSchema, value, 'SessionId');
+export const toObjectKey = (value: string): ParseResult<ObjectKey> =>
+  parseBrandedString(zObjectKeySchema, value, 'ObjectKey');
+export const toProviderCallId = (value: string): ParseResult<ProviderCallId> =>
+  parseBrandedString(zProviderCallIdSchema, value, 'ProviderCallId');
 export const toScopeKey = (value: string): ParseResult<ScopeKey> =>
   parseBrandedString(zScopeKeySchema, value, 'ScopeKey');
 export const toEmailStatusId = (value: string): ParseResult<EmailStatusId> =>
@@ -143,6 +151,8 @@ export const toCacheKey = (value: string): ParseResult<CacheKey> => {
 
 export const zUserId = () => zUserIdSchema;
 export const zSessionId = () => zSessionIdSchema;
+export const zObjectKey = () => zObjectKeySchema;
+export const zProviderCallId = () => zProviderCallIdSchema;
 export const zScopeKey = () => zScopeKeySchema;
 export const zEmailStatusId = () => zEmailStatusIdSchema;
 export const zEmailProviderMessageId = () => zEmailProviderMessageIdSchema;
