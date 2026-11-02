@@ -1,0 +1,94 @@
+services:
+  postgres:
+    image: postgres:16.1@sha256:09f23e02d76670d3b346a3c00aa33a27cf57aab8341eedfcdaed41459d14f5c4
+    env_file:
+      - .env
+    ports:
+      - '127.0.0.1:${DOCKER_DATABASE_PORT:-5432}:5432'
+    environment:
+      POSTGRES_DB: $DOCKER_DATABASE_NAME
+      POSTGRES_USER: $DOCKER_DATABASE_USERNAME
+      POSTGRES_PASSWORD: $DOCKER_DATABASE_PASSWORD
+    healthcheck:
+      test:
+        [
+          'CMD-SHELL',
+          'pg_isready -U "$DOCKER_DATABASE_USERNAME" -d "$DOCKER_DATABASE_NAME"',
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  minio:
+    image: minio/minio:RELEASE.2025-07-23T15-54-02Z-cpuv1@sha256:7330be2e7320a7a699b36f72bd06a94d8a21ec9f6f397345d9c38fc6751141f5
+    ports:
+      - '127.0.0.1:${DOCKER_MINIO_API_PORT}:9000'
+      - '127.0.0.1:${DOCKER_MINIO_UI_PORT}:9001'
+    environment:
+      - MINIO_ROOT_USER=${DOCKER_MINIO_USERNAME}
+      - MINIO_ROOT_PASSWORD=${DOCKER_MINIO_PASSWORD}
+    volumes:
+      - minio:/data/minio
+    command: minio server /data/minio --console-address :${DOCKER_MINIO_UI_PORT}
+    healthcheck:
+      test: ['CMD', 'mc', 'ready', 'local']
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  maildev:
+    image: maildev/maildev:2.2.1@sha256:180ef51f65eefebb0e7122d8308813c1fd7bff164bc440ce5a3c2feee167a810
+    ports:
+      - '127.0.0.1:1025:1025'
+      - '127.0.0.1:1080:1080'
+    healthcheck:
+      test:
+        [
+          'CMD-SHELL',
+          'wget --spider --no-verbose --tries=1 -T 3 http://localhost:1080/healthz',
+        ]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  # LOCAL-DEV ONLY. This grants anonymous public download on the bucket
+  # (`mc anonymous set download` below) so the app can serve public assets
+  # locally. Do NOT replicate this anonymous-read grant on production object
+  # storage — scope production bucket access explicitly instead.
+  createbucket:
+    image: minio/mc:RELEASE.2025-08-13T08-35-41Z-cpuv1@sha256:95b5f3f7969a5c5a9f3a700ba72d5c84172819e13385aaf916e237cf111ab868
+    profiles:
+      - init
+    depends_on:
+      minio:
+        condition: service_healthy
+    network_mode: service:minio
+    entrypoint: ['']
+    command: [
+        'sh',
+        '-c',
+        '
+        mc alias set default "http://${S3_HOST}" "${DOCKER_MINIO_USERNAME}" "${DOCKER_MINIO_PASSWORD}";
+        mc admin user add default ${S3_ACCESS_KEY_ID} ${S3_SECRET_ACCESS_KEY};
+        mc admin policy attach default readwrite --user ${S3_ACCESS_KEY_ID};
+        mc mb --ignore-existing default/${S3_BUCKET_NAME} 2>/dev/null;
+        mc anonymous set download default/${S3_BUCKET_NAME};
+        echo ''Bucket configuration completed successfully'';
+        ',
+      ]
+    restart: 'no'
+
+  otel-collector:
+    image: otel/opentelemetry-collector-contrib:0.116.1@sha256:d0ebf65280da2e1b1491d1b93648281afd353d4b9ea19160090303cec9a233bd
+    profiles:
+      - observability
+    env_file:
+      - .env
+    command: ['--config=/etc/otelcol-contrib/config.yml']
+    ports:
+      - '127.0.0.1:${DOCKER_OTEL_COLLECTOR_PORT:-4318}:4318'
+    volumes:
+      - ./docker/otel/collector.yml:/etc/otelcol-contrib/config.yml:ro
+
+volumes:
+  minio:

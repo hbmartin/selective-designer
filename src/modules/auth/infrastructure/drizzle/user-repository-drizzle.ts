@@ -1,0 +1,490 @@
+import { Result } from '@bloodyowl/boxed';
+import { and, asc, desc, eq, sql } from 'drizzle-orm';
+import { match, P } from 'ts-pattern';
+
+import {
+  AppError,
+  type ApplicationResult,
+  type ParseResult,
+  type SessionId,
+  toEmailAddress,
+  toSessionId,
+  toUserId,
+  type UserId,
+} from '@/modules/kernel';
+import {
+  getConstraintName,
+  isUniqueConstraintViolation,
+} from '@/modules/kernel/infrastructure/db/errors';
+import { observeRepository } from '@/modules/kernel/infrastructure/db/observability';
+import {
+  ascendingTextCursorFilter,
+  descendingDateCursorFilter,
+  escapedIlikeFilter,
+  takeCursorPage,
+} from '@/modules/kernel/infrastructure/db/query-helpers';
+import type { DbLike } from '@/modules/kernel/infrastructure/db/types';
+import type {
+  User,
+  UserCreateInput,
+  UserRepository,
+  UserSession,
+  UserUpdatePersistenceInput,
+} from '@/modules/user';
+import { toUserDisplayName } from '@/modules/user';
+
+import { session as sessionTable, user as userTable } from './schema';
+
+function invalidUserRowError(cause: unknown): AppError {
+  return new AppError({
+    code: 'USER_ROW_INVALID',
+    category: 'system',
+    status: 500,
+    message: 'User row contains invalid data',
+    cause,
+  });
+}
+
+function parseUserRowValue<TValue>(
+  result: ParseResult<TValue>
+): ApplicationResult<TValue> {
+  return result.isError()
+    ? Result.Error(invalidUserRowError(result.getError()))
+    : Result.Ok(result.get());
+}
+
+function toDomainUser(
+  row: typeof userTable.$inferSelect
+): ApplicationResult<User> {
+  const id = parseUserRowValue(toUserId(row.id));
+  if (id.isError()) return Result.Error(id.getError());
+
+  const email = parseUserRowValue(toEmailAddress(row.email));
+  if (email.isError()) return Result.Error(email.getError());
+
+  const name = parseUserRowValue(toUserDisplayName(row.name));
+  if (name.isError()) return Result.Error(name.getError());
+
+  return Result.Ok({
+    id: id.get(),
+    name: name.get(),
+    email: email.get(),
+    emailVerified: row.emailVerified,
+    role: row.role,
+    image: row.image,
+    createdAt: row.createdAt,
+    updatedAt: row.updatedAt,
+    onboardedAt: row.onboardedAt,
+  });
+}
+
+function toDomainSession(
+  row: Pick<
+    typeof sessionTable.$inferSelect,
+    'id' | 'createdAt' | 'updatedAt' | 'expiresAt' | 'ipAddress' | 'userAgent'
+  >
+): ApplicationResult<UserSession> {
+  const id = parseUserRowValue(toSessionId(row.id));
+  if (id.isError()) return Result.Error(id.getError());
+
+  return Result.Ok({
+    id: id.get(),
+    createdAt: row.createdAt,
+    updatedAt: row.updatedAt,
+    expiresAt: row.expiresAt,
+    ipAddress: row.ipAddress,
+    userAgent: row.userAgent,
+  });
+}
+
+function toDomainUserList(
+  rows: readonly (typeof userTable.$inferSelect)[]
+): ApplicationResult<User[]> {
+  const users: User[] = [];
+  for (const row of rows) {
+    const user = toDomainUser(row);
+    if (user.isError()) return Result.Error(user.getError());
+    users.push(user.get());
+  }
+  return Result.Ok(users);
+}
+
+function toDomainSessionList(
+  rows: readonly Pick<
+    typeof sessionTable.$inferSelect,
+    'id' | 'createdAt' | 'updatedAt' | 'expiresAt' | 'ipAddress' | 'userAgent'
+  >[]
+): ApplicationResult<UserSession[]> {
+  const sessions: UserSession[] = [];
+  for (const row of rows) {
+    const session = toDomainSession(row);
+    if (session.isError()) return Result.Error(session.getError());
+    sessions.push(session.get());
+  }
+  return Result.Ok(sessions);
+}
+
+function isUserDuplicateError(error: unknown) {
+  return (
+    isUniqueConstraintViolation(error) &&
+    getConstraintName(error) === 'user_email_key'
+  );
+}
+
+function mapDbError(error: unknown): AppError {
+  return match(error)
+    .with(P.instanceOf(AppError), (appError) => appError)
+    .when(
+      isUserDuplicateError,
+      () =>
+        new AppError({
+          code: 'USER_DUPLICATE',
+          category: 'conflict',
+          status: 409,
+          message: 'User already exists',
+          details: { target: ['email'] },
+          cause: error,
+        })
+    )
+    .with(
+      { code: '23503' },
+      () =>
+        new AppError({
+          code: 'USER_FOREIGN_KEY',
+          category: 'bad_request',
+          status: 400,
+          message: 'Invalid user relationship',
+          cause: error,
+        })
+    )
+    .otherwise(
+      () =>
+        new AppError({
+          code: 'USER_REPOSITORY_ERROR',
+          category: 'system',
+          status: 500,
+          message: 'User repository error',
+          cause: error,
+        })
+    );
+}
+
+export class UserRepositoryDrizzle implements UserRepository {
+  constructor(private readonly db: DbLike) {}
+
+  async list(input: {
+    cursor?: UserId;
+    limit: number;
+    searchTerm: string;
+  }): ReturnType<UserRepository['list']> {
+    try {
+      const searchFilter = escapedIlikeFilter(
+        [userTable.name, userTable.email],
+        input.searchTerm
+      );
+
+      const cursorRow = input.cursor
+        ? await this.db.query.user.findFirst({
+            where: eq(userTable.id, input.cursor),
+            columns: { id: true, name: true },
+          })
+        : undefined;
+
+      if (input.cursor && !cursorRow) {
+        const [totalResult] = await this.db
+          .select({ count: sql<number>`cast(count(*) as integer)` })
+          .from(userTable)
+          .where(searchFilter);
+
+        return Result.Ok({
+          type: 'user_listed',
+          page: {
+            items: [],
+            nextCursor: undefined,
+            total: totalResult?.count ?? 0,
+          },
+        });
+      }
+
+      const cursorFilter = ascendingTextCursorFilter({
+        sortColumn: userTable.name,
+        idColumn: userTable.id,
+        cursor: cursorRow
+          ? { id: cursorRow.id, sortValue: cursorRow.name }
+          : undefined,
+      });
+
+      const where = and(searchFilter, cursorFilter);
+
+      const [total, rows] = await Promise.all([
+        this.db
+          .select({ count: sql<number>`cast(count(*) as integer)` })
+          .from(userTable)
+          .where(searchFilter),
+        this.db.query.user.findMany({
+          where,
+          orderBy: [asc(userTable.name), asc(userTable.id)],
+          limit: input.limit + 1,
+        }),
+      ]);
+
+      const { pageRows, nextCursor } = takeCursorPage(
+        rows,
+        input.limit,
+        (row) => row.id
+      );
+      let parsedNextCursor: UserId | undefined;
+      if (nextCursor) {
+        const cursor = parseUserRowValue(toUserId(nextCursor));
+        if (cursor.isError()) {
+          return Result.Error(cursor.getError());
+        }
+        parsedNextCursor = cursor.get();
+      }
+      const items = toDomainUserList(pageRows);
+      if (items.isError()) return Result.Error(items.getError());
+
+      return Result.Ok({
+        type: 'user_listed',
+        page: {
+          items: items.get(),
+          nextCursor: parsedNextCursor,
+          total: total[0]?.count ?? 0,
+        },
+      });
+    } catch (error) {
+      return Result.Error(mapDbError(error));
+    }
+  }
+
+  async getById(id: UserId): ReturnType<UserRepository['getById']> {
+    try {
+      const row = await this.db.query.user.findFirst({
+        where: eq(userTable.id, id),
+      });
+      if (!row) return Result.Ok({ type: 'user_not_found' });
+
+      const user = toDomainUser(row);
+      if (user.isError()) return Result.Error(user.getError());
+
+      return Result.Ok({ type: 'user_found', user: user.get() });
+    } catch (error) {
+      return Result.Error(mapDbError(error));
+    }
+  }
+
+  async create(input: UserCreateInput): ReturnType<UserRepository['create']> {
+    try {
+      const [created] = await this.db
+        .insert(userTable)
+        .values({
+          email: input.email,
+          emailVerified: true,
+          name: input.name ?? '',
+          role: input.role ?? 'user',
+        })
+        .returning();
+
+      if (!created) {
+        return Result.Error(
+          new AppError({
+            code: 'USER_CREATE_EMPTY_RESULT',
+            category: 'system',
+            status: 500,
+            message: 'User create returned no row',
+          })
+        );
+      }
+
+      const user = toDomainUser(created);
+      if (user.isError()) return Result.Error(user.getError());
+
+      return Result.Ok({ type: 'user_created', user: user.get() });
+    } catch (error) {
+      if (isUserDuplicateError(error))
+        return Result.Ok({ type: 'user_duplicate' });
+      return Result.Error(mapDbError(error));
+    }
+  }
+
+  async getUpdateSnapshot(
+    id: UserId
+  ): ReturnType<UserRepository['getUpdateSnapshot']> {
+    try {
+      const row = await this.db.query.user.findFirst({
+        where: eq(userTable.id, id),
+        columns: { email: true, role: true },
+      });
+      if (!row) return Result.Ok({ type: 'user_not_found' });
+
+      const email = parseUserRowValue(toEmailAddress(row.email));
+      if (email.isError()) return Result.Error(email.getError());
+
+      return Result.Ok({
+        type: 'user_update_snapshot_found',
+        snapshot: { email: email.get(), role: row.role },
+      });
+    } catch (error) {
+      return Result.Error(mapDbError(error));
+    }
+  }
+
+  async update(
+    id: UserId,
+    input: UserUpdatePersistenceInput
+  ): ReturnType<UserRepository['update']> {
+    try {
+      const [updated] = await this.db
+        .update(userTable)
+        .set({
+          name: input.name,
+          role: input.role,
+          email: input.email,
+          emailVerified: input.emailVerified,
+        })
+        .where(eq(userTable.id, id))
+        .returning();
+
+      if (!updated) return Result.Ok({ type: 'user_not_found' });
+
+      const user = toDomainUser(updated);
+      if (user.isError()) return Result.Error(user.getError());
+
+      return Result.Ok({ type: 'user_updated', user: user.get() });
+    } catch (error) {
+      if (isUserDuplicateError(error))
+        return Result.Ok({ type: 'user_duplicate' });
+      return Result.Error(mapDbError(error));
+    }
+  }
+
+  async listSessions(input: {
+    userId: UserId;
+    cursor?: SessionId;
+    limit: number;
+  }): ReturnType<UserRepository['listSessions']> {
+    try {
+      const userIdFilter = eq(sessionTable.userId, input.userId);
+
+      const cursorRow = input.cursor
+        ? await this.db.query.session.findFirst({
+            where: and(
+              eq(sessionTable.id, input.cursor),
+              eq(sessionTable.userId, input.userId)
+            ),
+            columns: { id: true, createdAt: true },
+          })
+        : undefined;
+
+      if (input.cursor && !cursorRow) {
+        const [totalResult] = await this.db
+          .select({ count: sql<number>`cast(count(*) as integer)` })
+          .from(sessionTable)
+          .where(userIdFilter);
+
+        return Result.Ok({
+          type: 'user_sessions_listed',
+          page: {
+            items: [],
+            nextCursor: undefined,
+            total: totalResult?.count ?? 0,
+          },
+        });
+      }
+
+      const cursorFilter = descendingDateCursorFilter({
+        sortColumn: sessionTable.createdAt,
+        idColumn: sessionTable.id,
+        cursor: cursorRow
+          ? { id: cursorRow.id, sortValue: cursorRow.createdAt }
+          : undefined,
+      });
+
+      const where = and(userIdFilter, cursorFilter);
+
+      const [total, rows] = await Promise.all([
+        this.db
+          .select({ count: sql<number>`cast(count(*) as integer)` })
+          .from(sessionTable)
+          .where(userIdFilter),
+        this.db.query.session.findMany({
+          where,
+          columns: {
+            id: true,
+            createdAt: true,
+            updatedAt: true,
+            expiresAt: true,
+            ipAddress: true,
+            userAgent: true,
+          },
+          orderBy: [desc(sessionTable.createdAt), asc(sessionTable.id)],
+          limit: input.limit + 1,
+        }),
+      ]);
+
+      const { pageRows, nextCursor } = takeCursorPage(
+        rows,
+        input.limit,
+        (row) => row.id
+      );
+      let parsedNextCursor: SessionId | undefined;
+      if (nextCursor) {
+        const cursor = parseUserRowValue(toSessionId(nextCursor));
+        if (cursor.isError()) {
+          return Result.Error(cursor.getError());
+        }
+        parsedNextCursor = cursor.get();
+      }
+      const items = toDomainSessionList(pageRows);
+      if (items.isError()) return Result.Error(items.getError());
+
+      return Result.Ok({
+        type: 'user_sessions_listed',
+        page: {
+          items: items.get(),
+          nextCursor: parsedNextCursor,
+          total: total[0]?.count ?? 0,
+        },
+      });
+    } catch (error) {
+      return Result.Error(mapDbError(error));
+    }
+  }
+
+  async findSessionForRevocation(input: {
+    userId: UserId;
+    sessionId: SessionId;
+  }): ReturnType<UserRepository['findSessionForRevocation']> {
+    try {
+      const row = await this.db.query.session.findFirst({
+        where: and(
+          eq(sessionTable.id, input.sessionId),
+          eq(sessionTable.userId, input.userId)
+        ),
+        columns: { id: true },
+      });
+
+      if (!row) return Result.Ok({ type: 'user_session_not_found' });
+
+      const id = parseUserRowValue(toSessionId(row.id));
+      if (id.isError()) return Result.Error(id.getError());
+
+      return Result.Ok({
+        type: 'user_session_revocation_target_found',
+        target: { id: id.get() },
+      });
+    } catch (error) {
+      return Result.Error(mapDbError(error));
+    }
+  }
+}
+
+export interface UserRepositoryDrizzleDependencies {
+  db: DbLike;
+}
+
+export function createUserRepository(
+  dependencies: UserRepositoryDrizzleDependencies
+): UserRepository {
+  return observeRepository(new UserRepositoryDrizzle(dependencies.db), 'user');
+}

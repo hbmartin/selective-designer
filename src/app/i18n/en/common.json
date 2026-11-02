@@ -1,0 +1,29 @@
+{
+  "languages": {
+    "label": "Language",
+    "pending": "Changing language...",
+    "values": {
+      "en": "English"
+    }
+  },
+  "themes": {
+    "label": "Theme",
+    "values": {
+      "system": "System (auto)",
+      "light": "Light",
+      "dark": "Dark"
+    }
+  },
+  "actions": {
+    "back": "Back",
+    "cancel": "Cancel",
+    "close": "Close",
+    "delete": "Delete",
+    "edit": "Edit",
+    "update": "Update"
+  },
+  "errors": {
+    "required": "Required",
+    "maxLength": "Too long"
+  }
+}

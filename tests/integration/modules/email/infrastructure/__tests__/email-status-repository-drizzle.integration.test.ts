@@ -1,0 +1,408 @@
+import { createPgliteTestDatabase } from '@tests/server/pglite';
+import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
+
+import { createEmailUseCases } from '@/modules/email';
+import { createEmailStatusRepository } from '@/modules/email/infrastructure/drizzle/email-status-repository-drizzle';
+import {
+  toEmailIdempotencyKey,
+  toEmailProviderMessageId,
+  toEmailRecipientList,
+  toEmailWebhookEventId,
+} from '@/modules/kernel/domain/ids';
+import {
+  emailStatus as emailStatusTable,
+  type NewEmailStatus,
+} from '@/modules/kernel/infrastructure/db/schema';
+import type { ApplicationResult } from '@/modules/kernel/testing';
+import { unwrapParseResult } from '@/modules/kernel/testing';
+
+const recipient = unwrapParseResult(toEmailRecipientList('user@example.com'));
+const otherRecipient = unwrapParseResult(
+  toEmailRecipientList('other@example.com')
+);
+const idempotencyKey = unwrapParseResult(toEmailIdempotencyKey('key-1'));
+const providerMessageId = unwrapParseResult(
+  toEmailProviderMessageId('email_123')
+);
+const webhookEventId = unwrapParseResult(toEmailWebhookEventId('evt_1'));
+const nextWebhookEventId = unwrapParseResult(toEmailWebhookEventId('evt_2'));
+
+const makeEmailStatusRow = (
+  overrides: Partial<NewEmailStatus> = {}
+): NewEmailStatus => ({
+  id: 'email-status-1',
+  provider: 'resend',
+  externalId: 'email_1',
+  recipient: 'user@example.com',
+  subject: 'Login code',
+  status: 'sent',
+  idempotencyKey: 'key-1',
+  lastWebhookEventId: null,
+  metadata: {},
+  createdAt: new Date('2026-01-01T00:00:00.000Z'),
+  updatedAt: new Date('2026-01-01T00:00:00.000Z'),
+  ...overrides,
+});
+
+function getOk<TOutcome extends { type: string }>(
+  result: ApplicationResult<TOutcome>
+) {
+  if (result.isError()) throw result.getError();
+  return result.get();
+}
+
+function getError<TOutcome extends { type: string }>(
+  result: ApplicationResult<TOutcome>
+) {
+  if (result.isOk()) {
+    throw new Error(`Expected Result.Error, got ${result.get().type}`);
+  }
+  return result.getError();
+}
+
+describe('EmailStatusRepositoryDrizzle integration', () => {
+  let database: Awaited<ReturnType<typeof createPgliteTestDatabase>>;
+
+  beforeAll(async () => {
+    database = await createPgliteTestDatabase();
+  });
+
+  beforeEach(async () => {
+    await database.truncate();
+  });
+
+  afterAll(async () => {
+    await database?.close();
+  });
+
+  it('promotes a send attempt to the Resend external ID and counts final status', async () => {
+    const repository = createEmailStatusRepository({ db: database.db });
+
+    const attempt = getOk(
+      await repository.recordSendAttempt({
+        provider: 'resend',
+        recipient,
+        subject: 'Login code',
+        idempotencyKey,
+        metadata: { source: 'auth.signInOtp' },
+      })
+    ).record;
+
+    expect(attempt).toMatchObject({
+      provider: 'resend',
+      externalId: null,
+      status: 'send_attempted',
+      idempotencyKey: 'key-1',
+    });
+
+    const sent = getOk(
+      await repository.upsertStatusByExternalId({
+        provider: 'resend',
+        externalId: providerMessageId,
+        recipient,
+        subject: 'Login code',
+        status: 'sent',
+        idempotencyKey,
+        metadata: { external: true },
+      })
+    ).record;
+
+    expect(sent).toMatchObject({
+      id: attempt.id,
+      externalId: 'email_123',
+      status: 'sent',
+      metadata: {
+        source: 'auth.signInOtp',
+        external: true,
+      },
+    });
+    const found = getOk(
+      await repository.getByExternalId('resend', providerMessageId)
+    );
+    expect(found).toMatchObject({
+      type: 'email_status_found',
+      record: { id: attempt.id, status: 'sent' },
+    });
+    expect(getOk(await repository.countByStatus()).counts).toEqual({ sent: 1 });
+  });
+
+  it('returns an existing sent record for repeated idempotency keys', async () => {
+    const repository = createEmailStatusRepository({ db: database.db });
+
+    const attempt = getOk(
+      await repository.recordSendAttempt({
+        provider: 'resend',
+        recipient,
+        subject: 'Login code',
+        idempotencyKey,
+        metadata: { source: 'auth.signInOtp' },
+      })
+    ).record;
+    const sent = getOk(
+      await repository.upsertStatusByExternalId({
+        provider: 'resend',
+        externalId: providerMessageId,
+        recipient,
+        subject: 'Login code',
+        status: 'sent',
+        idempotencyKey,
+      })
+    ).record;
+
+    const duplicate = getOk(
+      await repository.recordSendAttempt({
+        provider: 'resend',
+        recipient: otherRecipient,
+        subject: 'Retry login code',
+        idempotencyKey,
+      })
+    ).record;
+
+    expect(duplicate).toMatchObject({
+      id: sent.id,
+      idempotencyKey: 'key-1',
+      externalId: 'email_123',
+      status: 'sent',
+    });
+    expect(sent.id).toBe(attempt.id);
+    expect(getOk(await repository.listRecent()).records).toHaveLength(1);
+  });
+
+  it('preserves an existing idempotency key during webhook status updates', async () => {
+    const repository = createEmailStatusRepository({ db: database.db });
+
+    getOk(
+      await repository.upsertStatusByExternalId({
+        provider: 'resend',
+        externalId: providerMessageId,
+        recipient,
+        subject: 'Login code',
+        status: 'sent',
+        idempotencyKey,
+      })
+    );
+
+    const delivered = getOk(
+      await repository.upsertStatusByExternalId({
+        provider: 'resend',
+        externalId: providerMessageId,
+        recipient,
+        subject: 'Login code',
+        status: 'delivered',
+        idempotencyKey: null,
+        lastWebhookEventId: webhookEventId,
+      })
+    ).record;
+
+    expect(delivered).toMatchObject({
+      externalId: 'email_123',
+      status: 'delivered',
+      idempotencyKey: 'key-1',
+      lastWebhookEventId: 'evt_1',
+    });
+  });
+
+  it('merges metadata and preserves webhook IDs across racing external ID upserts', async () => {
+    const repository = createEmailStatusRepository({ db: database.db });
+
+    const results = await Promise.all([
+      repository.upsertStatusByExternalId({
+        provider: 'resend',
+        externalId: providerMessageId,
+        recipient,
+        subject: 'Login code',
+        status: 'delivered',
+        lastWebhookEventId: webhookEventId,
+        metadata: { first: true },
+      }),
+      repository.upsertStatusByExternalId({
+        provider: 'resend',
+        externalId: providerMessageId,
+        recipient,
+        subject: 'Login code',
+        status: 'opened',
+        metadata: { second: true },
+      }),
+    ]);
+    for (const result of results) getOk(result);
+
+    const found = getOk(
+      await repository.getByExternalId('resend', providerMessageId)
+    );
+
+    expect(found).toMatchObject({
+      type: 'email_status_found',
+      record: {
+        lastWebhookEventId: 'evt_1',
+        metadata: {
+          first: true,
+          second: true,
+        },
+      },
+    });
+  });
+
+  it('enforces provider idempotency key uniqueness in the database', async () => {
+    await database.db.insert(emailStatusTable).values(
+      makeEmailStatusRow({
+        id: 'email-status-1',
+        externalId: null,
+        idempotencyKey: 'key-1',
+      })
+    );
+
+    await expect(
+      database.db.insert(emailStatusTable).values(
+        makeEmailStatusRow({
+          id: 'email-status-2',
+          externalId: null,
+          idempotencyKey: 'key-1',
+        })
+      )
+    ).rejects.toThrow();
+  });
+
+  it('lists recent statuses newest first', async () => {
+    const repository = createEmailStatusRepository({ db: database.db });
+    await database.db.insert(emailStatusTable).values([
+      makeEmailStatusRow({
+        id: 'email-status-old',
+        externalId: 'email_old',
+        idempotencyKey: 'key-old',
+        createdAt: new Date('2026-01-01T00:00:00.000Z'),
+        updatedAt: new Date('2026-01-01T00:00:00.000Z'),
+      }),
+      makeEmailStatusRow({
+        id: 'email-status-new',
+        externalId: 'email_new',
+        idempotencyKey: 'key-new',
+        createdAt: new Date('2026-01-02T00:00:00.000Z'),
+        updatedAt: new Date('2026-01-02T00:00:00.000Z'),
+      }),
+    ]);
+
+    const rows = getOk(await repository.listRecent({ limit: 1 })).records;
+
+    expect(rows.map((row) => row.id)).toEqual(['email-status-new']);
+  });
+
+  it('rejects invalid persisted metadata instead of replacing it with an empty object', async () => {
+    const repository = createEmailStatusRepository({ db: database.db });
+    await database.db.insert(emailStatusTable).values(
+      makeEmailStatusRow({
+        metadata: [] as unknown as Record<string, unknown>,
+      })
+    );
+
+    expect(
+      getError(
+        await repository.getByExternalId(
+          'resend',
+          unwrapParseResult(toEmailProviderMessageId('email_1'))
+        )
+      )
+    ).toMatchObject({
+      code: 'EMAIL_STATUS_METADATA_INVALID',
+    });
+  });
+
+  it('uses empty metadata for invalid persisted metadata in recent list reads', async () => {
+    const repository = createEmailStatusRepository({ db: database.db });
+    await database.db.insert(emailStatusTable).values(
+      makeEmailStatusRow({
+        metadata: [] as unknown as Record<string, unknown>,
+      })
+    );
+
+    expect(getOk(await repository.listRecent()).records).toMatchObject([
+      {
+        id: 'email-status-1',
+        metadata: {},
+      },
+    ]);
+  });
+
+  it('maps invalid persisted branded email fields to a system row error', async () => {
+    const repository = createEmailStatusRepository({ db: database.db });
+    await database.db.insert(emailStatusTable).values(
+      makeEmailStatusRow({
+        externalId: 'email_1',
+        recipient: '',
+      })
+    );
+
+    expect(
+      getError(
+        await repository.getByExternalId(
+          'resend',
+          unwrapParseResult(toEmailProviderMessageId('email_1'))
+        )
+      )
+    ).toMatchObject({
+      code: 'EMAIL_STATUS_ROW_INVALID',
+      category: 'system',
+      status: 500,
+    });
+  });
+
+  it('dedupes webhook event IDs and keeps bounded metadata through the use case', async () => {
+    const repository = createEmailStatusRepository({ db: database.db });
+    const useCases = createEmailUseCases({
+      emailStatusRepository: repository,
+      transactionRunner: {
+        run: (work) =>
+          database.db.transaction((tx) =>
+            work({
+              emailStatusRepository: createEmailStatusRepository({ db: tx }),
+            })
+          ),
+      },
+    });
+
+    const input = {
+      provider: 'resend' as const,
+      externalId: providerMessageId,
+      recipient,
+      subject: 'Login code',
+      status: 'delivered' as const,
+      webhookEventId,
+      providerEventType: 'email.delivered',
+      providerEventCreatedAt: '2026-01-01T00:00:00.000Z',
+      metadata: { source: 'webhook' },
+    };
+
+    expect(getOk(await useCases.processStatusEvent(input))).toMatchObject({
+      type: 'email_status_event_processed',
+      record: {
+        externalId: 'email_123',
+        status: 'delivered',
+      },
+    });
+    expect(getOk(await useCases.processStatusEvent(input))).toMatchObject({
+      type: 'email_status_event_duplicate',
+      record: {
+        externalId: 'email_123',
+        status: 'delivered',
+      },
+    });
+    expect(
+      getOk(
+        await useCases.processStatusEvent({
+          ...input,
+          status: 'opened',
+          webhookEventId: nextWebhookEventId,
+          providerEventType: 'email.opened',
+        })
+      )
+    ).toMatchObject({
+      type: 'email_status_event_processed',
+      record: {
+        status: 'opened',
+        lastWebhookEventId: 'evt_2',
+        metadata: {
+          processedWebhookEventIds: ['evt_1', 'evt_2'],
+        },
+      },
+    });
+  });
+});

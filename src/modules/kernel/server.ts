@@ -1,0 +1,30 @@
+import { createServerFn } from '@tanstack/react-start';
+
+import { getTelemetry } from '@/platform/telemetry';
+
+export {
+  isServerFnError,
+  SERVER_FN_ERROR_CODES,
+  ServerFnError,
+  type ServerFnErrorCode,
+  type ServerFnErrorData,
+} from './transport/tanstack/server-fn-error';
+
+export const initSsrApp = createServerFn({ method: 'GET' }).handler(
+  async () => {
+    const { createSsrAppHandlers } =
+      await import('./transport/tanstack/ssr-app-init');
+
+    return getTelemetry().startSpan(
+      {
+        attributes: {
+          'operation.name': 'kernel.initSsrApp',
+          'operation.type': 'server_function',
+        },
+        name: 'kernel.initSsrApp',
+        op: 'server.function',
+      },
+      () => createSsrAppHandlers().init()
+    );
+  }
+);

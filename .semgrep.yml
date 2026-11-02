@@ -1,0 +1,1452 @@
+rules:
+  - id: no-vite-empty-env-prefix
+    message: Do not use an empty Vite env prefix; it can expose unprefixed secrets to client bundles.
+    severity: ERROR
+    languages:
+      - typescript
+      - javascript
+    pattern-either:
+      - pattern: loadEnv($MODE, $DIR, '')
+      - pattern: loadEnv($MODE, $DIR, "")
+      - pattern: |
+          envPrefix: ''
+      - pattern: |
+          envPrefix: ""
+    paths:
+      include:
+        - vite.config.ts
+        - vite.*.ts
+        - vite.config.js
+        - vite.*.js
+
+  - id: no-react-hook-form-imports
+    message: Use TanStack Form via src/platform/components/form/use-app-form.ts; do not add React Hook Form back.
+    severity: ERROR
+    languages:
+      - typescript
+    pattern-regex: '^\s*import(?:\s+type)?\s+[^;]+from\s+["'']react-hook-form(?:/[^"'']*)?["'']'
+
+  - id: no-zod-core-usage
+    message: Use Zod's public API; z.core.* is internal and can break across Zod releases.
+    severity: ERROR
+    languages:
+      - typescript
+    pattern-regex: '\bz\.core\.[A-Za-z_$][A-Za-z0-9_$]*'
+    paths:
+      include:
+        - src/**/*.ts
+        - src/**/*.tsx
+
+  - id: presentation-no-raw-tailwind-color-utilities
+    message: Use semantic design-token utilities in presentation code instead of raw palette utilities.
+    severity: ERROR
+    languages: [generic]
+    pattern-regex: '(?:^|[\s"''`:])((?:bg|text|border(?:-[trblxyse])?|ring|from|via|to|fill|stroke|decoration|outline)-(?:slate|gray|zinc|neutral|stone|red|orange|amber|yellow|lime|green|emerald|teal|cyan|sky|blue|indigo|violet|purple|fuchsia|pink|rose|white|black)(?:-\d{1,3})?(?:/\d+)?)(?=$|[\s"''`:;,\]])'
+    paths:
+      include:
+        - src/platform/components/**/*.css
+        - src/platform/components/**/*.ts
+        - src/platform/components/**/*.tsx
+        - src/platform/styles/**/*.css
+        - src/app/**/*.css
+        - src/app/**/*.ts
+        - src/app/**/*.tsx
+        - src/modules/**/presentation/**/*.css
+        - src/modules/**/presentation/**/*.ts
+        - src/modules/**/presentation/**/*.tsx
+
+  - id: presentation-no-hardcoded-hex-colors
+    message: Put presentation colors in semantic tokens; hardcoded hex colors are only allowed in isolated token files.
+    severity: ERROR
+    languages: [generic]
+    pattern-regex: '#[0-9A-Fa-f]{3,8}\b'
+    paths:
+      include:
+        - src/platform/components/**/*.css
+        - src/platform/components/**/*.ts
+        - src/platform/components/**/*.tsx
+        - src/platform/styles/**/*.css
+        - src/app/**/*.css
+        - src/app/**/*.ts
+        - src/app/**/*.tsx
+        - src/modules/**/presentation/**/*.css
+        - src/modules/**/presentation/**/*.ts
+        - src/modules/**/presentation/**/*.tsx
+      exclude:
+        - src/platform/styles/app.css
+        - src/modules/email/presentation/theme.ts
+
+  - id: app-seed-use-kernel-public-gates
+    message: App and seed entrypoints must use kernel public gates instead of kernel infrastructure deep imports.
+    severity: ERROR
+    languages:
+      - typescript
+    pattern-regex: 'from\s+["'']@/modules/kernel/infrastructure/'
+    paths:
+      include:
+        - src/server.ts
+        - drizzle/seed/**/*.ts
+
+  - id: no-unnormalized-glob-star-regexp
+    message: Collapse consecutive '*' before converting glob strings to RegExp; raw split('*').join('.*') can create adjacent wildcards and backtracking risk.
+    severity: ERROR
+    languages:
+      - typescript
+    pattern-regex: '\b[A-Za-z_$][A-Za-z0-9_$]*\.split\(\s*[''"]\*[''"]\s*\)(?:\s*\.map\([^)]*\))?\s*\.join\(\s*[''"]\.\*[''"]\s*\)'
+    paths:
+      include:
+        - tests/e2e/**/*.ts
+        - tests/e2e/**/*.tsx
+
+  - id: no-session-token-in-client-features
+    message: Do not expose or pass raw session tokens through client-facing feature code; use session IDs and resolve tokens server-side.
+    severity: ERROR
+    languages:
+      - typescript
+    paths:
+      include:
+        - /src/platform/**/*.ts
+        - /src/platform/**/*.tsx
+        - /src/modules/**/presentation/**/*.ts
+        - /src/modules/**/presentation/**/*.tsx
+    pattern-either:
+      - pattern: sessionToken
+      - pattern: $SESSION.session.token
+      - pattern: $SESSION.token
+
+  - id: no-session-token-server-function-input
+    message: Server function input validators must not accept raw session tokens from clients; accept a sessionId and resolve the token server-side.
+    severity: ERROR
+    languages:
+      - typescript
+    paths:
+      include:
+        - /src/modules/**/transport/**/*.ts
+    pattern: |
+      z.object({ ..., sessionToken: z.string(), ... })
+
+  - id: protected-routes-no-ssr-disabled
+    message: Protected route trees must not disable SSR; review the hydration policy before changing SSR behavior.
+    severity: ERROR
+    languages:
+      - typescript
+    pattern-regex: '\b(?:defaultSsr|ssr)\s*:\s*false\b'
+    paths:
+      include:
+        - src/routes/app/**/*.ts
+        - src/routes/app/**/*.tsx
+        - src/routes/manager/**/*.ts
+        - src/routes/manager/**/*.tsx
+        - src/routes/onboarding/**/*.ts
+        - src/routes/onboarding/**/*.tsx
+
+  - id: no-csrf-origin-weakeners
+    message: Do not weaken CSRF or origin checks; keep Start CSRF and Better Auth origin checks enabled.
+    severity: ERROR
+    languages:
+      - typescript
+    pattern-regex: '\b(?:allowRequestsWithoutOriginCheck|disableCSRFCheck|disableOriginCheck)\s*:\s*true\b'
+    paths:
+      include:
+        - src/**/*.ts
+        - src/**/*.tsx
+      exclude:
+        - '**/*.unit.spec.ts'
+        - '**/*.test.ts'
+
+  - id: no-server-fn-declared-body-limit-only
+    message: Server-function body limits must use the fail-closed body-limit helper, not the advisory Content-Length helper alone.
+    severity: ERROR
+    languages:
+      - typescript
+    pattern: exceedsDeclaredBodyLimit(...)
+    paths:
+      include:
+        - src/start.ts
+
+  - id: no-auth-token-browser-storage
+    message: Do not store auth, session, JWT, or token values in localStorage/sessionStorage; keep provider tokens server-side.
+    severity: ERROR
+    languages:
+      - typescript
+    pattern-regex: '(?is)\b(?:localStorage|sessionStorage)\s*\.\s*(?:setItem|getItem|removeItem)\s*\([^;]*(?:auth|jwt|session|token)[^;]*\)'
+    paths:
+      include:
+        - src/**/*.ts
+        - src/**/*.tsx
+      exclude:
+        - '**/*.unit.spec.ts'
+        - '**/*.test.ts'
+
+  - id: no-detached-start-auth-getsession
+    message: Call Start auth session methods on the auth object so the method this binding is preserved.
+    severity: ERROR
+    languages:
+      - typescript
+    paths:
+      include:
+        - src/modules/auth/transport/tanstack/**/*.ts
+    pattern-either:
+      - pattern: |
+          const $GET_SESSION = getStartRequestContext()?.auth?.getSession;
+      - pattern: |
+          const $GET_SESSION = $CONTEXT.auth?.getSession;
+
+  - id: no-auth-token-document-cookie
+    message: Do not write auth, session, JWT, or token cookies from client code; auth cookies are provider/server owned.
+    severity: ERROR
+    languages:
+      - typescript
+    pattern-regex: '(?is)\bdocument\.cookie\s*=[^;]*(?:auth|jwt|session|token)[^;]*(?:;|$)'
+    paths:
+      include:
+        - src/**/*.ts
+        - src/**/*.tsx
+      exclude:
+        - '**/*.unit.spec.ts'
+        - '**/*.test.ts'
+
+  - id: no-provider-token-fields-in-client-facing-code
+    message: Provider token fields must not appear in client-facing route or presentation code.
+    severity: ERROR
+    languages:
+      - typescript
+    pattern-regex: '\b(?:accessToken|refreshToken|idToken|sessionToken)\b'
+    paths:
+      include:
+        - src/routes/**/*.ts
+        - src/routes/**/*.tsx
+        - src/modules/**/presentation/**/*.ts
+        - src/modules/**/presentation/**/*.tsx
+      exclude:
+        - '**/*.unit.spec.ts'
+        - '**/*.test.ts'
+        - src/routes/api/**/*.ts
+        - src/routes/api/**/*.tsx
+
+  - id: no-unawaited-route-loader-undefined-assertion
+    message: Await async route loader calls before asserting on their resolved result.
+    severity: ERROR
+    languages:
+      - typescript
+    paths:
+      include:
+        - tests/integration/routes/**/*.ts
+        - tests/integration/routes/**/*.tsx
+    pattern: |
+      expect(routeOptions($ROUTE).loader($ARGS)).toBeUndefined()
+
+  - id: no-committed-better-auth-session-token
+    message: Do not commit Playwright storage state containing better-auth.session_token; generate auth state during e2e setup.
+    severity: ERROR
+    languages: [generic]
+    pattern-regex: '"name"\s*:\s*"better-auth\.session_token"'
+    paths:
+      include:
+        - tests/e2e/**/*.json
+
+  - id: no-test-secret-allowlist-pragmas
+    message: Test secret-like values should be generated at runtime instead of committed with detect-secrets allowlist pragmas.
+    severity: ERROR
+    languages: [generic]
+    pattern-regex: 'pragma:\s*allowlist secret'
+    paths:
+      include:
+        - tests/**
+
+  - id: no-known-vulnerable-tooling-transitives
+    message: Do not reintroduce known vulnerable or flagged tooling transitives; keep package overrides or update the parent dependency.
+    severity: ERROR
+    languages: [generic]
+    pattern-regex: '(?:shell-quote(?:@|:\s*)1\.8\.3|svgo(?:@|:\s*)3\.(?:[0-2]\.[0-9]+|3\.[0-3]))'
+    paths:
+      include:
+        - package.json
+        - pnpm-lock.yaml
+
+  - id: node-net-socket-requires-error-listener
+    message: node:net sockets must register an error listener so late network failures cannot crash the process.
+    severity: ERROR
+    languages:
+      - typescript
+    patterns:
+      - pattern: |
+          const $SOCKET = connect(...);
+          ...
+      - pattern-not-inside: |
+          const $SOCKET = connect(...);
+          ...
+          $SOCKET.on('error', ...);
+          ...
+    paths:
+      include:
+        - src/**/*.ts
+        - src/**/*.tsx
+
+  - id: no-hardcoded-git-binary-path
+    message: Use git from PATH in scripts instead of hard-coded platform-specific Git binary paths.
+    severity: ERROR
+    languages:
+      - typescript
+      - javascript
+    pattern-regex: '(?:C:\\Program Files\\Git\\cmd\\git\.exe|/usr/bin/git|/opt/homebrew/bin/git|/usr/local/bin/git)'
+    paths:
+      include:
+        - scripts/**/*.ts
+        - scripts/**/*.js
+
+  - id: no-path-resolved-pnpm-child-process
+    message: Do not execute pnpm through PATH from child_process; invoke Node with an absolute pnpm CLI path.
+    severity: ERROR
+    languages:
+      - typescript
+      - javascript
+    pattern-regex: '\b(?:execFileSync|execFile|spawnSync|spawn)\(\s*["'']pnpm(?:\.cmd)?["'']|\bexecSync\(\s*["'']pnpm(?:\s|["''])'
+    paths:
+      include:
+        - scripts/**/*.ts
+        - scripts/**/*.js
+        - scripts/**/*.mjs
+
+  - id: no-unbounded-postgres-readiness-loop
+    message: Bound GitHub Actions PostgreSQL readiness loops so failed containers do not burn the full job timeout.
+    severity: ERROR
+    languages: [generic]
+    pattern-regex: 'until\s+docker\s+exec\s+postgres\s+pg_isready\b'
+    paths:
+      include:
+        - .github/workflows/*.yml
+        - .github/workflows/*.yaml
+
+  - id: no-silent-session-revocation-noop
+    message: Session revocation must not silently return false when a provider token is missing; make the token contract explicit or throw.
+    severity: ERROR
+    languages:
+      - typescript
+    paths:
+      include:
+        - /src/composition/**/*.ts
+        - /src/modules/**/infrastructure/**/*.ts
+    pattern-either:
+      - pattern: |
+          if (!$INPUT.providerSessionToken) return false;
+      - pattern: |
+          if (!$INPUT.providerToken) return false;
+
+  - id: no-redacted-app-error-code-diagnostic
+    message: AppError diagnostics sanitized with code-sensitive redaction must use errorCode, not code, so the error identifier is preserved.
+    severity: ERROR
+    languages:
+      - typescript
+    paths:
+      include:
+        - /src/composition/**/*.ts
+        - /src/composition/**/*.tsx
+        - /src/modules/**/infrastructure/**/*.ts
+        - /src/modules/**/infrastructure/**/*.tsx
+    patterns:
+      - pattern-inside: |
+          import { sanitizeLogFields } from '@/platform/lib/redaction/sanitize-log-fields';
+          ...
+      - pattern: |
+          {
+            ...,
+            code: $ERROR.code,
+            ...
+          }
+      - metavariable-regex:
+          metavariable: $ERROR
+          regex: '(?i).*error$'
+
+  - id: no-id-only-session-cursor-lookup
+    message: Session cursor lookups must scope by both session.id and session.userId so one user's cursor cannot affect another user's page.
+    severity: ERROR
+    languages:
+      - typescript
+    paths:
+      include:
+        - /src/modules/user/infrastructure/**/*.ts
+    pattern: |
+      ctx.db.query.session.findFirst({
+        where: eq(session.id, $CURSOR),
+        ...
+      })
+
+  - id: pglite-test-database-created-in-beforeall
+    message: Create PGlite integration test databases inside beforeAll so setup failures are reported by Vitest.
+    severity: ERROR
+    languages:
+      - typescript
+    paths:
+      include:
+        - tests/integration/modules/**/__tests__/*.integration.test.ts
+    patterns:
+      - pattern-inside: |
+          describe(..., () => {
+            ...
+          })
+      - pattern: createPgliteTestDatabase(...)
+      - pattern-not-inside: |
+          beforeAll(async () => {
+            ...
+          })
+      - pattern-not-inside: |
+          beforeAll(() => {
+            ...
+          })
+
+  - id: pglite-afterall-close-preserve-setup-error
+    message: Use optional chaining when closing PGlite integration test databases in afterAll so cleanup does not mask setup failures.
+    severity: ERROR
+    languages:
+      - typescript
+    paths:
+      include:
+        - tests/integration/modules/**/__tests__/*.integration.test.ts
+    patterns:
+      - pattern-inside: |
+          afterAll(async () => {
+            ...
+          })
+      - pattern: await $DB.close()
+      - pattern-not: await $OPTIONAL_DB?.close()
+
+  - id: no-user-update-email-autoverify
+    message: User update handlers must not automatically mark changed emails as verified.
+    severity: ERROR
+    languages:
+      - typescript
+    paths:
+      include:
+        - /src/modules/auth/infrastructure/drizzle/user-repository-drizzle.ts
+        - /src/modules/user/infrastructure/**/*.ts
+    patterns:
+      - pattern-inside: |
+          $DB
+            .update($TABLE)
+            ...
+      - pattern: |
+          {
+            ...,
+            emailVerified: true,
+            ...
+          }
+
+  - id: raw-env-access-outside-kernel
+    message: Read env via platform/env/config.ts, not process.env directly.
+    languages: [typescript]
+    severity: ERROR
+    pattern: process.env.$X
+    paths:
+      exclude:
+        - src/modules/kernel/infrastructure/config/**
+        - src/platform/env/**
+        - tests/**
+        - '*.config.ts'
+        - '*.config.mjs'
+        - '*.cosmos.ts'
+        - 'vite.*.ts'
+        - vite.config.*
+        - drizzle.config.*
+
+  - id: bare-server-new-error
+    message: Throw AppError or a domain error subclass, not bare new Error in server code.
+    languages: [typescript]
+    severity: ERROR
+    pattern: new Error(...)
+    paths:
+      include:
+        - src/modules/**/application/**
+        - src/modules/**/transport/**
+        - src/modules/**/infrastructure/**
+      exclude:
+        - '**/*.unit.spec.ts'
+        - '**/*.test.ts'
+
+  - id: no-throw-in-module-application
+    message: Module application code must return Result.Error(AppError) instead of throwing.
+    languages: [typescript]
+    severity: ERROR
+    pattern: throw $ERROR
+    paths:
+      include:
+        - src/modules/*/application/**/*.ts
+        - src/modules/*/application/**/*.tsx
+
+  - id: no-try-catch-in-module-application
+    message: Module application code should not catch normal business flow; only transaction-owning use cases may catch TransactionRunner.run failures and map them to Result.Error(AppError).
+    languages: [typescript]
+    severity: ERROR
+    pattern-either:
+      - pattern: |
+          try {
+            ...
+          } catch ($ERROR) {
+            ...
+          }
+      - pattern: |
+          try {
+            ...
+          } catch {
+            ...
+          }
+    paths:
+      include:
+        - src/modules/*/application/**/*.ts
+        - src/modules/*/application/**/*.tsx
+      exclude:
+        - src/modules/email/application/use-cases/process-email-status-event.ts
+
+  - id: no-ambient-new-date-in-business-core
+    message: Domain and application code must use an injected Clock instead of ambient new Date().
+    languages: [typescript]
+    severity: ERROR
+    pattern: new Date()
+    paths:
+      include:
+        - src/modules/*/domain/**/*.ts
+        - src/modules/*/domain/**/*.tsx
+        - src/modules/*/application/**/*.ts
+        - src/modules/*/application/**/*.tsx
+      exclude:
+        - '**/__tests__/**'
+        - '**/*.unit.spec.ts'
+        - '**/*.unit.spec.tsx'
+        - '**/*.spec.ts'
+        - '**/*.spec.tsx'
+        - '**/*.test.ts'
+        - '**/*.test.tsx'
+
+  - id: no-ambient-date-now-in-business-core
+    message: Domain and application code must use an injected Clock instead of ambient Date.now().
+    languages: [typescript]
+    severity: ERROR
+    pattern: Date.now()
+    paths:
+      include:
+        - src/modules/*/domain/**/*.ts
+        - src/modules/*/domain/**/*.tsx
+        - src/modules/*/application/**/*.ts
+        - src/modules/*/application/**/*.tsx
+      exclude:
+        - '**/__tests__/**'
+        - '**/*.unit.spec.ts'
+        - '**/*.unit.spec.tsx'
+        - '**/*.spec.ts'
+        - '**/*.spec.tsx'
+        - '**/*.test.ts'
+        - '**/*.test.tsx'
+
+  - id: unescaped-like-pattern
+    message: Use escapeLikePattern() from kernel before interpolating into LIKE.
+    languages: [typescript]
+    severity: ERROR
+    patterns:
+      - pattern-either:
+          - pattern: |
+              `%${$X}%`
+          - pattern: |
+              "%" + $X + "%"
+      - pattern-not: |
+          `%${escapeLikePattern(...)}%`
+
+  - id: direct-sdk-import-outside-infrastructure
+    message: Drizzle/pg/postgres SDKs are confined to infrastructure or composition.
+    languages: [typescript]
+    severity: ERROR
+    pattern-regex: '^\s*import\s+.*\s+from\s+["''](?:drizzle-orm(?:/[^"'']*)?|@neondatabase/serverless|postgres|pg)["'']'
+    paths:
+      exclude:
+        - src/modules/*/infrastructure/**
+        - src/modules/kernel/infrastructure/**
+        - src/composition/**
+        - drizzle/**
+        - drizzle.config.ts
+
+  - id: no-concrete-database-repository-dependency
+    message: Drizzle repositories should depend on DbLike so they can run against root clients or active transactions.
+    languages: [typescript]
+    severity: ERROR
+    pattern-regex: 'constructor\s*\([^)]*\bDatabase\b'
+    paths:
+      include:
+        - src/modules/*/infrastructure/drizzle/**/*.ts
+
+  - id: no-direct-db-execute-rows
+    message: Normalize db.execute(...) results with queryRowsSchema(...) instead of reading .rows directly.
+    languages: [typescript]
+    severity: ERROR
+    paths:
+      include:
+        - src/modules/**/infrastructure/**/*.ts
+    pattern-either:
+      - pattern: (await $DB.execute(...)).rows
+      - patterns:
+          - pattern-inside: |
+              const $RESULT = await $DB.execute(...);
+              ...
+          - pattern: $RESULT.rows
+
+  - id: no-start-static-infrastructure-import
+    message: src/start.ts is reachable from the client entry; load server-only infrastructure with dynamic imports inside server middleware.
+    languages: [typescript]
+    severity: ERROR
+    pattern-regex: '^\s*import(?!\s+type\b)\s+(?:[^;]+from\s+)?["'']@/modules/[^/"'']+/infrastructure(?:/[^"'']*)?["'']'
+    paths:
+      include:
+        - src/start.ts
+
+  - id: cross-feature-deep-import
+    message: 'Import other modules through public files: index.ts, presentation.ts, server.ts, backend.ts, client.ts, or testing.ts.'
+    languages: [typescript]
+    severity: ERROR
+    pattern-either:
+      - pattern-regex: 'from\s+["''](?:\.{1,2}/)+modules/(?!kernel/)[^/"''\n]+/(?!(?:index|presentation|server|backend|client|testing)(?:\.[^/"''\n]+)?(?:["'']|$))[^"''\n]+["'']'
+      - pattern-regex: 'from\s+["'']@/modules/(?!kernel/)[^/"''\n]+/(?!(?:index|presentation|server|backend|client|testing)(?:\.[^/"''\n]+)?(?:["'']|$))[^"''\n]+["'']'
+    paths:
+      include:
+        - src/routes/**/*.ts
+        - src/routes/**/*.tsx
+
+  - id: no-kernel-application-result-test-import
+    message: Import ApplicationResult from @/modules/kernel/testing in tests.
+    languages: [typescript]
+    severity: ERROR
+    pattern-regex: 'from\s+["'']@/modules/kernel/application/result["'']'
+    paths:
+      include:
+        - tests/**/*.ts
+        - tests/**/*.tsx
+
+  - id: no-platform-imports-app-code
+    message: src/platform must not import modules, routes, or composition.
+    languages: [typescript]
+    severity: ERROR
+    pattern-regex: 'from\s+["'']@/(?:modules|routes|composition)(?:/[^"'']*)?["'']'
+    paths:
+      include:
+        - src/platform/**/*.ts
+        - src/platform/**/*.tsx
+
+  - id: no-module-imports-app-code
+    message: src/app composes shell and support UI around modules; modules must not import app code.
+    languages: [typescript]
+    severity: ERROR
+    pattern-regex: 'from\s+["'']@/app(?:/[^"'']*)?["'']'
+    paths:
+      include:
+        - src/modules/**/*.ts
+        - src/modules/**/*.tsx
+
+  - id: no-production-testing-gate-imports
+    message: testing.ts public gates are for tests only; production source must not import them.
+    languages: [typescript]
+    severity: ERROR
+    pattern-regex: 'from\s+["'']@/(?:modules/[^/"'']+|platform/runtime-config)/testing(?:\.[^"'']*)?["'']'
+    paths:
+      include:
+        - src/**/*.ts
+        - src/**/*.tsx
+
+  - id: no-module-internals-import-composition
+    message: Module internals must receive dependencies from factories/public server barrels, not import composition directly.
+    languages: [typescript]
+    severity: ERROR
+    pattern-regex: 'from\s+["'']@/composition(?:/[^"'']*)?["'']'
+    paths:
+      include:
+        - src/modules/**/domain/**/*.ts
+        - src/modules/**/domain/**/*.tsx
+        - src/modules/**/application/**/*.ts
+        - src/modules/**/application/**/*.tsx
+        - src/modules/**/infrastructure/**/*.ts
+        - src/modules/**/infrastructure/**/*.tsx
+        - src/modules/**/transport/**/*.ts
+        - src/modules/**/transport/**/*.tsx
+        - src/modules/**/presentation/**/*.ts
+        - src/modules/**/presentation/**/*.tsx
+        - src/modules/**/factory.ts
+        - src/modules/**/factory.tsx
+
+  - id: presentation-schema-no-i18n
+    message: presentation/schema.ts must emit error codes, not call i18next at schema-build time. The UI translates at render via form-field-error.tsx.
+    languages: [typescript]
+    severity: ERROR
+    pattern-regex: '^\s*import(?:\s+type)?\s+[^;]+from\s+["''](?:i18next|react-i18next)["'']'
+    paths:
+      include:
+        - src/modules/*/presentation/schema.ts
+
+  - id: no-direct-import-meta-env-dev
+    message: Read the dev-mode flag through platform/env/config.ts instead of import.meta.env.DEV.
+    languages: [typescript]
+    severity: ERROR
+    pattern-regex: 'import\.meta\.env\.DEV'
+    paths:
+      exclude:
+        - src/platform/env/**
+        - src/app/devtools/presentation/tanstack-devtools.tsx
+        - '*.config.ts'
+        - '*.config.mjs'
+        - 'vite.*.ts'
+        - vite.config.*
+
+  - id: no-provider-role-domain-cast
+    message: Validate provider auth roles through zRole before assigning them to AuthenticatedUser.role.
+    languages: [typescript]
+    severity: ERROR
+    pattern-regex: 'role:\s*[^,\n]+\s+as\s+AuthenticatedUser\[''role''\]'
+    paths:
+      include:
+        - src/modules/auth/infrastructure/**/*.ts
+        - src/modules/auth/infrastructure/**/*.tsx
+      exclude:
+        - '**/*.unit.spec.ts'
+        - '**/*.test.ts'
+
+  - id: no-role-permissions-in-operator
+    message: Use Object.hasOwn(rolePermissions, value) for role validation; the `in` operator accepts inherited keys.
+    languages: [typescript]
+    severity: ERROR
+    pattern: $VALUE in rolePermissions
+    paths:
+      include:
+        - src/modules/auth/domain/**/*.ts
+      exclude:
+        - '**/*.unit.spec.ts'
+        - '**/*.test.ts'
+
+  - id: recursive-sanitizer-weakset-without-path-cleanup
+    message: Recursive redaction/sanitization helpers must delete values from the WeakSet after traversing so reused references are not treated as circular.
+    languages: [typescript]
+    severity: ERROR
+    patterns:
+      - pattern-inside: |
+          const $FN = (..., $SEEN: WeakSet<object>, ...) => {
+            ...
+          }
+      - metavariable-regex:
+          metavariable: $FN
+          regex: '.*(?:sanitize|redact|diagnostic|debug).*'
+      - pattern: |
+          $SEEN.add($VALUE);
+      - pattern-not-inside: |
+          const $FN = (..., $SEEN: WeakSet<object>, ...) => {
+            ...
+            $SEEN.delete($VALUE);
+            ...
+          }
+
+  - id: email-template-no-global-language-mutation
+    message: Server-rendered email templates must use fixed translators instead of mutating the global i18n language.
+    languages: [typescript]
+    severity: ERROR
+    pattern: i18n.changeLanguage(...)
+    paths:
+      include:
+        - src/modules/email/presentation/templates/**/*.tsx
+
+  - id: better-auth-client-confined
+    message: Better Auth client APIs are only allowed in the auth Better Auth browser facade.
+    languages: [typescript]
+    severity: ERROR
+    pattern-regex: '^\s*import(?:\s+type)?\s+[^;]+from\s+["'']better-auth/(?:react|client/plugins)["'']'
+    paths:
+      exclude:
+        - src/modules/auth/presentation/better-auth-client.ts
+
+  - id: better-auth-access-helpers-confined
+    message: Better Auth access-control helpers are only allowed in Better Auth adapters/facades.
+    languages: [typescript]
+    severity: ERROR
+    pattern-regex: '^\s*import(?:\s+type)?\s+[^;]+from\s+["'']better-auth/plugins/(?:access|admin/access)["'']'
+    paths:
+      exclude:
+        - src/modules/auth/presentation/better-auth-client.ts
+        - src/modules/auth/infrastructure/better-auth/**
+
+  - id: better-auth-server-confined
+    message: Better Auth server APIs are only allowed in Better Auth infrastructure.
+    languages: [typescript]
+    severity: ERROR
+    pattern-regex: '^\s*import(?:\s+type)?\s+[^;]+from\s+["'']better-auth(?!(?:/react|/client/plugins|/plugins/(?:access|admin/access))["''])(?:/[^"'']*)?["'']'
+    paths:
+      exclude:
+        - src/modules/auth/infrastructure/better-auth/**
+
+  - id: workos-sdk-confined
+    message: WorkOS SDK imports must stay inside the future auth WorkOS adapter.
+    languages: [typescript]
+    severity: ERROR
+    pattern-regex: '^\s*import(?:\s+type)?\s+[^;]+from\s+["'']@workos(?:-inc)?/[^"'']+["'']'
+    paths:
+      exclude:
+        - src/modules/auth/infrastructure/workos/**
+
+  - id: better-auth-session-revocation-no-direct-app-user-match
+    message: Resolve Better Auth session ownership through auth_identity before comparing to app user ids.
+    languages: [typescript]
+    severity: ERROR
+    pattern-regex: 'eq\s*\(\s*sessionTable\.userId\s*,\s*input\.userId\s*\)'
+    paths:
+      include:
+        - src/modules/auth/infrastructure/better-auth/**/*.ts
+        - src/modules/auth/infrastructure/better-auth/**/*.tsx
+      exclude:
+        - '**/*.unit.spec.ts'
+        - '**/*.test.ts'
+
+  - id: better-auth-options-no-raw-in-operator
+    message: Normalize Better Auth factory inputs by database shape; do not classify CreateAuthOptions with raw `in` checks.
+    languages: [typescript]
+    severity: ERROR
+    pattern-regex: '["''](?:database|authEmailPort)["'']\s+in\s+[A-Za-z_$][A-Za-z0-9_$]*'
+    paths:
+      include:
+        - src/modules/auth/infrastructure/better-auth/**/*.ts
+        - src/modules/auth/infrastructure/better-auth/**/*.tsx
+      exclude:
+        - '**/*.unit.spec.ts'
+        - '**/*.test.ts'
+
+  - id: no-better-auth-secondary-storage-error-swallowing
+    message: Better Auth secondary storage must propagate SecondaryStore Result.Error values instead of converting them to cache misses or successful writes.
+    languages: [typescript]
+    severity: ERROR
+    pattern-either:
+      - pattern-regex: 'if\s*\([^)]*\.isError\(\)\)\s*return\s+(?:null|undefined)\b'
+      - pattern-regex: '^\s*await\s+store\.(?:set|delete)\('
+    paths:
+      include:
+        - src/modules/auth/infrastructure/better-auth/secondary-storage-adapter.ts
+
+  - id: no-composition-spread-overrides
+    message: Composition factories must merge override keys explicitly with ??; spreading overrides can let explicit undefined erase required dependencies.
+    languages: [typescript]
+    severity: ERROR
+    patterns:
+      - pattern: |
+          return {
+            ...$BASE,
+            ...overrides,
+            ...
+          };
+    paths:
+      include:
+        - src/composition/**/*.ts
+        - src/composition/**/*.tsx
+      exclude:
+        - '**/*.unit.spec.ts'
+        - '**/*.test.ts'
+
+  - id: no-src-features-imports
+    message: src/features was removed; use src/modules/<capability> or src/platform.
+    languages: [typescript]
+    severity: ERROR
+    pattern-regex: 'from\s+["'']@/features(?:/[^"'']*)?["'']'
+
+  - id: no-src-layout-imports
+    message: src/layout was moved into src/app/shell; import from @/app/shell/presentation.
+    languages: [typescript]
+    severity: ERROR
+    pattern-regex: 'from\s+["'']@/layout(?:/[^"'']*)?["'']'
+
+  - id: no-legacy-platform-root-imports
+    message: Shared UI/helpers live under @/platform.
+    languages: [typescript]
+    severity: ERROR
+    pattern-regex: 'from\s+["'']@/(?:components|hooks|lib|env|emails)(?:/[^"'']*)?["'']'
+
+  - id: legacy-server-import
+    message: src/server was removed; use module-owned public APIs or composition roots.
+    languages: [typescript]
+    severity: ERROR
+    pattern-regex: 'from\s+["'']@/server(?:/[^"'']*)?["'']'
+
+  - id: unsafe-redirect-from-user-input
+    message: Validate redirect targets against an allowlist; do not pass raw request input.
+    languages: [typescript]
+    severity: ERROR
+    pattern-either:
+      - pattern: 'redirect({ to: $REQ.$X.$Y, ... })'
+      - pattern: 'Response.redirect($REQ.$X.$Y, ...)'
+
+  - id: no-location-href-login-redirect-search
+    message: Preserve login redirects as app-relative paths; do not put full location.href values into redirect search params.
+    languages: [typescript]
+    severity: ERROR
+    pattern: 'search: { redirect: $LOCATION.href }'
+    paths:
+      include:
+        - src/routes/**/*.ts
+        - src/routes/**/*.tsx
+        - src/modules/auth/presentation/**/*.ts
+        - src/modules/auth/presentation/**/*.tsx
+
+  - id: no-bare-slash-startswith-redirect
+    message: Redirect checks using startsWith('/') must also reject protocol-relative targets like //evil.example; use normalizeInternalRedirect().
+    languages: [typescript]
+    severity: ERROR
+    patterns:
+      - pattern-inside: |
+          if ($TARGET.startsWith('/')) {
+            ...
+          }
+      - pattern-either:
+          - pattern: 'redirect({ ..., to: $TARGET, ... })'
+          - pattern: 'redirect({ ..., href: $TARGET, ... })'
+    paths:
+      include:
+        - src/routes/**/*.ts
+        - src/routes/**/*.tsx
+        - src/modules/auth/presentation/**/*.ts
+        - src/modules/auth/presentation/**/*.tsx
+      exclude:
+        - src/modules/auth/presentation/redirects.ts
+        - '**/*.unit.spec.ts'
+        - '**/*.test.ts'
+
+  - id: no-root-loader-context-return
+    message: Root route loader data must be serializable; do not return RouterContext from loader payloads.
+    languages: [typescript]
+    severity: ERROR
+    pattern-either:
+      - pattern: return { context };
+      - pattern: |
+          return {
+            ...,
+            context: $CONTEXT,
+            ...
+          };
+    paths:
+      include:
+        - src/routes/__root.tsx
+
+  - id: authenticated-context-requires-cache-policy
+    message: Authenticated server context must apply private no-store cache headers before returning session-dependent data.
+    languages: [typescript]
+    severity: ERROR
+    patterns:
+      - pattern: |
+          if ($SESSION?.user?.id) {
+            ...
+          }
+      - pattern-not: |
+          if ($SESSION?.user?.id) {
+            ...
+            setAuthenticatedResponseCacheHeaders();
+            ...
+          }
+    paths:
+      include:
+        - src/modules/auth/transport/tanstack/server-context.ts
+
+  - id: sentry-clear-tags-when-unsetting-user
+    message: Clear Sentry user tags whenever the telemetry user is unset.
+    languages: [typescript]
+    severity: ERROR
+    patterns:
+      - pattern: |
+          if (!user) {
+            ...
+            Sentry.setUser(null);
+            ...
+            return;
+          }
+      - pattern-not: |
+          if (!user) {
+            ...
+            Sentry.setUser(null);
+            ...
+            Sentry.setTag?.('role', ...);
+            ...
+            return;
+          }
+    paths:
+      include:
+        - src/composition/telemetry/sentry-adapter.ts
+
+  - id: auth-server-functions-require-telemetry
+    message: Auth server functions must pass injected telemetry into createServerContextTools (sourced from getKernel().telemetry in composition, not the telemetry service-locator).
+    languages: [typescript]
+    severity: ERROR
+    patterns:
+      - pattern: |
+          createServerContextTools({ getAuthUseCases, ... })
+      - pattern-not: |
+          createServerContextTools({ ..., telemetry: $TELEMETRY, ... })
+    paths:
+      include:
+        - src/modules/auth/transport/server-functions/server-functions.ts
+
+  - id: token-or-secret-logging
+    message: Do not log tokens, secrets, passwords, or Authorization headers.
+    languages: [typescript]
+    severity: ERROR
+    pattern-either:
+      - pattern: '$LOG.$M(..., { ..., token: $T, ... })'
+      - pattern: '$LOG.$M(..., { ..., authorization: $A, ... })'
+      - pattern: '$LOG.$M(..., { ..., password: $P, ... })'
+      - pattern: '$LOG.$M(..., $REQ.headers.authorization, ...)'
+      - pattern: 'console.log(..., $REQ.headers.authorization, ...)'
+    paths:
+      exclude:
+        - '**/*.unit.spec.ts'
+        - '**/*.test.ts'
+
+  - id: no-console-in-production-source
+    message: Use frontendLogger or the backend logger; console.* is allowed only in tests, fixtures, scripts, and localhost/debug diagnostics.
+    languages: [typescript]
+    severity: ERROR
+    pattern-regex: '\bconsole\.(?:assert|clear|count|countReset|debug|dir|dirxml|error|group|groupCollapsed|groupEnd|info|log|table|time|timeEnd|timeLog|trace|warn)\s*\('
+    paths:
+      include:
+        - src/**/*.ts
+        - src/**/*.tsx
+      exclude:
+        - '**/*.fixture.tsx'
+        - '**/*.unit.spec.ts'
+        - '**/*.unit.test.ts'
+        - '**/*.browser.spec.tsx'
+        - '**/*.integration.test.ts'
+        - 'src/app/build-info/infrastructure/generate-build-info.ts'
+        - 'src/modules/auth/presentation/e2e-debug.ts'
+
+  - id: auth-diagnostics-no-sensitive-fields
+    message: Auth diagnostics must not receive raw sensitive fields; omit them or log derived/redacted values.
+    languages: [typescript]
+    severity: ERROR
+    pattern-either:
+      - pattern: 'authE2eDebug($EVENT, { ..., email: $VALUE, ... })'
+      - pattern: 'authE2eDebug($EVENT, { ..., id: $VALUE, ... })'
+      - pattern: 'authE2eDebug($EVENT, { ..., identifier: $VALUE, ... })'
+      - pattern: 'authE2eDebug($EVENT, { ..., name: $VALUE, ... })'
+      - pattern: 'authE2eDebug($EVENT, { ..., phone: $VALUE, ... })'
+      - pattern: 'authE2eDebug($EVENT, { ..., user: $VALUE, ... })'
+      - pattern: '$PAGE.authDebug($EVENT, { ..., email: $VALUE, ... })'
+      - pattern: '$PAGE.authDebug($EVENT, { ..., id: $VALUE, ... })'
+      - pattern: '$PAGE.authDebug($EVENT, { ..., identifier: $VALUE, ... })'
+      - pattern: '$PAGE.authDebug($EVENT, { ..., name: $VALUE, ... })'
+      - pattern: '$PAGE.authDebug($EVENT, { ..., phone: $VALUE, ... })'
+      - pattern: '$PAGE.authDebug($EVENT, { ..., user: $VALUE, ... })'
+      - pattern: 'diagnostics.log($EVENT, { ..., email: $VALUE, ... })'
+      - pattern: 'diagnostics.log($EVENT, { ..., id: $VALUE, ... })'
+      - pattern: 'diagnostics.log($EVENT, { ..., identifier: $VALUE, ... })'
+      - pattern: 'diagnostics.log($EVENT, { ..., name: $VALUE, ... })'
+      - pattern: 'diagnostics.log($EVENT, { ..., phone: $VALUE, ... })'
+      - pattern: 'diagnostics.log($EVENT, { ..., user: $VALUE, ... })'
+      - pattern: 'diagnostics.waitForUrl($TYPE, $URL, { ..., email: $VALUE, ... })'
+      - pattern: 'diagnostics.waitForUrl($TYPE, $URL, { ..., id: $VALUE, ... })'
+      - pattern: 'diagnostics.waitForUrl($TYPE, $URL, { ..., identifier: $VALUE, ... })'
+      - pattern: 'diagnostics.waitForUrl($TYPE, $URL, { ..., name: $VALUE, ... })'
+      - pattern: 'diagnostics.waitForUrl($TYPE, $URL, { ..., phone: $VALUE, ... })'
+      - pattern: 'diagnostics.waitForUrl($TYPE, $URL, { ..., user: $VALUE, ... })'
+    paths:
+      include:
+        - tests/e2e/**/*.ts
+        - src/modules/auth/presentation/**/*.ts
+        - src/modules/auth/presentation/**/*.tsx
+      exclude:
+        - '**/*.unit.spec.ts'
+        - '**/*.browser.spec.tsx'
+        - '**/*.test.ts'
+
+  - id: domain-imports-react-or-router
+    message: domain/ must not import React or routing libs.
+    languages: [typescript]
+    severity: ERROR
+    pattern-regex: '^\s*import(?:\s+type)?(?:\s+[^;]+?\s+from\s+|\s*)["''](?:react|@tanstack/react-router|@tanstack/react-query)["'']'
+    paths:
+      include:
+        - src/modules/*/domain/**
+
+  - id: ci-oxlint-deny-warnings
+    message: CI oxlint runs must include --deny-warnings so warning-level rules fail builds.
+    languages: [generic]
+    severity: ERROR
+    pattern-regex: 'run:\s*pnpm\s+(?:lint|oxlint)(?![^\n]*--deny-warnings)\b[^\n]*'
+    paths:
+      include:
+        - .github/workflows/*.yml
+        - .github/workflows/*.yaml
+
+  - id: lefthook-format-changed-stage-fixed
+    message: format:changed pre-commit hooks must set stage_fixed true so formatter edits are committed.
+    languages: [generic]
+    severity: ERROR
+    pattern-regex: '(?ms)^pre-commit:\s*\n(?:(?!^\S).)*?^\s{4}format:\s*\n(?=(?:(?!^\s{4}\S).)*^\s{6}run:\s*pnpm\s+format:changed[^\n]*)(?!(?:(?!^\s{4}\S).)*^\s{6}stage_fixed:\s*true)'
+    paths:
+      include:
+        - lefthook.yml
+        - lefthook.yaml
+
+  - id: script-git-diff-through-git-utils
+    message: Use scripts/lib/git-utils.mjs for changed-file discovery so staged files are included consistently.
+    languages: [generic]
+    severity: ERROR
+    pattern-regex: 'runGit\(\[\s*["'']diff["'']'
+    paths:
+      include:
+        - scripts/*.mjs
+      exclude:
+        - scripts/lib/git-utils.mjs
+
+  - id: node-script-cli-spawn-requires-windows-shell
+    message: Spawning package-manager or npm-bin CLIs from Node scripts must set shell to process.platform === 'win32' so Windows .cmd wrappers resolve.
+    languages: [javascript]
+    severity: ERROR
+    paths:
+      include:
+        - scripts/*.mjs
+    patterns:
+      - pattern-either:
+          - pattern: spawnSync($CMD, $ARGS, $OPTS)
+          - pattern: spawn($CMD, $ARGS, $OPTS)
+      - metavariable-regex:
+          metavariable: $CMD
+          regex: '^[''"](pnpm|vitest)[''"]$'
+      - pattern-not: |
+          spawnSync($CMD, $ARGS, { ..., shell: process.platform === 'win32', ... })
+      - pattern-not: |
+          spawn($CMD, $ARGS, { ..., shell: process.platform === 'win32', ... })
+
+  - id: task-verify-no-shell-false
+    message: task-verify spawns pnpm; keep the Windows shell fallback instead of forcing shell false.
+    languages: [javascript]
+    severity: ERROR
+    paths:
+      include:
+        - scripts/task-verify.mjs
+    pattern: |
+      spawn($COMMAND, $ARGS, { ..., shell: false, ... })
+
+  - id: resend-app-error-preserve-provider-status
+    message: Preserve Resend provider statusCode when wrapping send failures; use error.statusCode ?? 500.
+    languages: [typescript]
+    severity: ERROR
+    pattern: |
+      throw new AppError({
+        ...,
+        status: 500,
+        ...
+      })
+    paths:
+      include:
+        - src/modules/kernel/infrastructure/email/**/*.ts
+        - src/modules/kernel/infrastructure/email/**/*.tsx
+      exclude:
+        - '**/*.unit.spec.ts'
+        - '**/*.test.ts'
+
+  - id: resend-sdk-webhook-verify-uses-sdk-header-shape
+    message: Resend SDK webhooks.verify expects headers.id, headers.timestamp, and headers.signature mapped from incoming svix-* headers; pass raw svix-* headers only when using Svix directly.
+    languages: [typescript]
+    severity: ERROR
+    pattern-either:
+      - pattern: |
+          $RESEND.webhooks.verify({
+            ...,
+            headers: {
+              ...,
+              'svix-id': $ID,
+              ...
+            },
+            ...
+          })
+      - pattern: |
+          $RESEND.webhooks.verify({
+            ...,
+            headers: {
+              ...,
+              'svix-timestamp': $TIMESTAMP,
+              ...
+            },
+            ...
+          })
+      - pattern: |
+          $RESEND.webhooks.verify({
+            ...,
+            headers: {
+              ...,
+              'svix-signature': $SIGNATURE,
+              ...
+            },
+            ...
+          })
+    paths:
+      include:
+        - src/modules/email/**/*.ts
+        - src/modules/email/**/*.tsx
+      exclude:
+        - '**/*.unit.spec.ts'
+        - '**/*.test.ts'
+
+  - id: email-gateway-record-send-attempt-result-required
+    message: Resend send attempts must inspect recordSendAttempt() so duplicate idempotency keys with an existing externalId can short-circuit instead of sending or throwing.
+    languages: [typescript]
+    severity: ERROR
+    pattern-regex: '(?m)^\s*await\s+[A-Za-z0-9_.$]+\.recordSendAttempt\('
+    paths:
+      include:
+        - src/modules/email/infrastructure/resend/**/*.ts
+        - src/modules/email/infrastructure/resend/**/*.tsx
+      exclude:
+        - '**/*.unit.spec.ts'
+        - '**/*.test.ts'
+
+  - id: db-client-no-unguarded-import-meta-env
+    message: Guard import.meta.env access in the DB client because seed scripts can run outside Vite.
+    languages: [typescript]
+    severity: ERROR
+    pattern-regex: 'import\.meta\.env\.[A-Za-z_$][A-Za-z0-9_$]*'
+    paths:
+      include:
+        - src/modules/kernel/infrastructure/db/client.ts
+
+  - id: raw-cache-control-public
+    message: 'Do not set Cache-Control: public directly. Use cachePublic({ reason }) from @/platform/http/cache-control, which forces a documented justification and prevents accidental leaks of authenticated responses.'
+    languages: [generic]
+    severity: ERROR
+    pattern-regex: '[Cc]ache-[Cc]ontrol["'']?\s*[:,]\s*["''`][^"''`]*\bpublic\b'
+    paths:
+      include:
+        - src/modules/**/*.ts
+        - src/modules/**/*.tsx
+        - src/routes/**/*.ts
+        - src/routes/**/*.tsx
+      exclude:
+        - src/platform/http/cache-control.ts
+        - '**/*.unit.spec.ts'
+        - '**/*.browser.spec.ts'
+        - '**/*.test.ts'
+
+  - id: sanitizer-object-entries-require-binary-view-guard
+    message: Guard recursive sanitizer Object.entries traversal with ArrayBuffer.isView(value) so typed arrays and Buffers are preserved.
+    languages: [typescript]
+    severity: ERROR
+    paths:
+      include:
+        - src/platform/lib/redaction/**/*.ts
+    patterns:
+      - pattern-either:
+          - pattern: Object.entries($VALUE)
+          - pattern: Object.entries($VALUE as $CAST)
+      - metavariable-regex:
+          metavariable: $VALUE
+          regex: '^value$'
+      - pattern-not-inside: |
+          const $FUNC = (...): $RETURN => {
+            ...
+            if (ArrayBuffer.isView($VALUE)) {
+              ...
+            }
+            ...
+          };
+      - pattern-not-inside: |
+          const $FUNC = (...) => {
+            ...
+            if (ArrayBuffer.isView($VALUE)) {
+              ...
+            }
+            ...
+          };
+      - pattern-not-inside: |
+          function $FUNC(...): $RETURN {
+            ...
+            if (ArrayBuffer.isView($VALUE)) {
+              ...
+            }
+            ...
+          }
+      - pattern-not-inside: |
+          function $FUNC(...) {
+            ...
+            if (ArrayBuffer.isView($VALUE)) {
+              ...
+            }
+            ...
+          }
+
+  - id: sanitizer-no-raw-nonplain-object-return
+    message: Sanitizers must not return raw non-plain objects with no enumerable entries; return a safe placeholder instead.
+    languages: [typescript]
+    severity: ERROR
+    paths:
+      include:
+        - src/platform/lib/redaction/**/*.ts
+    patterns:
+      - pattern-inside: |
+          if (!Array.isArray($VALUE) && !isPlainObject($VALUE)) {
+            ...
+          }
+      - pattern: |
+          if ($ENTRIES.length === 0) {
+            return $VALUE;
+          }
+
+  - id: sanitizer-no-array-instance-map
+    message: Recursive log sanitizers must not call map on the array instance; use numeric iteration so Array subclass overrides cannot bypass sanitization.
+    languages: [typescript]
+    severity: ERROR
+    paths:
+      include:
+        - src/platform/lib/redaction/**/*.ts
+    patterns:
+      - pattern: $VALUE.map(...)
+      - metavariable-regex:
+          metavariable: $VALUE
+          regex: '^value$'
+
+  - id: sanitizer-oversized-array-guard-before-key-collection
+    message: Check oversized arrays before collecting all array keys so dense arrays cannot block or OOM logging.
+    languages: [typescript]
+    severity: ERROR
+    paths:
+      include:
+        - src/platform/lib/redaction/**/*.ts
+    pattern: |
+      const $KEYS = getArrayIndexKeys($VALUE);
+      ...
+      if ($VALUE.length > MAX_SANITIZED_ARRAY_LENGTH) {
+        ...
+      }
+
+  - id: sanitizer-tojson-branch-not-limited-to-nonplain
+    message: Sanitizers must handle callable toJSON on plain objects and arrays; do not limit toJSON handling to non-plain objects.
+    languages: [typescript]
+    severity: ERROR
+    paths:
+      include:
+        - src/platform/lib/redaction/**/*.ts
+    pattern-regex: '(?s)!\s*Array\.isArray\(value\).*!\s*isPlainObject\(value\).*toJSON.*===\s*[''"]function[''"]'
+
+  - id: shared-form-no-prehydration-lock
+    message: Shared Form must not lock visible controls before hydration; use the form action to prevent native pre-hydration submit instead.
+    languages: [generic]
+    severity: ERROR
+    paths:
+      include:
+        - src/platform/components/form/form.tsx
+    pattern-regex: '(?:disabled=\{!hydrated\}|inert=\{hydrated\s*\?\s*undefined\s*:\s*true\})'
+
+  - id: codecov-upload-requires-token-guard
+    message: Codecov uploads with fail_ci_if_error must be guarded by CODECOV_TOKEN so fork PR tests do not fail after passing.
+    languages: [generic]
+    severity: ERROR
+    paths:
+      include:
+        - .github/workflows/*.yml
+        - .github/workflows/*.yaml
+    pattern-regex: '(?s)-\s+name:\s*Upload coverage to Codecov(?!(?:(?!\n\s*-\s+name:).)*\n\s*if:\s*(?:\$\{\{\s*)?(?:secrets|env)\.CODECOV_TOKEN)(?:(?!\n\s*-\s+name:).)*\n\s*uses:\s*codecov/codecov-action@(?:(?!\n\s*-\s+name:).)*\n\s*fail_ci_if_error:\s*true'
+
+  - id: no-demo-mode-resurrection
+    message: Demo mode was removed for security (predictable OTP/accounts); do not reintroduce it.
+    severity: ERROR
+    languages: [generic]
+    pattern-regex: '(?:VITE_IS_DEMO|AUTH_EMAIL_OTP_MOCKED|DEMO_MODE|@/app/demo)'
+    paths:
+      include:
+        - src/**
+        - drizzle/**
+      exclude:
+        - .semgrep.yml
+        - '**/*.unit.spec.ts'
+        - '**/*.test.ts'
+
+  - id: no-spoofable-client-ip
+    message: Derive client IP only via getClientIp() (src/platform/http/get-client-ip.ts); never parse X-Forwarded-For directly (spoofable).
+    severity: ERROR
+    languages: [generic]
+    pattern-regex: '(?i)[''"]x-forwarded-for\b'
+    paths:
+      include:
+        - src/**
+      exclude:
+        - src/platform/http/get-client-ip.ts
+        - '**/*.unit.spec.ts'
+        - '**/*.test.ts'
+
+  - id: no-telemetry-locator-in-feature-modules
+    message: Feature modules must receive telemetry via injected dependency (getKernel().telemetry, wired in composition), not the telemetry service-locator. Import only the TelemetryAdapter type. The kernel/platform/composition substrate is exempt.
+    severity: ERROR
+    languages: [generic]
+    pattern-regex: '\bgetTelemetry\s*\(|\bsetTelemetry\s*\(|\btelemetryProxy\b'
+    paths:
+      include:
+        - src/modules/**
+      exclude:
+        - src/modules/kernel/**
+        - '**/*.unit.spec.ts'
+        - '**/*.test.ts'
+
+  - id: transport-no-i18n-translation
+    message: Transport must not translate at runtime. Throw stable error KEYS (e.g. UploadRejectedError) and translate at render time; import only language constants from @/platform/lib/i18n/constants.
+    severity: ERROR
+    languages: [generic]
+    pattern-regex: '\bi18n\.t\s*\(|from\s+[''"](?:i18next|react-i18next)[''"]'
+    paths:
+      include:
+        - src/modules/*/transport/**
+      exclude:
+        - '**/*.unit.spec.ts'
+        - '**/*.test.ts'
+
+  - id: better-upload-server-confined
+    message: '@better-upload/server stays in the kernel object-storage adapter (src/modules/kernel/infrastructure/storage). Transport and composition depend on ObjectStoragePort, not the SDK.'
+    severity: ERROR
+    languages: [generic]
+    pattern-regex: '[''"]@better-upload/server'
+    paths:
+      include:
+        - src/**
+      exclude:
+        - src/modules/kernel/infrastructure/storage/**
+        - '**/*.unit.spec.ts'
+        - '**/*.test.ts'
+
+  - id: better-upload-client-confined
+    message: '@better-upload/client stays in the shared platform upload UI components (src/platform/components/upload, form/field-upload-input). Modules depend on those components, not the SDK.'
+    severity: ERROR
+    languages: [generic]
+    pattern-regex: '[''"]@better-upload/client'
+    paths:
+      include:
+        - src/**
+      exclude:
+        - src/platform/components/upload/**
+        - src/platform/components/form/field-upload-input/**
+        - '**/*.unit.spec.ts'
+        - '**/*.test.ts'
+
+  - id: no-branded-string-casts-outside-parsers
+    message: Construct branded IDs and domain strings with their toX parser instead of `as Brand` casts.
+    severity: ERROR
+    languages: [generic]
+    pattern-regex: '\bas\s+(?:AccountName|UserDisplayName|UserId|SessionId|ScopeKey|EmailStatusId|EmailProviderMessageId|EmailIdempotencyKey|EmailWebhookEventId|EmailRecipientList|OtpCode|LanguageCode|EmailAddress|GeneratedId|RequestId|CorrelationId|CacheKey)\b'
+    paths:
+      include:
+        - src/**/*.ts
+        - src/**/*.tsx
+      exclude:
+        - src/modules/kernel/domain/ids.ts
+        - src/modules/account/domain/account.ts
+        - src/modules/user/domain/user.ts
+        - src/modules/*/testing.ts
+        - src/modules/kernel/testing.ts
+        - '**/*.unit.spec.ts'
+        - '**/*.test.ts'
+
+  - id: no-direct-parser-result-get
+    message: Branch on parser Result values before unwrapping; do not call toX(...).get() directly in production code.
+    severity: ERROR
+    languages: [generic]
+    pattern-regex: '\bto(?:AccountName|UserDisplayName|UserId|SessionId|ScopeKey|EmailStatusId|EmailProviderMessageId|EmailIdempotencyKey|EmailWebhookEventId|EmailRecipientList|OtpCode|LanguageCode|EmailAddress|GeneratedId|RequestId|CorrelationId|CacheKey)\s*\([^;]*?\)\s*\.get\s*\('
+    paths:
+      include:
+        - src/**/*.ts
+        - src/**/*.tsx
+      exclude:
+        - src/modules/*/testing.ts
+        - src/modules/kernel/testing.ts
+        - '**/*.unit.spec.ts'
+        - '**/*.test.ts'

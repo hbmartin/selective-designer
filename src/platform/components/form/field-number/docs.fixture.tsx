@@ -1,0 +1,33 @@
+import { z } from 'zod';
+
+import {
+  Form,
+  FormField,
+  FormFieldLabel,
+  useAppForm,
+} from '@/platform/components/form';
+import { onSubmit } from '@/platform/components/form/docs.utils';
+
+const Default = () => {
+  const form = useAppForm({
+    defaultValues: { balance: 0 as number | null },
+    validators: {
+      onSubmit: z.object({ balance: z.number().nullable() }),
+    },
+    onSubmit: ({ value }) => onSubmit(value),
+  });
+
+  return (
+    <Form form={form} className="flex flex-col gap-4">
+      <FormField>
+        <FormFieldLabel>Balance</FormFieldLabel>
+        <form.AppField name="balance">
+          {(field) => <field.FieldNumber />}
+        </form.AppField>
+      </FormField>
+      <form.SubmitButton>Submit</form.SubmitButton>
+    </Form>
+  );
+};
+
+export default { Default };

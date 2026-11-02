@@ -1,0 +1,19 @@
+import type { ReactNode } from 'react';
+
+import { MainNavDesktop } from '@/app/shell/presentation/app/main-nav-desktop';
+import { MainNavMobile } from '@/app/shell/presentation/app/main-nav-mobile';
+import { useShouldShowNavStore } from '@/app/shell/presentation/app/nav-visibility';
+
+export const Layout = (props: { children?: ReactNode }) => {
+  const showMainNavDesktop = useShouldShowNavStore(
+    (s) => s.mode === 'all' || s.mode === 'desktop-only'
+  );
+  const showMainNavMobile = useShouldShowNavStore((s) => s.mode === 'all');
+  return (
+    <div className="flex flex-1 flex-col" data-testid="layout-app">
+      {showMainNavDesktop && <MainNavDesktop />}
+      <div className="flex flex-1 flex-col">{props.children}</div>
+      {showMainNavMobile && <MainNavMobile />}
+    </div>
+  );
+};
