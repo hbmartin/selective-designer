@@ -39,10 +39,8 @@ jobs:
       # Deterministic seed accounts shared by `pnpm db:seed` and the E2E suite.
       SEED_ADMIN_EMAIL: admin@e2e.local
       SEED_USER_EMAIL: user@e2e.local
-      EMAIL_SERVER: smtp://127.0.0.1:1025
       EMAIL_FROM: Start UI <noreply@example.com>
-      EMAIL_DELIVERY_DISABLED: false
-      MAILDEV_URL: http://127.0.0.1:1080
+      EMAIL_DELIVERY_DISABLED: true
       S3_HOST: localhost:9000
       S3_BUCKET_NAME: default
       S3_SECURE: false
@@ -177,10 +175,8 @@ jobs:
       VITE_ENV_NAME: tests
       SEED_ADMIN_EMAIL: admin@e2e.local
       SEED_USER_EMAIL: user@e2e.local
-      EMAIL_SERVER: smtp://127.0.0.1:1025
       EMAIL_FROM: Start UI <noreply@example.com>
-      EMAIL_DELIVERY_DISABLED: false
-      MAILDEV_URL: http://127.0.0.1:1080
+      EMAIL_DELIVERY_DISABLED: true
       S3_HOST: localhost:9000
       S3_BUCKET_NAME: default
       S3_SECURE: false

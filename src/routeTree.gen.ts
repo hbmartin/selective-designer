@@ -28,11 +28,9 @@ import { Route as AppAccountIndexRouteImport } from './routes/app/account.index'
 import { Route as AppDesignsIndexRouteImport } from './routes/app/designs/index'
 import { Route as AppScorecardIndexRouteImport } from './routes/app/scorecard/index'
 import { Route as LoginErrorIndexRouteImport } from './routes/login/error.index'
-import { Route as LoginVerifyIndexRouteImport } from './routes/login/verify.index'
 import { Route as ManagerAccountIndexRouteImport } from './routes/manager/account.index'
 import { Route as ManagerDashboardIndexRouteImport } from './routes/manager/dashboard.index'
 import { Route as ManagerUsersIndexRouteImport } from './routes/manager/users/index'
-import { Route as ApiDevEmailTemplateRouteImport } from './routes/api/dev.email.$template'
 import { Route as ApiImagesImageIdDownloadRouteImport } from './routes/api/images.$imageId.download'
 import { Route as AppDesignsDesignIdIndexRouteImport } from './routes/app/designs/$designId/index'
 import { Route as AppDesignsDesignIdCompareRouteImport } from './routes/app/designs/$designId/compare'
@@ -140,11 +138,6 @@ const LoginErrorIndexRoute = LoginErrorIndexRouteImport.update({
   path: '/error/',
   getParentRoute: () => LoginRouteRoute,
 } as any)
-const LoginVerifyIndexRoute = LoginVerifyIndexRouteImport.update({
-  id: '/verify/',
-  path: '/verify/',
-  getParentRoute: () => LoginRouteRoute,
-} as any)
 const ManagerAccountIndexRoute = ManagerAccountIndexRouteImport.update({
   id: '/account/',
   path: '/account/',
@@ -159,11 +152,6 @@ const ManagerUsersIndexRoute = ManagerUsersIndexRouteImport.update({
   id: '/users/',
   path: '/users/',
   getParentRoute: () => ManagerRouteRoute,
-} as any)
-const ApiDevEmailTemplateRoute = ApiDevEmailTemplateRouteImport.update({
-  id: '/api/dev/email/$template',
-  path: '/api/dev/email/$template',
-  getParentRoute: () => rootRouteImport,
 } as any)
 const ApiImagesImageIdDownloadRoute =
   ApiImagesImageIdDownloadRouteImport.update({
@@ -242,11 +230,9 @@ export interface FileRoutesByFullPath {
   '/app/designs/': typeof AppDesignsIndexRoute
   '/app/scorecard/': typeof AppScorecardIndexRoute
   '/login/error/': typeof LoginErrorIndexRoute
-  '/login/verify/': typeof LoginVerifyIndexRoute
   '/manager/account/': typeof ManagerAccountIndexRoute
   '/manager/dashboard/': typeof ManagerDashboardIndexRoute
   '/manager/users/': typeof ManagerUsersIndexRoute
-  '/api/dev/email/$template': typeof ApiDevEmailTemplateRoute
   '/api/images/$imageId/download': typeof ApiImagesImageIdDownloadRoute
   '/app/designs/$designId/compare': typeof AppDesignsDesignIdCompareRoute
   '/app/designs/$designId/edit': typeof AppDesignsDesignIdEditRoute
@@ -274,11 +260,9 @@ export interface FileRoutesByTo {
   '/app/designs': typeof AppDesignsIndexRoute
   '/app/scorecard': typeof AppScorecardIndexRoute
   '/login/error': typeof LoginErrorIndexRoute
-  '/login/verify': typeof LoginVerifyIndexRoute
   '/manager/account': typeof ManagerAccountIndexRoute
   '/manager/dashboard': typeof ManagerDashboardIndexRoute
   '/manager/users': typeof ManagerUsersIndexRoute
-  '/api/dev/email/$template': typeof ApiDevEmailTemplateRoute
   '/api/images/$imageId/download': typeof ApiImagesImageIdDownloadRoute
   '/app/designs/$designId/compare': typeof AppDesignsDesignIdCompareRoute
   '/app/designs/$designId/edit': typeof AppDesignsDesignIdEditRoute
@@ -311,11 +295,9 @@ export interface FileRoutesById {
   '/app/designs/': typeof AppDesignsIndexRoute
   '/app/scorecard/': typeof AppScorecardIndexRoute
   '/login/error/': typeof LoginErrorIndexRoute
-  '/login/verify/': typeof LoginVerifyIndexRoute
   '/manager/account/': typeof ManagerAccountIndexRoute
   '/manager/dashboard/': typeof ManagerDashboardIndexRoute
   '/manager/users/': typeof ManagerUsersIndexRoute
-  '/api/dev/email/$template': typeof ApiDevEmailTemplateRoute
   '/api/images/$imageId/download': typeof ApiImagesImageIdDownloadRoute
   '/app/designs/$designId/compare': typeof AppDesignsDesignIdCompareRoute
   '/app/designs/$designId/edit': typeof AppDesignsDesignIdEditRoute
@@ -349,11 +331,9 @@ export interface FileRouteTypes {
     | '/app/designs/'
     | '/app/scorecard/'
     | '/login/error/'
-    | '/login/verify/'
     | '/manager/account/'
     | '/manager/dashboard/'
     | '/manager/users/'
-    | '/api/dev/email/$template'
     | '/api/images/$imageId/download'
     | '/app/designs/$designId/compare'
     | '/app/designs/$designId/edit'
@@ -381,11 +361,9 @@ export interface FileRouteTypes {
     | '/app/designs'
     | '/app/scorecard'
     | '/login/error'
-    | '/login/verify'
     | '/manager/account'
     | '/manager/dashboard'
     | '/manager/users'
-    | '/api/dev/email/$template'
     | '/api/images/$imageId/download'
     | '/app/designs/$designId/compare'
     | '/app/designs/$designId/edit'
@@ -417,11 +395,9 @@ export interface FileRouteTypes {
     | '/app/designs/'
     | '/app/scorecard/'
     | '/login/error/'
-    | '/login/verify/'
     | '/manager/account/'
     | '/manager/dashboard/'
     | '/manager/users/'
-    | '/api/dev/email/$template'
     | '/api/images/$imageId/download'
     | '/app/designs/$designId/compare'
     | '/app/designs/$designId/edit'
@@ -446,7 +422,6 @@ export interface RootRouteChildren {
   ApiTelemetryLogsRoute: typeof ApiTelemetryLogsRoute
   ApiTelemetrySentryTunnelRoute: typeof ApiTelemetrySentryTunnelRoute
   ApiWebhooksResendRoute: typeof ApiWebhooksResendRoute
-  ApiDevEmailTemplateRoute: typeof ApiDevEmailTemplateRoute
   ApiImagesImageIdDownloadRoute: typeof ApiImagesImageIdDownloadRoute
   ApiTelemetryOtelV1MetricsRoute: typeof ApiTelemetryOtelV1MetricsRoute
   ApiTelemetryOtelV1TracesRoute: typeof ApiTelemetryOtelV1TracesRoute
@@ -587,13 +562,6 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof LoginErrorIndexRouteImport
       parentRoute: typeof LoginRouteRoute
     }
-    '/login/verify/': {
-      id: '/login/verify/'
-      path: '/verify'
-      fullPath: '/login/verify/'
-      preLoaderRoute: typeof LoginVerifyIndexRouteImport
-      parentRoute: typeof LoginRouteRoute
-    }
     '/manager/account/': {
       id: '/manager/account/'
       path: '/account'
@@ -614,13 +582,6 @@ declare module '@tanstack/react-router' {
       fullPath: '/manager/users/'
       preLoaderRoute: typeof ManagerUsersIndexRouteImport
       parentRoute: typeof ManagerRouteRoute
-    }
-    '/api/dev/email/$template': {
-      id: '/api/dev/email/$template'
-      path: '/api/dev/email/$template'
-      fullPath: '/api/dev/email/$template'
-      preLoaderRoute: typeof ApiDevEmailTemplateRouteImport
-      parentRoute: typeof rootRouteImport
     }
     '/api/images/$imageId/download': {
       id: '/api/images/$imageId/download'
@@ -725,13 +686,11 @@ const AppRouteRouteWithChildren = AppRouteRoute._addFileChildren(
 interface LoginRouteRouteChildren {
   LoginIndexRoute: typeof LoginIndexRoute
   LoginErrorIndexRoute: typeof LoginErrorIndexRoute
-  LoginVerifyIndexRoute: typeof LoginVerifyIndexRoute
 }
 
 const LoginRouteRouteChildren: LoginRouteRouteChildren = {
   LoginIndexRoute: LoginIndexRoute,
   LoginErrorIndexRoute: LoginErrorIndexRoute,
-  LoginVerifyIndexRoute: LoginVerifyIndexRoute,
 }
 
 const LoginRouteRouteWithChildren = LoginRouteRoute._addFileChildren(
@@ -786,7 +745,6 @@ const rootRouteChildren: RootRouteChildren = {
   ApiTelemetryLogsRoute: ApiTelemetryLogsRoute,
   ApiTelemetrySentryTunnelRoute: ApiTelemetrySentryTunnelRoute,
   ApiWebhooksResendRoute: ApiWebhooksResendRoute,
-  ApiDevEmailTemplateRoute: ApiDevEmailTemplateRoute,
   ApiImagesImageIdDownloadRoute: ApiImagesImageIdDownloadRoute,
   ApiTelemetryOtelV1MetricsRoute: ApiTelemetryOtelV1MetricsRoute,
   ApiTelemetryOtelV1TracesRoute: ApiTelemetryOtelV1TracesRoute,

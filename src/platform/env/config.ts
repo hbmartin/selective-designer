@@ -45,11 +45,6 @@ const clientSchema = () =>
       .refine((value) => isSecureUrlForProduction(value, isProd()), {
         message: httpsInProductionMessage('VITE_BASE_URL'),
       }),
-    VITE_AUTH_SIGNUP_ENABLED: z
-      .enum(['true', 'false'])
-      .optional()
-      .prefault('true')
-      .transform((value) => value === 'true'),
     VITE_VISUAL_TEST: z
       .enum(['true', 'false'])
       .optional()

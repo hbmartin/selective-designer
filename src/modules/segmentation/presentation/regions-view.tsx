@@ -17,7 +17,6 @@ import { useCurrentScopeKey } from '@/modules/auth/client';
 import type { ImageId } from '@/modules/kernel/domain/ids';
 
 import { RegionOverlay } from './region-overlay';
-import { useRegionsPolling } from './use-regions-polling';
 import { segmentationQueries } from './wired-queries';
 import type { RegionView } from '../application/use-cases/regions';
 
@@ -39,12 +38,10 @@ export const RegionsView = (props: RegionsViewProps) => {
   const [selectMode, setSelectMode] = useState(false);
   const [text, setText] = useState('');
   const [activeId, setActiveId] = useState<string | null>(null);
-  const regionsPolling = useRegionsPolling();
   const [showAll, setShowAll] = useState(false);
 
   const regionsQuery = useQuery({
     ...segmentationQueries.regions({ scopeKey, imageId: props.imageId }),
-    refetchInterval: regionsPolling,
   });
   const invalidate = () =>
     queryClient.invalidateQueries({ queryKey: segmentationQueries.all() });
@@ -62,7 +59,7 @@ export const RegionsView = (props: RegionsViewProps) => {
     onSuccess: invalidate,
   });
 
-  const regions = regionsQuery.data ?? [];
+  const regions = regionsQuery.data?.regions ?? [];
 
   const onImageClick = (event: MouseEvent<HTMLDivElement>) => {
     if (!selectMode || segment.isPending) return;

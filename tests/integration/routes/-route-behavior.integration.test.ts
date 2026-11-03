@@ -7,7 +7,6 @@ const mocks = vi.hoisted(() => ({
   currentSession: vi.fn(),
   refetchSession: vi.fn(),
   startSignIn: vi.fn(),
-  verifyEmailOtp: vi.fn(),
   userCreate: vi.fn(),
   userDeleteById: vi.fn(),
   userGetAll: vi.fn(),
@@ -18,7 +17,6 @@ const mocks = vi.hoisted(() => ({
   userUpdateById: vi.fn(),
   envClient: {
     VITE_BASE_URL: 'http://localhost:3000',
-    VITE_AUTH_SIGNUP_ENABLED: true,
     VITE_S3_BUCKET_URL: 'http://localhost:9000/default',
     VITE_VISUAL_TEST: false,
   },
@@ -35,7 +33,6 @@ vi.mock('@/platform/env/config', () => ({
 }));
 
 vi.mock('@/modules/auth/client', () => ({
-  AUTH_SIGNUP_ENABLED: true,
   WithPermissions: ({ children }: { children: ReactNode }) => children,
   authQueries: {
     currentSession: () => ({
@@ -47,7 +44,6 @@ vi.mock('@/modules/auth/client', () => ({
   clearAllQueryStateForAuthBoundary: (queryClient: QueryClient) =>
     queryClient.clear(),
   startSignIn: mocks.startSignIn,
-  verifyEmailOtp: mocks.verifyEmailOtp,
   useAuthSession: () => ({ data: null, refetch: mocks.refetchSession }),
   useCurrentScopeKey: () => 'test-scope',
 }));
@@ -84,7 +80,6 @@ import {
 } from '@/modules/kernel/testing';
 import { userQueries } from '@/modules/user/client';
 import { Route as LoginRoute } from '@/routes/login/route';
-import { Route as LoginVerifyRoute } from '@/routes/login/verify.index';
 import { Route as ManagerRoute } from '@/routes/manager/route';
 import { Route as ManagerUsersIdRoute } from '@/routes/manager/users/$id.index';
 import { Route as ManagerUsersUpdateRoute } from '@/routes/manager/users/$id.update.index';
@@ -199,18 +194,6 @@ describe('route integration behavior', () => {
         search: parseSearch(ManagerUsersIndexRoute, { searchTerm: 'Ada' }),
       })
     ).toEqual({ searchTerm: 'Ada' });
-
-    // `email` is no longer part of the verify URL — it travels through router
-    // navigation state — so an `email` search param is ignored, not parsed.
-    expect(
-      parseSearch(LoginVerifyRoute, { email: 'not-an-email' })
-    ).not.toHaveProperty('email');
-    expect(
-      parseSearch(LoginVerifyRoute, {
-        email: 'x@example.com',
-        redirect: '/app',
-      })
-    ).toMatchObject({ redirect: '/app' });
   });
 
   it('runs list loaders and seeds infinite query cache entries by scope and search', async () => {

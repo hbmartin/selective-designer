@@ -23,10 +23,7 @@ import {
   type EditorRegion,
   RenderingEditor,
 } from '@/modules/rendering/presentation';
-import {
-  segmentationQueries,
-  useRegionsPolling,
-} from '@/modules/segmentation/client';
+import { segmentationQueries } from '@/modules/segmentation/client';
 
 /**
  * The design editor screen: composes the rendering editor with the mood
@@ -40,7 +37,6 @@ export const DesignEditor = (props: {
   const scopeKey = useCurrentScopeKey();
   const navigate = useNavigate();
   const queryClient = useQueryClient();
-  const regionsPolling = useRegionsPolling();
 
   const design = useQuery(
     designQueries.getById({ scopeKey, id: props.designId })
@@ -50,7 +46,6 @@ export const DesignEditor = (props: {
   );
   const regions = useQuery({
     ...segmentationQueries.regions({ scopeKey, imageId: props.sourceImageId }),
-    refetchInterval: regionsPolling,
   });
   const invalidateRegions = () =>
     queryClient.invalidateQueries({ queryKey: segmentationQueries.all() });
@@ -76,12 +71,14 @@ export const DesignEditor = (props: {
     ready:
       item.kind === 'swatch' || item.currentVersion.cutoutStatus === 'ready',
   }));
-  const editorRegions: EditorRegion[] = (regions.data ?? []).map((region) => ({
-    id: region.id,
-    label: region.label,
-    box: region.box,
-    isSuggestion: region.isSuggestion,
-  }));
+  const editorRegions: EditorRegion[] = (regions.data?.regions ?? []).map(
+    (region) => ({
+      id: region.id,
+      label: region.label,
+      box: region.box,
+      isSuggestion: region.isSuggestion,
+    })
+  );
   const isBaseImage = design.data?.baseImage.id === props.sourceImageId;
 
   return (

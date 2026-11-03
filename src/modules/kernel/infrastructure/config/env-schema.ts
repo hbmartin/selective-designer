@@ -92,6 +92,13 @@ export const getSeedAccountEmails = (source?: RuntimeEnv) => {
   };
 };
 
+/** Shared by local seed and its browser test fixtures. */
+export const getSeedAccountPassword = (source: RuntimeEnv = runtimeEnv()) =>
+  typeof source.SEED_ACCOUNT_PASSWORD === 'string' &&
+  source.SEED_ACCOUNT_PASSWORD.length > 0
+    ? source.SEED_ACCOUNT_PASSWORD
+    : 'local-development-only-password';
+
 export const zNonEmptyEnvString = () => z.string().trim().min(1);
 
 export const baseEnvSchema = z

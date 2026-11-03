@@ -1,4 +1,3 @@
-import { Result } from '@bloodyowl/boxed';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const mocks = vi.hoisted(() => {
@@ -9,8 +8,6 @@ const mocks = vi.hoisted(() => {
     authConfig: {
       adminEndpointsEnabled: false,
       allowedHosts: undefined as string[] | undefined,
-      githubClientId: undefined as string | undefined,
-      githubClientSecret: undefined as string | undefined,
       openApiEnabled: false,
       secret: testAuthSecret,
       sessionExpirationInSeconds: 2_592_000,
@@ -43,12 +40,6 @@ vi.mock('@/modules/auth/infrastructure/better-auth/auth', () => ({
   createAuth: mocks.createAuth,
 }));
 
-const authEmailPort = {
-  sendSignInOtp: vi.fn(async () =>
-    Result.Ok({ type: 'auth_sign_in_otp_sent' as const })
-  ),
-};
-
 describe('auth HTTP gateway exposure policy', () => {
   beforeEach(() => {
     vi.resetModules();
@@ -62,7 +53,7 @@ describe('auth HTTP gateway exposure policy', () => {
     mocks.authConfig.adminEndpointsEnabled = false;
     const { getAuthHttpGateway } = await import('@/composition/auth');
 
-    const gateway = getAuthHttpGateway({ authEmailPort });
+    const gateway = getAuthHttpGateway();
     const response = await gateway.handle(
       new Request('http://localhost/api/auth/admin/remove-user', {
         method: 'POST',
@@ -77,9 +68,9 @@ describe('auth HTTP gateway exposure policy', () => {
     mocks.authConfig.adminEndpointsEnabled = true;
     const { getAuthHttpGateway } = await import('@/composition/auth');
 
-    const gateway = getAuthHttpGateway({ authEmailPort });
+    const gateway = getAuthHttpGateway();
     const response = await gateway.handle(
-      new Request('http://localhost/api/auth/sign-in/email-otp', {
+      new Request('http://localhost/api/auth/sign-in/email', {
         method: 'POST',
       })
     );

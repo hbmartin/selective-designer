@@ -1,9 +1,11 @@
 import { faker } from '@faker-js/faker';
-import { notInArray, sql } from 'drizzle-orm';
+import { inArray, notInArray, sql } from 'drizzle-orm';
 
+import { addSeedCredentials } from '@/modules/auth/backend';
 import {
   getDefaultDbClient,
   getSeedAccountEmails,
+  getSeedAccountPassword,
   isProdRuntimeEnvironment,
   user,
 } from '@/modules/kernel/backend';
@@ -84,6 +86,15 @@ export async function createUsers() {
 
   // Never disclose seeded credentials on a production runtime.
   if (!isProdRuntimeEnvironment()) {
+    const seeded = await db
+      .select({ id: user.id })
+      .from(user)
+      .where(inArray(user.email, [adminEmail, userEmail]));
+    await addSeedCredentials(
+      db,
+      seeded.map(({ id }) => id),
+      getSeedAccountPassword()
+    );
     console.log(`👉 Admin connect with: ${emphasis(adminEmail)}`);
     console.log(`👉 User connect with: ${emphasis(userEmail)}`);
   }

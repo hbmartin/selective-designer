@@ -34,7 +34,6 @@ export const zEmailWebhookEventIdSchema =
   zBrandedNonEmptyString<'EmailWebhookEventId'>();
 export const zEmailRecipientListSchema =
   zBrandedNonEmptyString<'EmailRecipientList'>();
-export const zOtpCodeSchema = z.string().trim().length(6).brand<'OtpCode'>();
 export const zLanguageCodeSchema = zBrandedNonEmptyString<'LanguageCode'>();
 export const zEmailAddressSchema = z
   .string()
@@ -65,7 +64,6 @@ export type EmailProviderMessageId = z.infer<
 export type EmailIdempotencyKey = z.infer<typeof zEmailIdempotencyKeySchema>;
 export type EmailWebhookEventId = z.infer<typeof zEmailWebhookEventIdSchema>;
 export type EmailRecipientList = z.infer<typeof zEmailRecipientListSchema>;
-export type OtpCode = z.infer<typeof zOtpCodeSchema>;
 export type LanguageCode = z.infer<typeof zLanguageCodeSchema>;
 export type EmailAddress = z.infer<typeof zEmailAddressSchema>;
 
@@ -152,8 +150,6 @@ export const toEmailRecipientList = (
   value: string
 ): ParseResult<EmailRecipientList> =>
   parseBrandedString(zEmailRecipientListSchema, value, 'EmailRecipientList');
-export const toOtpCode = (value: string): ParseResult<OtpCode> =>
-  parseBrandedString(zOtpCodeSchema, value, 'OtpCode', 'OtpCode is invalid');
 export const toLanguageCode = (value: string): ParseResult<LanguageCode> =>
   parseBrandedString(zLanguageCodeSchema, value, 'LanguageCode');
 export const toEmailAddress = (value: string): ParseResult<EmailAddress> =>
@@ -209,6 +205,5 @@ export const zEmailProviderMessageId = () => zEmailProviderMessageIdSchema;
 export const zEmailIdempotencyKey = () => zEmailIdempotencyKeySchema;
 export const zEmailWebhookEventId = () => zEmailWebhookEventIdSchema;
 export const zEmailRecipientList = () => zEmailRecipientListSchema;
-export const zOtpCode = () => zOtpCodeSchema;
 export const zLanguageCode = () => zLanguageCodeSchema;
 export const zEmailAddress = () => zEmailAddressSchema;

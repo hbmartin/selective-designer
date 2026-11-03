@@ -4,7 +4,10 @@ import type { ProtectedContext } from '@/modules/auth/backend';
 import { zImageId, zObjectKey, zRegionId } from '@/modules/kernel/domain/ids';
 import { unwrapApplicationResult } from '@/modules/kernel/transport/tanstack/result-mapper';
 
-import type { RegionView } from '../../application/use-cases/regions';
+import type {
+  RegionListView,
+  RegionView,
+} from '../../application/use-cases/regions';
 import { REGION_LABEL_MAX_LENGTH } from '../../domain/region';
 import type { SegmentationUseCases } from '../../factory';
 
@@ -81,7 +84,10 @@ export const createSegmentationHandlers = ({
       }),
       {
         ...common,
-        regions_listed: (outcome: { regions: RegionView[] }) => outcome.regions,
+        regions_listed: ({
+          regions,
+          detection,
+        }: RegionListView): RegionListView => ({ regions, detection }),
       }
     ),
   segment: (

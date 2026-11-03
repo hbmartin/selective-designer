@@ -55,37 +55,3 @@ describe('validateServerConfig fails closed on insecure production config', () =
     expect(() => validateServerConfig()).not.toThrow();
   });
 });
-
-/**
- * The hardened OTP brute-force cap (M1). Better Auth's email-OTP `allowedAttempts`
- * is sourced from this value, so the default must stay at the hardened 3 and the
- * field must remain wired from `AUTH_OTP_ALLOWED_ATTEMPTS`.
- */
-describe('Better Auth OTP attempt cap default', () => {
-  beforeEach(() => {
-    vi.resetModules();
-    vi.unstubAllEnvs();
-    vi.stubEnv('SKIP_ENV_VALIDATION', undefined);
-    vi.stubEnv('NODE_ENV', 'development');
-    vi.stubEnv('AUTH_PROVIDER', 'better-auth');
-    vi.stubEnv('AUTH_SECRET', makeStrongTestSecret('auth'));
-  });
-
-  it('defaults otpAllowedAttempts to the hardened value of 3', async () => {
-    vi.stubEnv('AUTH_OTP_ALLOWED_ATTEMPTS', undefined);
-
-    const { getBetterAuthConfig } = await import('@/modules/kernel/backend');
-    const config = getBetterAuthConfig();
-
-    expect(config).toHaveProperty('otpAllowedAttempts', 3);
-    expect(typeof config.otpAllowedAttempts).toBe('number');
-  });
-
-  it('wires otpAllowedAttempts from AUTH_OTP_ALLOWED_ATTEMPTS', async () => {
-    vi.stubEnv('AUTH_OTP_ALLOWED_ATTEMPTS', '5');
-
-    const { getBetterAuthConfig } = await import('@/modules/kernel/backend');
-
-    expect(getBetterAuthConfig().otpAllowedAttempts).toBe(5);
-  });
-});

@@ -10,9 +10,6 @@ const mocks = vi.hoisted(() => ({
     handler: vi.fn(),
   })),
   drizzleAdapter: vi.fn(() => ({ id: 'drizzle-adapter' })),
-  emailOTP: vi.fn<(options: ExplicitAny) => ExplicitAny>(() => ({
-    id: 'email-otp-plugin',
-  })),
   openAPI: vi.fn(() => ({ id: 'open-api-plugin' })),
   tanstackStartCookies: vi.fn(() => ({ id: 'tanstack-cookies-plugin' })),
 }));
@@ -27,7 +24,6 @@ vi.mock('better-auth/adapters/drizzle', () => ({
 
 vi.mock('better-auth/plugins', () => ({
   admin: mocks.admin,
-  emailOTP: mocks.emailOTP,
   openAPI: mocks.openAPI,
 }));
 
@@ -38,8 +34,6 @@ vi.mock('better-auth/tanstack-start', () => ({
 vi.mock('@/modules/kernel/infrastructure/config/auth', () => ({
   getBetterAuthConfig: () => ({
     allowedHosts: ['preview.example'],
-    githubClientId: undefined,
-    githubClientSecret: undefined,
     secret: globalThis.crypto.randomUUID(),
     sessionExpirationInSeconds: 604_800,
     sessionUpdateAgeInSeconds: 86_400,
@@ -47,9 +41,6 @@ vi.mock('@/modules/kernel/infrastructure/config/auth', () => ({
     sessionAbsoluteMaxInSeconds: 2_592_000,
     rateLimitWindowSeconds: 60,
     rateLimitMax: 100,
-    otpAllowedAttempts: 3,
-    otpSendWindowSeconds: 60,
-    otpSendMax: 3,
     trustedOrigins: ['https://app.example'],
   }),
 }));
@@ -57,7 +48,6 @@ vi.mock('@/modules/kernel/infrastructure/config/auth', () => ({
 vi.mock('@/platform/env/client', () => ({
   envClient: {
     DEV: false,
-    VITE_AUTH_SIGNUP_ENABLED: true,
     VITE_BASE_URL: 'https://app.example',
   },
 }));
@@ -68,13 +58,7 @@ describe('Better Auth security configuration', () => {
       typeof import('@/modules/auth/infrastructure/better-auth/auth')
     >('@/modules/auth/infrastructure/better-auth/auth');
 
-    createAuth({
-      authEmailPort: {
-        sendSignInOtp: vi.fn(async () =>
-          Result.Ok({ type: 'auth_sign_in_otp_sent' as const })
-        ),
-      },
-    });
+    createAuth();
 
     const options = mocks.betterAuth.mock.calls[0]?.[0] as ExplicitAny;
 
@@ -111,11 +95,6 @@ describe('Better Auth security configuration', () => {
     } satisfies SecondaryStore;
 
     createAuth({
-      authEmailPort: {
-        sendSignInOtp: vi.fn(async () =>
-          Result.Ok({ type: 'auth_sign_in_otp_sent' as const })
-        ),
-      },
       secondaryStore,
     });
 
@@ -144,11 +123,13 @@ describe('Better Auth security configuration', () => {
       freshAge: 900,
     });
 
-    const emailOtpOptions = mocks.emailOTP.mock.calls.at(
-      -1
-    )?.[0] as ExplicitAny;
-    expect(emailOtpOptions.allowedAttempts).toBe(3);
-    expect(emailOtpOptions.rateLimit).toEqual({ window: 60, max: 3 });
+    expect(options.emailAndPassword).toMatchObject({
+      enabled: true,
+      disableSignUp: true,
+      requireEmailVerification: true,
+      minPasswordLength: 12,
+    });
+    expect(options.socialProviders).toBeUndefined();
   });
 
   it('propagates secondary storage failures to Better Auth', async () => {
@@ -171,11 +152,6 @@ describe('Better Auth security configuration', () => {
     } satisfies SecondaryStore;
 
     createAuth({
-      authEmailPort: {
-        sendSignInOtp: vi.fn(async () =>
-          Result.Ok({ type: 'auth_sign_in_otp_sent' as const })
-        ),
-      },
       secondaryStore,
     });
 

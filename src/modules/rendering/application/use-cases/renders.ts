@@ -764,7 +764,7 @@ export type DraftFromOriginalOutcome =
       baseImageId: ImageId;
       edits: number;
       /** Edits that could not be mapped onto the base image (reported, not hidden). */
-      dropped: number;
+      omitted: { unmappableRegion: number; editLimit: number };
     }
   | { type: 'draft_conflict' }
   | { type: 'render_not_found' }
@@ -828,7 +828,7 @@ export async function draftFromOriginal(
   };
 
   const edits: Edit[] = [];
-  let dropped = 0;
+  let unmappableRegion = 0;
   for (const [index, render] of chain.entries()) {
     for (const edit of render.recipe.edits) {
       const id = `r${index}-${edit.id}`.slice(0, 64);
@@ -848,7 +848,7 @@ export async function draftFromOriginal(
       if (mapped.isError()) return Result.Error(mapped.getError());
       const regionId = mapped.get();
       if (!regionId) {
-        dropped += 1;
+        unmappableRegion += 1;
         continue;
       }
       if (edit.kind === 'removal')
@@ -873,7 +873,6 @@ export async function draftFromOriginal(
     }
   }
   const kept = edits.slice(0, MAX_EDITS);
-  dropped += edits.length - kept.length;
   const prompt = [
     ...new Set(
       chain.map((render) => render.recipe.prompt.trim()).filter(Boolean)
@@ -899,6 +898,6 @@ export async function draftFromOriginal(
     type: 'draft_rebuilt',
     baseImageId,
     edits: kept.length,
-    dropped,
+    omitted: { unmappableRegion, editLimit: edits.length - kept.length },
   });
 }

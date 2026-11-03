@@ -22,6 +22,7 @@ type Input<TFn extends (deps: never, input: never) => unknown> =
 
 export function createMoodboardUseCases(deps: MoodboardUseCaseDeps) {
   return {
+    copyItems: (input: Input<typeof copyItems>) => copyItems(deps, input),
     list: (input: Input<typeof listMoodboard>) => listMoodboard(deps, input),
     createItem: (input: Input<typeof createItem>) => createItem(deps, input),
     updateItem: (input: Input<typeof updateItem>) => updateItem(deps, input),
@@ -38,11 +39,10 @@ export type MoodboardUseCases = ReturnType<typeof createMoodboardUseCases>;
 
 export function createMoodboardPipelineUseCases(deps: MoodboardPipelineDeps) {
   return {
-    removeBackground: (versionId: Input<typeof removeBackgroundForVersion>) =>
-      removeBackgroundForVersion(deps, versionId),
-    markCutoutFailed: (versionId: Input<typeof markCutoutFailed>) =>
-      markCutoutFailed(deps, versionId),
-    copyItems: (input: Input<typeof copyItems>) => copyItems(deps, input),
+    removeBackground: (input: Input<typeof removeBackgroundForVersion>) =>
+      removeBackgroundForVersion(deps, input),
+    markCutoutFailed: (input: Input<typeof markCutoutFailed>) =>
+      markCutoutFailed(deps, input),
   };
 }
 

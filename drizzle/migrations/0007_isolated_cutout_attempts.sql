@@ -1,0 +1,1 @@
+ALTER TABLE "item_version" ADD COLUMN "cutoutAttemptId" text;

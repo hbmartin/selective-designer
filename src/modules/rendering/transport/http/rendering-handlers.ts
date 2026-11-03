@@ -271,10 +271,7 @@ export const createRenderingHandlers = ({
       {
         rendering_forbidden: 'FORBIDDEN',
         render_not_found: 'NOT_FOUND',
-        draft_conflict: {
-          code: 'CONFLICT',
-          message: 'The draft changed; try again.',
-        },
+        draft_conflict: (outcome: { type: 'draft_conflict' }) => outcome,
         draft_rebuilt: (outcome: RebuiltDraftResponse): RebuiltDraftResponse =>
           outcome,
       }

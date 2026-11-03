@@ -1,15 +1,9 @@
 import { filter, isTruthy, map, pipe } from 'remeda';
 import { z } from 'zod';
 
-import {
-  baseEnvSchema,
-  isProdRuntimeEnvironment,
-  parseEnv,
-  shouldSkipEnvValidation,
-} from './env-schema';
+import { baseEnvSchema, parseEnv, shouldSkipEnvValidation } from './env-schema';
 import { ConfigurationError } from '../../domain/errors/configuration-error';
 
-const zOptionalProviderSecret = () => z.string().optional();
 const AUTH_SECRET_MIN_LENGTH = 32;
 const AUTH_SECRET_PLACEHOLDERS = new Set([
   'changeme',
@@ -62,15 +56,10 @@ const betterAuthEnvSchema = baseEnvSchema
       .prefault(2_592_000),
     AUTH_RATE_LIMIT_WINDOW_SECONDS: z.coerce.number().int().min(1).prefault(60),
     AUTH_RATE_LIMIT_MAX: z.coerce.number().int().min(1).prefault(100),
-    AUTH_OTP_ALLOWED_ATTEMPTS: z.coerce.number().int().min(1).prefault(3),
-    AUTH_OTP_SEND_WINDOW_SECONDS: z.coerce.number().int().min(1).prefault(60),
-    AUTH_OTP_SEND_MAX: z.coerce.number().int().min(1).prefault(3),
     AUTH_ALLOWED_HOSTS: z.string().optional(),
     AUTH_TRUSTED_ORIGINS: z.string().optional(),
     AUTH_ADMIN_ENDPOINTS_ENABLED: z.stringbool().default(false),
     AUTH_OPENAPI_ENABLED: z.stringbool().default(false),
-    GITHUB_CLIENT_ID: zOptionalProviderSecret(),
-    GITHUB_CLIENT_SECRET: zOptionalProviderSecret(),
   })
   .superRefine((env, ctx) => {
     if (!shouldSkipEnvValidation(env)) {
@@ -90,28 +79,7 @@ const betterAuthEnvSchema = baseEnvSchema
         });
       }
     }
-
-    if (!isProdRuntimeEnvironment(env)) return;
-
-    for (const field of ['GITHUB_CLIENT_ID', 'GITHUB_CLIENT_SECRET'] as const) {
-      if (env[field] === 'REPLACE ME') {
-        ctx.addIssue({
-          code: 'custom',
-          path: [field],
-          message: 'Update the value "REPLACE ME" or remove the variable',
-        });
-      }
-    }
-  })
-  .transform((env) => ({
-    ...env,
-    GITHUB_CLIENT_ID:
-      env.GITHUB_CLIENT_ID === 'REPLACE ME' ? undefined : env.GITHUB_CLIENT_ID,
-    GITHUB_CLIENT_SECRET:
-      env.GITHUB_CLIENT_SECRET === 'REPLACE ME'
-        ? undefined
-        : env.GITHUB_CLIENT_SECRET,
-  }));
+  });
 
 export type AuthProvider = 'better-auth' | 'workos';
 
@@ -127,15 +95,10 @@ export type BetterAuthConfig = {
   sessionAbsoluteMaxInSeconds: number;
   rateLimitWindowSeconds: number;
   rateLimitMax: number;
-  otpAllowedAttempts: number;
-  otpSendWindowSeconds: number;
-  otpSendMax: number;
   allowedHosts?: string[];
   trustedOrigins?: string[];
   adminEndpointsEnabled: boolean;
   openApiEnabled: boolean;
-  githubClientId?: string;
-  githubClientSecret?: string;
 };
 
 export type AuthConfig = BetterAuthConfig;
@@ -165,15 +128,10 @@ export function getBetterAuthConfig(): BetterAuthConfig {
     sessionAbsoluteMaxInSeconds: env.AUTH_SESSION_ABSOLUTE_MAX_IN_SECONDS,
     rateLimitWindowSeconds: env.AUTH_RATE_LIMIT_WINDOW_SECONDS,
     rateLimitMax: env.AUTH_RATE_LIMIT_MAX,
-    otpAllowedAttempts: env.AUTH_OTP_ALLOWED_ATTEMPTS,
-    otpSendWindowSeconds: env.AUTH_OTP_SEND_WINDOW_SECONDS,
-    otpSendMax: env.AUTH_OTP_SEND_MAX,
     allowedHosts: splitCsv(env.AUTH_ALLOWED_HOSTS),
     trustedOrigins: splitCsv(env.AUTH_TRUSTED_ORIGINS),
     adminEndpointsEnabled: env.AUTH_ADMIN_ENDPOINTS_ENABLED,
     openApiEnabled: env.AUTH_OPENAPI_ENABLED,
-    githubClientId: env.GITHUB_CLIENT_ID,
-    githubClientSecret: env.GITHUB_CLIENT_SECRET,
   };
   return cachedBetterAuthConfig;
 }

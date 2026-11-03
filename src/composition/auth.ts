@@ -1,5 +1,4 @@
 import {
-  type AuthEmailPort,
   type AuthHttpGateway,
   type AuthorizationGateway,
   createAuthUseCases,
@@ -19,14 +18,11 @@ import { InMemorySecondaryStore } from '@/modules/auth/infrastructure/secondary-
 import { UpstashSecondaryStore } from '@/modules/auth/infrastructure/secondary-store/upstash-secondary-store';
 import { ConfigurationError } from '@/modules/kernel';
 import {
-  createTelemetryLogger,
   getAuthProviderConfig,
   getBetterAuthConfig,
   getRedisConfig,
 } from '@/modules/kernel/backend';
 
-import { AuthEmailPortEmailGateway } from './auth-email-port';
-import { getEmailGateway } from './email';
 import { createCachedFactory } from './shared/singleton';
 // Same instance the kernel exposes as `kernel.telemetry`. Sourced from the
 // telemetry barrel rather than `getKernel()` to avoid an auth <-> kernel
@@ -36,25 +32,16 @@ import { telemetryProxy } from './telemetry';
 export type AuthOverrides = {
   sessionGateway?: SessionGateway;
   authorizationGateway?: AuthorizationGateway;
-  authEmailPort?: AuthEmailPort;
   userAdminGateway?: UserAdminGateway;
 };
 
 type AuthInstanceOverrides = {
-  authEmailPort?: AuthEmailPort;
   secondaryStore?: SecondaryStore;
 };
 
 type AuthHttpOverrides = AuthInstanceOverrides & {
   authHttpGateway?: AuthHttpGateway;
 };
-
-const buildAuthEmailPort = (overrides?: AuthInstanceOverrides) =>
-  overrides?.authEmailPort ??
-  new AuthEmailPortEmailGateway(
-    getEmailGateway(),
-    createTelemetryLogger({ telemetry: telemetryProxy })
-  );
 
 /**
  * Durable when Upstash Redis is configured, otherwise a per-process map. The
@@ -89,7 +76,6 @@ const assertBetterAuthProvider = () => {
 const buildAuth = (overrides?: AuthInstanceOverrides) => {
   assertBetterAuthProvider();
   return createAuth({
-    authEmailPort: buildAuthEmailPort(overrides),
     secondaryStore: overrides?.secondaryStore ?? getSecondaryStore(),
   });
 };
@@ -138,8 +124,7 @@ export const getAuthHttpGateway = (overrides?: AuthHttpOverrides) =>
   authHttpFactory.get(overrides);
 
 const buildAuthUseCases = (overrides?: AuthOverrides) => {
-  const authEmailPort = buildAuthEmailPort(overrides);
-  const authInstance = getAuth({ authEmailPort });
+  const authInstance = getAuth();
   const telemetry = telemetryProxy;
 
   return createAuthUseCases({
@@ -154,7 +139,6 @@ const buildAuthUseCases = (overrides?: AuthOverrides) => {
     authorizationGateway:
       overrides?.authorizationGateway ??
       new AuthorizationGatewayBetterAuth(authInstance, telemetry),
-    authEmailPort,
     userAdminGateway:
       overrides?.userAdminGateway ??
       new UserAdminGatewayBetterAuth(authInstance, undefined, telemetry),

@@ -23,6 +23,8 @@ const optionalSecret = () =>
 
 const aiProvidersEnvSchema = baseEnvSchema
   .extend({
+    GITHUB_ACTIONS: z.string().optional(),
+    VERCEL: z.string().optional(),
     FAL_KEY: optionalSecret(),
     BFL_API_KEY: optionalSecret(),
     /**
@@ -52,8 +54,15 @@ const aiProvidersEnvSchema = baseEnvSchema
     }
 
     if (mode === 'live') {
+      const ciBuild =
+        env.GITHUB_ACTIONS === 'true' && !env.VERCEL && !env.VERCEL_ENV;
       for (const field of ['FAL_KEY', 'BFL_API_KEY'] as const) {
-        if (!env[field]) {
+        const key = env[field]?.toLowerCase();
+        if (
+          !key ||
+          key === 'replace me' ||
+          (key === 'ci-placeholder' && !ciBuild)
+        ) {
           ctx.addIssue({
             code: 'custom',
             path: [field],

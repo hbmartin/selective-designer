@@ -37,6 +37,8 @@ export function createSegmentationPipelineUseCases(
   deps: SegmentationPipelineDeps
 ) {
   return {
+    finishDetection: (imageId: Input<typeof detectionConceptsFor>) =>
+      deps.regionRepository.finishDetection(imageId),
     concepts: (imageId: Input<typeof detectionConceptsFor>) =>
       detectionConceptsFor(deps, imageId),
     detectConcept: (input: Input<typeof detectConcept>) =>

@@ -4,6 +4,8 @@ import type { ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
 import { toast } from 'sonner';
 
+import { useHydrated } from '@/platform/hooks/use-hydrated';
+
 import { Badge } from '@/platform/components/ui/badge';
 import { Button } from '@/platform/components/ui/button';
 import { Spinner } from '@/platform/components/ui/spinner';
@@ -156,6 +158,9 @@ const RenderEntry = (props: {
 }) => {
   const { t } = useTranslation(['rendering']);
   const { render } = props.node;
+  const hydrated = useHydrated();
+  const createdAt = new Date(render.createdAt);
+  const timestamp = createdAt.toISOString();
   return (
     <li
       className={
@@ -174,12 +179,8 @@ const RenderEntry = (props: {
             className="h-8 rounded border object-contain"
           />
         )}
-        {/* Local time differs between server and browser by design. */}
-        <time
-          dateTime={new Date(render.createdAt).toISOString()}
-          suppressHydrationWarning
-        >
-          {new Date(render.createdAt).toLocaleString()}
+        <time dateTime={timestamp}>
+          {hydrated ? createdAt.toLocaleString() : timestamp}
         </time>
         {render.batchId && (
           <Badge variant="secondary">{t('rendering:history.batch')}</Badge>

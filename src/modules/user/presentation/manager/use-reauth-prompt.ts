@@ -9,7 +9,7 @@ import { isReauthRequiredError } from '@/modules/auth/client';
  * Returns a guard for destructive-mutation errors. When the server rejects an
  * action because the session is no longer fresh (`reauth_required`), it shows a
  * toast prompting the admin to re-authenticate, with an action that sends them
- * to `/login` carrying a redirect back to the current URL. Re-login (email OTP)
+ * to `/login` carrying a redirect back to the current URL. Signing in again
  * mints a fresh session, after which the admin retries — so an admin is never
  * permanently blocked.
  *

@@ -1,5 +1,4 @@
 import { useMatches } from '@tanstack/react-router';
-import { isMatching, match, P } from 'ts-pattern';
 
 import {
   type CurrentSession,
@@ -9,10 +8,7 @@ import {
   type Role,
 } from '@/modules/auth';
 
-import {
-  betterAuthBrowserClient,
-  type BetterAuthSocialProvider,
-} from './better-auth-client';
+import { betterAuthBrowserClient } from './better-auth-client';
 
 type AuthProviderError = {
   code?: string | null;
@@ -27,34 +23,6 @@ type AuthProviderResponse<TData = unknown> = {
 export type AuthClientResult<TValue = void> =
   | { ok: true; value: TValue }
   | { ok: false; code: string; message?: string };
-
-export type AuthSignInProvider = BetterAuthSocialProvider;
-
-export type StartSignInInput =
-  | {
-      strategy: 'email-otp';
-      email: string;
-      redirectTo?: string;
-    }
-  | {
-      strategy: 'social';
-      provider: AuthSignInProvider;
-      redirectTo?: string;
-    };
-
-export type StartSignInResult =
-  | {
-      status: 'verification_required';
-      email: string;
-      redirectTo?: string;
-    }
-  | {
-      status: 'redirect';
-      url: string;
-    }
-  | {
-      status: 'complete';
-    };
 
 const authUnknownErrorCode = 'UNKNOWN_ERROR';
 const authSignOutErrorCode = 'SIGN_OUT_FAILED';
@@ -72,15 +40,6 @@ const unknownErrorResult = (error: unknown): AuthClientResult<never> => ({
   code: authUnknownErrorCode,
   message: error instanceof Error ? error.message : undefined,
 });
-
-const hasRedirectUrl = isMatching({
-  url: P.when(
-    (url): url is string => typeof url === 'string' && url.length > 0
-  ),
-});
-
-const readRedirectUrl = (value: unknown) =>
-  hasRedirectUrl(value) ? value.url : undefined;
 
 const mapProviderResponse = <TValue, TData = unknown>(
   response: AuthProviderResponse<TData>,
@@ -126,46 +85,12 @@ export const createUseAuthSession =
     return useCurrentSessionQuery(routeSession);
   };
 
-export const startSignIn = async (
-  input: StartSignInInput
-): Promise<AuthClientResult<StartSignInResult>> => {
-  try {
-    return await match(input)
-      .with({ strategy: 'email-otp' }, async ({ email, redirectTo }) => {
-        const response = await betterAuthBrowserClient.sendEmailOtp({ email });
-        return mapProviderResponse(response, {
-          status: 'verification_required' as const,
-          email,
-          redirectTo,
-        });
-      })
-      .with({ strategy: 'social' }, async ({ provider, redirectTo }) => {
-        const response = await betterAuthBrowserClient.signInSocial({
-          provider,
-          callbackURL: redirectTo ?? '/',
-          errorCallbackURL: '/login/error',
-        });
-        const redirectUrl = readRedirectUrl(response.data);
-
-        return mapProviderResponse(
-          response,
-          redirectUrl
-            ? { status: 'redirect' as const, url: redirectUrl }
-            : { status: 'complete' as const }
-        );
-      })
-      .exhaustive();
-  } catch (error) {
-    return unknownErrorResult(error);
-  }
-};
-
-export const verifyEmailOtp = async (input: {
+export const startSignIn = async (input: {
   email: string;
-  otp: string;
+  password: string;
 }): Promise<AuthClientResult<void>> => {
   try {
-    const response = await betterAuthBrowserClient.signInEmailOtp(input);
+    const response = await betterAuthBrowserClient.signInWithPassword(input);
     return mapProviderResponse(response, undefined);
   } catch (error) {
     return unknownErrorResult(error);

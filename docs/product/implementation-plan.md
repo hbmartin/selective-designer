@@ -28,7 +28,7 @@ Decisions come from two planning interviews held on the same day. Conflicts betw
   - Download returns the **native returned image** with no label, watermark or upscaling.
 - **Outputs are raw.** Results are never composited back into the source; this becomes new ADR 0005. The **checker runs in the browser** when a result is viewed. It downsamples and blurs both images, compares them outside a widened edit mask, and shows a heatmap and the percentage changed. It is advisory only, and shows "unavailable" when the framing differs or the edit mask can't be computed.
 - **Segmentation is eager.** SAM 3 auto-detection runs on every base image and every render result. It looks for a fixed architectural list (config) plus the categories on the design's mood board. The user can also click, draw a box, type a description, brush or lasso. Regions the user made on a render source are copied onto results continued from it, as editable suggestions.
-- **Access and cost.** One invited user; public sign-up is off; English only. Every provider call's cost is logged in the database, with no UI and no cap. Costs record their source: reported by the provider, from a price table, or unavailable.
+- **Access and cost.** One invited user with an operator-provisioned password. Operators handle account recovery. English only. Every provider call's cost is logged in the database, with no UI and no cap. Costs record their source: reported by the provider, from a price table, or unavailable.
 
 **Stack and integration**
 - **Hosting:** Vercel, with the Workflow SDK running renders (ADR 0004), Neon via the Vercel Marketplace, and a **private Cloudflare R2** bucket with short-lived signed GET URLs. MinIO is used locally. R2 and MinIO need CORS configured so Konva canvases aren't tainted.
@@ -87,7 +87,7 @@ Decisions come from two planning interviews held on the same day. Conflicts betw
   - Seed: remove `drizzle/seed/book*`.
   - Config: the Stryker configs, the `test:mutation*` scripts, the mutation workflow matrix, `.dependency-cruiser.cjs` (change hard-coded module lists to `[^/]+`), `sheriff.config.ts` and `.semgrep.yml`.
   - Tests: about 40 shared tests and fixtures.
-  - Env: `.env.example` gets `VITE_AUTH_SIGNUP_ENABLED=false`.
+  - Access starts with public signup disabled.
 - **Migration reset:** remove the schemas, delete `drizzle/migrations/*` and `meta/`, run `pnpm db:generate --name baseline` (auth and email tables only), change `scripts/check-migration-edits.mjs` `SCHEMA_PATHS` to a glob, then recreate local databases with `pnpm dk:clear && pnpm dk:init && pnpm db:migrate`.
 - **Docs:**
   - Rewrite `GLOSSARY.md`.
@@ -145,11 +145,11 @@ Decisions come from two planning interviews held on the same day. Conflicts betw
 - **Checker:** a browser-side hook using canvas and pixelmatch.
 
 **P8: Hardening and deploy**
-- **E2E tests** (designs, editor render, compare, retry) with `PROVIDER_MODE=fake`, poll mode and the local workflow world.
-- **Visual baselines** for the designs list, editor and compare screens.
-- **Vercel setup:** Neon pooled URL, private R2 with CORS, protection-bypass secret, and the seeded invited user.
+- **Local hardening:** password-only invited access, provider key validation, detection run polling, render ordering and timestamps, and Krea reference limits.
+- **Verification scope:** E2E and visual baseline work is deferred for this pass.
+- **Vercel setup:** Neon pooled URL, private R2 with CORS, shared auth storage, and an operator-provisioned user.
 - **Docs:** update `README.md` and `AGENTS.md`.
-- **Smoke test:** a manual `scripts/smoke-model.ts`, kept out of CI, to check fal mask polarity and the FLUX grid syntax against the real models.
+- **Smoke test:** a manual `scripts/smoke-model.ts`, kept out of CI, to check fal mask polarity, Krea region coordinates, and FLUX grid syntax against the real models.
 
 ## Verification
 - **Per phase:** run `pnpm format:changed && pnpm check && pnpm test:affected`. Run `pnpm check:migrations` whenever schema files change.

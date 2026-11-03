@@ -63,9 +63,12 @@ export const workflowRenderScheduler: RenderScheduler = {
 
 const build = (overrides?: RenderingOverrides) => {
   const kernel = overrides?.kernel ?? getKernel();
+  const enabledModelIds =
+    overrides?.enabledModelIds ?? getAiProvidersConfig().enabledModelIds;
   return createRenderingUseCases({
     renderRepository:
-      overrides?.renderRepository ?? createRenderRepository({ db: kernel.db }),
+      overrides?.renderRepository ??
+      createRenderRepository({ db: kernel.db, modelOrder: enabledModelIds }),
     renderInputs: overrides?.renderInputs ?? createRenderInputs(kernel),
     maskCompositor: createPngMaskCompositor({
       objectStorage: kernel.objectStorage,
@@ -73,8 +76,7 @@ const build = (overrides?: RenderingOverrides) => {
     renderScheduler: overrides?.renderScheduler ?? workflowRenderScheduler,
     permissionChecker: kernel.permissionChecker,
     objectStorage: kernel.objectStorage,
-    enabledModelIds:
-      overrides?.enabledModelIds ?? getAiProvidersConfig().enabledModelIds,
+    enabledModelIds,
     idGenerator: kernel.idGenerator,
     clock: kernel.clock,
     logger: kernel.logger,

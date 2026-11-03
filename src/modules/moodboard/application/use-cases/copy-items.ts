@@ -6,14 +6,18 @@ import {
   toItemVersionId,
 } from '@/modules/kernel/domain/ids';
 
-import type { MoodboardPipelineDeps, MoodboardResult } from './types';
+import { scheduleCutoutAttempt } from './schedule-cutout-attempt';
+import type { MoodboardResult, MoodboardUseCaseDeps } from './types';
 
 /**
  * Copy a design's items into another design (revised architect image).
  * Copies reuse the same immutable image objects; returns old → new item ids.
  */
 export async function copyItems(
-  deps: Pick<MoodboardPipelineDeps, 'itemRepository' | 'idGenerator'>,
+  deps: Pick<
+    MoodboardUseCaseDeps,
+    'itemRepository' | 'idGenerator' | 'backgroundRemovalScheduler' | 'logger'
+  >,
   input: { fromDesignId: DesignId; toDesignId: DesignId }
 ): Promise<
   MoodboardResult<{ type: 'items_copied'; itemIds: Record<string, string> }>
@@ -31,6 +35,12 @@ export async function copyItems(
     if (id.isError()) return Result.Error(id.getError());
     if (versionId.isError()) return Result.Error(versionId.getError());
     const version = item.currentVersion;
+    let attemptId: string | undefined;
+    if (version.cutoutStatus === 'pending') {
+      const attempt = deps.idGenerator.createId();
+      if (attempt.isError()) return Result.Error(attempt.getError());
+      attemptId = attempt.get();
+    }
     // oxlint-disable-next-line no-await-in-loop -- a mood board is small; keeps order.
     const created = await deps.itemRepository.create({
       id: id.get(),
@@ -43,13 +53,23 @@ export async function copyItems(
       version: {
         id: versionId.get(),
         photo: version.photo,
-        cutoutKey: version.cutoutKey,
-        maskKey: version.maskKey,
+        cutoutKey: attemptId ? null : version.cutoutKey,
+        maskKey: attemptId ? null : version.maskKey,
         cutoutStatus: version.cutoutStatus,
+        ...(attemptId ? { cutoutAttemptId: attemptId } : {}),
       },
     });
     if (created.isError()) return Result.Error(created.getError());
     itemIds[item.id] = id.get();
+    if (attemptId) {
+      // oxlint-disable-next-line no-await-in-loop -- the copy must be saved before starting its workflow.
+      const started = await scheduleCutoutAttempt(
+        deps,
+        { itemVersionId: versionId.get(), attemptId },
+        'keep_copy'
+      );
+      if (started.isError()) return Result.Error(started.getError());
+    }
   }
   return Result.Ok({ type: 'items_copied', itemIds });
 }

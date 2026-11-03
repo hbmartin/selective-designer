@@ -56,7 +56,7 @@ describe('ItemRepositoryDrizzle', () => {
     await database?.close();
   });
 
-  const create = (id: string, category: string) =>
+  const create = (id: string, category: string, cutoutAttemptId?: string) =>
     repository.create({
       id: unwrapParseResult(toItemId(id)),
       designId,
@@ -76,6 +76,7 @@ describe('ItemRepositoryDrizzle', () => {
         cutoutKey: null,
         maskKey: null,
         cutoutStatus: 'pending',
+        ...(cutoutAttemptId === undefined ? {} : { cutoutAttemptId }),
       },
     });
 
@@ -115,11 +116,13 @@ describe('ItemRepositoryDrizzle', () => {
       version: { number: 1, cutoutStatus: 'pending' },
     });
 
-    await repository.setCutoutResult({
+    const legacy = await repository.finishCutoutAttempt({
       versionId: versionId('i2-v1'),
+      attemptId: null,
       cutoutStatus: 'ready',
       cutoutKey: key('item-cutouts/i2-v1.png'),
     });
+    expect(okValue(legacy).type).toBe('cutout_result_saved');
     await repository.remove({
       itemId: unwrapParseResult(toItemId('i1')),
       removedAt: new Date('2026-11-02T00:00:00.000Z'),
@@ -132,5 +135,53 @@ describe('ItemRepositoryDrizzle', () => {
     expect(okValue(await repository.categoryUsage(ownerId)).usage).toEqual([
       { category: 'Plants', count: 1 },
     ]);
+  });
+
+  it('claims one retry and only lets the current attempt publish', async () => {
+    await create('retry', 'Lighting', 'first');
+    const id = versionId('retry-v1');
+    const fail = (attemptId: string | null) =>
+      repository.finishCutoutAttempt({
+        versionId: id,
+        attemptId,
+        cutoutStatus: 'failed',
+        cutoutKey: null,
+      });
+    expect(okValue(await fail(null)).type).toBe('cutout_attempt_skipped');
+    expect(okValue(await fail('first')).type).toBe('cutout_result_saved');
+
+    const attempts = ['retry-a', 'retry-b'];
+    const claims = await Promise.all(
+      attempts.map((attemptId) =>
+        repository.claimCutoutAttempt({ versionId: id, attemptId })
+      )
+    );
+    expect(claims.map((claim) => okValue(claim).type).sort()).toEqual([
+      'cutout_attempt_claimed',
+      'cutout_attempt_skipped',
+    ]);
+    const winner =
+      attempts[
+        claims.findIndex(
+          (claim) => okValue(claim).type === 'cutout_attempt_claimed'
+        )
+      ]!;
+    const finish = (attemptId: string) =>
+      repository.finishCutoutAttempt({
+        versionId: id,
+        attemptId,
+        cutoutStatus: 'ready',
+        cutoutKey: key(`item-cutouts/retry-v1/${attemptId}.png`),
+      });
+    expect(okValue(await finish('first')).type).toBe('cutout_attempt_skipped');
+    expect(okValue(await finish(winner)).type).toBe('cutout_result_saved');
+    expect(okValue(await fail(winner)).type).toBe('cutout_attempt_skipped');
+    expect(okValue(await repository.findVersion(id))).toMatchObject({
+      cutoutAttemptId: winner,
+      version: {
+        cutoutStatus: 'ready',
+        cutoutKey: `item-cutouts/retry-v1/${winner}.png`,
+      },
+    });
   });
 });

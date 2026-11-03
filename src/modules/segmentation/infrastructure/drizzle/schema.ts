@@ -5,6 +5,7 @@ import {
   pgTable,
   real,
   text,
+  timestamp,
 } from 'drizzle-orm/pg-core';
 
 import { design, image } from '@/modules/design/infrastructure/drizzle/schema';
@@ -38,3 +39,11 @@ export const region = pgTable(
 );
 
 export type RegionRow = typeof region.$inferSelect;
+
+/** A row exists while automatic detection for the image is in progress. */
+export const activeDetection = pgTable('active_detection', {
+  imageId: text('imageId')
+    .primaryKey()
+    .references(() => image.id, { onDelete: 'cascade' }),
+  expiresAt: timestamp('expiresAt', { precision: 3, mode: 'date' }).notNull(),
+});

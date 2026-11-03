@@ -12,6 +12,7 @@ import { objectKeyMatchesPurpose } from '@/modules/kernel/domain/upload-policy';
 
 import { checkMoodboardAccess } from './access';
 import { type ItemView, toItemView } from './item-view';
+import { scheduleCutoutAttempt } from './schedule-cutout-attempt';
 import type {
   MoodboardDesignNotFound,
   MoodboardForbidden,
@@ -133,6 +134,12 @@ export async function createItem(
   if (versionId.isError()) return Result.Error(versionId.getError());
 
   const cutoutStatus = initialCutoutStatus(input.kind);
+  let attemptId: string | undefined;
+  if (cutoutStatus === 'pending') {
+    const attempt = deps.idGenerator.createId();
+    if (attempt.isError()) return Result.Error(attempt.getError());
+    attemptId = attempt.get();
+  }
   const version: NewItemVersion = {
     id: versionId.get(),
     photo: {
@@ -144,6 +151,7 @@ export async function createItem(
     cutoutKey: null,
     maskKey: null,
     cutoutStatus,
+    ...(attemptId ? { cutoutAttemptId: attemptId } : {}),
   };
   const created = await deps.itemRepository.create({
     id: itemId.get(),
@@ -161,10 +169,12 @@ export async function createItem(
     details: { kind: input.kind },
   });
 
-  if (cutoutStatus === 'pending') {
-    const scheduled = await deps.backgroundRemovalScheduler.schedule({
-      itemVersionId: version.id,
-    });
+  if (attemptId) {
+    const scheduled = await scheduleCutoutAttempt(
+      deps,
+      { itemVersionId: version.id, attemptId },
+      'report_error'
+    );
     if (scheduled.isError()) return Result.Error(scheduled.getError());
   }
 
@@ -330,15 +340,22 @@ export async function retryCutout(
   if (version.cutoutStatus !== 'failed') {
     return Result.Ok({ type: 'cutout_not_retryable' });
   }
-  const reset = await deps.itemRepository.setCutoutResult({
+  const attempt = deps.idGenerator.createId();
+  if (attempt.isError()) return Result.Error(attempt.getError());
+  const attemptId = attempt.get();
+  const claimed = await deps.itemRepository.claimCutoutAttempt({
     versionId: version.id,
-    cutoutStatus: 'pending',
-    cutoutKey: null,
+    attemptId,
   });
-  if (reset.isError()) return Result.Error(reset.getError());
-  const scheduled = await deps.backgroundRemovalScheduler.schedule({
-    itemVersionId: version.id,
-  });
+  if (claimed.isError()) return Result.Error(claimed.getError());
+  if (claimed.get().type === 'cutout_attempt_skipped') {
+    return Result.Ok({ type: 'cutout_not_retryable' });
+  }
+  const scheduled = await scheduleCutoutAttempt(
+    deps,
+    { itemVersionId: version.id, attemptId },
+    'report_error'
+  );
   if (scheduled.isError()) return Result.Error(scheduled.getError());
   return toUpdated(deps, await deps.itemRepository.findById(input.itemId));
 }

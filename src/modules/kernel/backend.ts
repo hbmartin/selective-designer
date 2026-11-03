@@ -9,6 +9,7 @@ export {
 export { getEmailConfig } from './infrastructure/config/email';
 export {
   getSeedAccountEmails,
+  getSeedAccountPassword,
   isProdRuntimeEnvironment,
   isProductionSeedAllowed,
 } from './infrastructure/config/env-schema';

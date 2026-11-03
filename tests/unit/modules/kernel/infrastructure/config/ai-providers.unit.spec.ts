@@ -39,6 +39,22 @@ describe('AI providers config', () => {
     ).toThrow(/PROVIDER_MODE/);
   });
 
+  it('allows compilation placeholders in GitHub Actions and rejects them on Vercel', () => {
+    const input = {
+      NODE_ENV: 'production',
+      GITHUB_ACTIONS: 'true',
+      FAL_KEY: 'ci-placeholder',
+      BFL_API_KEY: 'ci-placeholder',
+    };
+    expect(getAiProvidersConfig(input).mode).toBe('live');
+    expect(() =>
+      getAiProvidersConfig({ ...input, VERCEL_ENV: 'production' })
+    ).toThrow(/FAL_KEY, BFL_API_KEY/);
+    expect(() =>
+      getAiProvidersConfig({ ...input, GITHUB_ACTIONS: undefined })
+    ).toThrow(/FAL_KEY, BFL_API_KEY/);
+  });
+
   it('requires a public https base URL for webhook callbacks', () => {
     expect(() =>
       getAiProvidersConfig({

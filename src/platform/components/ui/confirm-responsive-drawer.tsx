@@ -20,12 +20,14 @@ import {
   ResponsiveDrawerTitle,
 } from '@/platform/components/ui/responsive-drawer';
 
+type ConfirmActionResult = void | 'keep_open';
+
 export const ConfirmResponsiveDrawer = (props: {
   enabled?: boolean;
   children: ReactElement<{ onClick: () => void }>;
   title?: ReactNode;
   description?: ReactNode;
-  confirmAction: () => unknown | Promise<unknown>;
+  confirmAction: () => ConfirmActionResult | Promise<ConfirmActionResult>;
   confirmText?: ReactNode;
   confirmVariant?: ComponentProps<typeof Button>['variant'];
   cancelText?: ReactNode;
@@ -38,8 +40,8 @@ export const ConfirmResponsiveDrawer = (props: {
     if (isPending) return;
 
     startTransition(async () => {
-      await props.confirmAction();
-      if (closeAfterFulfillment) close();
+      const result = await props.confirmAction();
+      if (closeAfterFulfillment && result !== 'keep_open') close();
     });
   };
 

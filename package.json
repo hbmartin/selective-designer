@@ -130,8 +130,7 @@
     "e2e": "pnpm test:e2e",
     "e2e:ui": "pnpm test:e2e --ui",
     "e2e:db:init": "run-s db:migrate db:seed",
-    "e2e:maildev": "docker compose up -d --wait maildev",
-    "e2e:dev": "dotenv -e .env -e .env.example -- cross-env VITE_ENV_NAME=tests AUTH_OTP_SEND_MAX=1000 EMAIL_SERVER=smtp://127.0.0.1:1025 EMAIL_DELIVERY_DISABLED=false MAILDEV_URL=http://127.0.0.1:1080 run-s e2e:maildev e2e:db:init dev",
+    "e2e:dev": "dotenv -e .env -e .env.example -- cross-env VITE_ENV_NAME=tests EMAIL_DELIVERY_DISABLED=true run-s e2e:db:init dev",
     "e2e:webserver": "pglite-server --db=memory:// --port=54329 --max-connections=16 --run \"pnpm e2e:dev\" --include-database-url --shutdown-timeout=10000",
     "dk:init": "docker compose --profile init up -d",
     "dk:start": "docker compose start",
@@ -142,6 +141,8 @@
     "db:generate": "dotenv -- drizzle-kit generate",
     "db:migrate": "dotenv -- node ./run-jiti ./src/modules/kernel/infrastructure/db/migrate-cli.ts",
     "db:ui": "dotenv -- drizzle-kit studio",
+    "auth:password": "dotenv -- node ./run-jiti ./scripts/auth-password.ts",
+    "smoke:model": "dotenv -- tsx scripts/smoke-model.ts",
     "db:seed": "dotenv -- cross-env node ./run-jiti ./drizzle/seed/index.ts"
   },
   "dependencies": {
@@ -200,7 +201,6 @@
     "react-compare-slider": "4.0.0",
     "react-day-picker": "10.0.1",
     "react-dom": "19.2.7",
-    "react-email": "^6.6.5",
     "react-error-boundary": "6.1.2",
     "react-i18next": "17.0.8",
     "react-konva": "19.2.7",
