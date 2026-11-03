@@ -65,7 +65,7 @@ const runFreshMutation = createServerFunctionInvoker({
 });
 
 export const userGetAll = createServerFn({ method: 'GET' })
-  .inputValidator(zGetAllInput())
+  .validator(zGetAllInput())
   .handler(async ({ data }) =>
     runProtected.withOperation('user.getAll')(
       data,
@@ -74,7 +74,7 @@ export const userGetAll = createServerFn({ method: 'GET' })
   );
 
 export const userGetById = createServerFn({ method: 'GET' })
-  .inputValidator(zGetByIdInput())
+  .validator(zGetByIdInput())
   .handler(async ({ data }) =>
     runProtected.withOperation('user.getById')(
       data,
@@ -83,7 +83,7 @@ export const userGetById = createServerFn({ method: 'GET' })
   );
 
 export const userUpdateById = createServerFn({ method: 'POST' })
-  .inputValidator(zUpdateByIdInput())
+  .validator(zUpdateByIdInput())
   .handler(async ({ data }) =>
     runFreshMutation.withOperation('user.updateById')(
       data,
@@ -96,7 +96,7 @@ export const userUpdateById = createServerFn({ method: 'POST' })
 // other destructive admin mutations — otherwise a stale/hijacked admin session
 // could provision a durable backdoor account. (CWE-287 / CWE-269.)
 export const userCreate = createServerFn({ method: 'POST' })
-  .inputValidator(zCreateInput())
+  .validator(zCreateInput())
   .handler(async ({ data }) =>
     runFreshMutation.withOperation('user.create')(
       data,
@@ -105,7 +105,7 @@ export const userCreate = createServerFn({ method: 'POST' })
   );
 
 export const userDeleteById = createServerFn({ method: 'POST' })
-  .inputValidator(zDeleteByIdInput())
+  .validator(zDeleteByIdInput())
   .handler(async ({ data }) =>
     runFreshMutation.withOperation('user.deleteById')(
       data,
@@ -114,7 +114,7 @@ export const userDeleteById = createServerFn({ method: 'POST' })
   );
 
 export const userGetUserSessions = createServerFn({ method: 'GET' })
-  .inputValidator(zGetUserSessionsInput())
+  .validator(zGetUserSessionsInput())
   .handler(async ({ data }) =>
     runProtected.withOperation('user.getUserSessions')(
       data,
@@ -123,7 +123,7 @@ export const userGetUserSessions = createServerFn({ method: 'GET' })
   );
 
 export const userRevokeUserSessions = createServerFn({ method: 'POST' })
-  .inputValidator(zRevokeUserSessionsInput())
+  .validator(zRevokeUserSessionsInput())
   .handler(async ({ data }) =>
     runFreshMutation.withOperation('user.revokeUserSessions')(
       data,
@@ -132,7 +132,7 @@ export const userRevokeUserSessions = createServerFn({ method: 'POST' })
   );
 
 export const userRevokeUserSession = createServerFn({ method: 'POST' })
-  .inputValidator(zRevokeUserSessionInput())
+  .validator(zRevokeUserSessionInput())
   .handler(async ({ data }) =>
     runFreshMutation.withOperation('user.revokeUserSession')(
       data,

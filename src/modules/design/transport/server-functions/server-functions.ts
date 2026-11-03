@@ -60,7 +60,7 @@ const runMutation = createServerFunctionInvoker({
 });
 
 export const designGetAll = createServerFn({ method: 'GET' })
-  .inputValidator(zDesignListInput())
+  .validator(zDesignListInput())
   .handler(async ({ data }) =>
     runProtected.withOperation('design.getAll')(
       data,
@@ -69,7 +69,7 @@ export const designGetAll = createServerFn({ method: 'GET' })
   );
 
 export const designGetById = createServerFn({ method: 'GET' })
-  .inputValidator(zDesignByIdInput())
+  .validator(zDesignByIdInput())
   .handler(async ({ data }) =>
     runProtected.withOperation('design.getById')(
       data,
@@ -78,7 +78,7 @@ export const designGetById = createServerFn({ method: 'GET' })
   );
 
 export const designCreate = createServerFn({ method: 'POST' })
-  .inputValidator(zDesignCreateInput())
+  .validator(zDesignCreateInput())
   .handler(async ({ data }) =>
     runMutation.withOperation('design.create')(
       data,
@@ -87,7 +87,7 @@ export const designCreate = createServerFn({ method: 'POST' })
   );
 
 export const designRename = createServerFn({ method: 'POST' })
-  .inputValidator(zDesignRenameInput())
+  .validator(zDesignRenameInput())
   .handler(async ({ data }) =>
     runMutation.withOperation('design.rename')(
       data,
@@ -96,7 +96,7 @@ export const designRename = createServerFn({ method: 'POST' })
   );
 
 export const designArchive = createServerFn({ method: 'POST' })
-  .inputValidator(zDesignByIdInput())
+  .validator(zDesignByIdInput())
   .handler(async ({ data }) =>
     runMutation.withOperation('design.archive')(
       data,
@@ -105,7 +105,7 @@ export const designArchive = createServerFn({ method: 'POST' })
   );
 
 export const designUnarchive = createServerFn({ method: 'POST' })
-  .inputValidator(zDesignByIdInput())
+  .validator(zDesignByIdInput())
   .handler(async ({ data }) =>
     runMutation.withOperation('design.unarchive')(
       data,
@@ -114,7 +114,7 @@ export const designUnarchive = createServerFn({ method: 'POST' })
   );
 
 export const designListSourcePhotos = createServerFn({ method: 'GET' })
-  .inputValidator(zDesignIdInput())
+  .validator(zDesignIdInput())
   .handler(async ({ data }) =>
     runProtected.withOperation('design.listSourcePhotos')(
       data,
@@ -123,7 +123,7 @@ export const designListSourcePhotos = createServerFn({ method: 'GET' })
   );
 
 export const designAddSourcePhoto = createServerFn({ method: 'POST' })
-  .inputValidator(zSourcePhotoAddInput())
+  .validator(zSourcePhotoAddInput())
   .handler(async ({ data }) =>
     runMutation.withOperation('design.addSourcePhoto')(
       data,

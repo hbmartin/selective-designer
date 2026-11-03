@@ -55,7 +55,7 @@ const runMutation = createServerFunctionInvoker({
 });
 
 export const moodboardGet = createServerFn({ method: 'GET' })
-  .inputValidator(zMoodboardInput())
+  .validator(zMoodboardInput())
   .handler(async ({ data }) =>
     runProtected.withOperation('moodboard.get')(
       data,
@@ -72,7 +72,7 @@ export const moodboardCategories = createServerFn({ method: 'GET' }).handler(
 );
 
 export const moodboardItemCreate = createServerFn({ method: 'POST' })
-  .inputValidator(zItemCreateInput())
+  .validator(zItemCreateInput())
   .handler(async ({ data }) =>
     runMutation.withOperation('moodboard.itemCreate')(
       data,
@@ -81,7 +81,7 @@ export const moodboardItemCreate = createServerFn({ method: 'POST' })
   );
 
 export const moodboardItemUpdate = createServerFn({ method: 'POST' })
-  .inputValidator(zItemUpdateInput())
+  .validator(zItemUpdateInput())
   .handler(async ({ data }) =>
     runMutation.withOperation('moodboard.itemUpdate')(
       data,
@@ -90,7 +90,7 @@ export const moodboardItemUpdate = createServerFn({ method: 'POST' })
   );
 
 export const moodboardItemRemove = createServerFn({ method: 'POST' })
-  .inputValidator(zItemIdInput())
+  .validator(zItemIdInput())
   .handler(async ({ data }) =>
     runMutation.withOperation('moodboard.itemRemove')(
       data,
@@ -99,7 +99,7 @@ export const moodboardItemRemove = createServerFn({ method: 'POST' })
   );
 
 export const moodboardCutoutCorrect = createServerFn({ method: 'POST' })
-  .inputValidator(zCutoutCorrectionInput())
+  .validator(zCutoutCorrectionInput())
   .handler(async ({ data }) =>
     runMutation.withOperation('moodboard.cutoutCorrect')(
       data,
@@ -108,7 +108,7 @@ export const moodboardCutoutCorrect = createServerFn({ method: 'POST' })
   );
 
 export const moodboardCutoutRetry = createServerFn({ method: 'POST' })
-  .inputValidator(zItemIdInput())
+  .validator(zItemIdInput())
   .handler(async ({ data }) =>
     runMutation.withOperation('moodboard.cutoutRetry')(
       data,

@@ -46,7 +46,10 @@ test.describe('Protected route navigation as manager', () => {
       { waitUntil: 'commit' }
     );
 
-    const userLink = page.locator('a[href^="/manager/users/"]').first();
+    // User rows, not the "New user" action.
+    const userLink = page
+      .locator('a[href^="/manager/users/"]:not([href="/manager/users/new"])')
+      .first();
     await expect(userLink).toBeVisible();
     const href = await userLink.getAttribute('href');
     expect(href).toMatch(/^\/manager\/users\/[^/]+\/?$/);

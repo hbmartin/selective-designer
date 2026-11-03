@@ -9,55 +9,40 @@
 // Additionally, you should also exclude this file from your linter and/or formatter to prevent it from being checked or modified.
 
 import { Route as rootRouteImport } from './routes/__root'
-import { Route as LogoutRouteImport } from './routes/logout'
-import { Route as OnboardingRouteRouteImport } from './routes/onboarding/route'
-import { Route as ManagerRouteRouteImport } from './routes/manager/route'
-import { Route as LoginRouteRouteImport } from './routes/login/route'
-import { Route as AppRouteRouteImport } from './routes/app/route'
 import { Route as IndexRouteImport } from './routes/index'
-import { Route as OnboardingIndexRouteImport } from './routes/onboarding/index'
-import { Route as ManagerIndexRouteImport } from './routes/manager/index'
-import { Route as LoginIndexRouteImport } from './routes/login/index'
-import { Route as AppIndexRouteImport } from './routes/app/index'
+import { Route as AppRouteRouteImport } from './routes/app/route'
+import { Route as LoginRouteRouteImport } from './routes/login/route'
+import { Route as LogoutRouteImport } from './routes/logout'
+import { Route as ManagerRouteRouteImport } from './routes/manager/route'
+import { Route as OnboardingRouteRouteImport } from './routes/onboarding/route'
 import { Route as ApiUploadRouteImport } from './routes/api/upload'
-import { Route as ManagerUsersIndexRouteImport } from './routes/manager/users/index'
-import { Route as ManagerDashboardIndexRouteImport } from './routes/manager/dashboard.index'
-import { Route as ManagerAccountIndexRouteImport } from './routes/manager/account.index'
-import { Route as LoginVerifyIndexRouteImport } from './routes/login/verify.index'
-import { Route as LoginErrorIndexRouteImport } from './routes/login/error.index'
-import { Route as AppDesignsIndexRouteImport } from './routes/app/designs/index'
-import { Route as AppAccountIndexRouteImport } from './routes/app/account.index'
-import { Route as ApiWebhooksResendRouteImport } from './routes/api/webhooks.resend'
-import { Route as ApiTelemetrySentryTunnelRouteImport } from './routes/api/telemetry.sentry-tunnel'
-import { Route as ApiTelemetryLogsRouteImport } from './routes/api/telemetry.logs'
+import { Route as AppIndexRouteImport } from './routes/app/index'
+import { Route as LoginIndexRouteImport } from './routes/login/index'
+import { Route as ManagerIndexRouteImport } from './routes/manager/index'
+import { Route as OnboardingIndexRouteImport } from './routes/onboarding/index'
 import { Route as ApiAuthSplatRouteImport } from './routes/api/auth.$'
-import { Route as ManagerUsersNewIndexRouteImport } from './routes/manager/users/new.index'
-import { Route as ManagerUsersIdIndexRouteImport } from './routes/manager/users/$id.index'
-import { Route as AppDesignsDesignIdIndexRouteImport } from './routes/app/designs/$designId/index'
-import { Route as ApiImagesImageIdDownloadRouteImport } from './routes/api/images.$imageId.download'
+import { Route as ApiTelemetryLogsRouteImport } from './routes/api/telemetry.logs'
+import { Route as ApiTelemetrySentryTunnelRouteImport } from './routes/api/telemetry.sentry-tunnel'
+import { Route as ApiWebhooksResendRouteImport } from './routes/api/webhooks.resend'
+import { Route as AppAccountIndexRouteImport } from './routes/app/account.index'
+import { Route as AppDesignsIndexRouteImport } from './routes/app/designs/index'
+import { Route as LoginErrorIndexRouteImport } from './routes/login/error.index'
+import { Route as LoginVerifyIndexRouteImport } from './routes/login/verify.index'
+import { Route as ManagerAccountIndexRouteImport } from './routes/manager/account.index'
+import { Route as ManagerDashboardIndexRouteImport } from './routes/manager/dashboard.index'
+import { Route as ManagerUsersIndexRouteImport } from './routes/manager/users/index'
 import { Route as ApiDevEmailTemplateRouteImport } from './routes/api/dev.email.$template'
-import { Route as ManagerUsersIdUpdateIndexRouteImport } from './routes/manager/users/$id.update.index'
-import { Route as ApiTelemetryOtelV1TracesRouteImport } from './routes/api/telemetry.otel.v1.traces'
+import { Route as ApiImagesImageIdDownloadRouteImport } from './routes/api/images.$imageId.download'
+import { Route as AppDesignsDesignIdIndexRouteImport } from './routes/app/designs/$designId/index'
+import { Route as ManagerUsersIdIndexRouteImport } from './routes/manager/users/$id.index'
+import { Route as ManagerUsersNewIndexRouteImport } from './routes/manager/users/new.index'
 import { Route as ApiTelemetryOtelV1MetricsRouteImport } from './routes/api/telemetry.otel.v1.metrics'
+import { Route as ApiTelemetryOtelV1TracesRouteImport } from './routes/api/telemetry.otel.v1.traces'
+import { Route as ManagerUsersIdUpdateIndexRouteImport } from './routes/manager/users/$id.update.index'
 
-const LogoutRoute = LogoutRouteImport.update({
-  id: '/logout',
-  path: '/logout',
-  getParentRoute: () => rootRouteImport,
-} as any)
-const OnboardingRouteRoute = OnboardingRouteRouteImport.update({
-  id: '/onboarding',
-  path: '/onboarding',
-  getParentRoute: () => rootRouteImport,
-} as any)
-const ManagerRouteRoute = ManagerRouteRouteImport.update({
-  id: '/manager',
-  path: '/manager',
-  getParentRoute: () => rootRouteImport,
-} as any)
-const LoginRouteRoute = LoginRouteRouteImport.update({
-  id: '/login',
-  path: '/login',
+const IndexRoute = IndexRouteImport.update({
+  id: '/',
+  path: '/',
   getParentRoute: () => rootRouteImport,
 } as any)
 const AppRouteRoute = AppRouteRouteImport.update({
@@ -65,74 +50,59 @@ const AppRouteRoute = AppRouteRouteImport.update({
   path: '/app',
   getParentRoute: () => rootRouteImport,
 } as any)
-const IndexRoute = IndexRouteImport.update({
-  id: '/',
-  path: '/',
+const LoginRouteRoute = LoginRouteRouteImport.update({
+  id: '/login',
+  path: '/login',
   getParentRoute: () => rootRouteImport,
 } as any)
-const OnboardingIndexRoute = OnboardingIndexRouteImport.update({
-  id: '/',
-  path: '/',
-  getParentRoute: () => OnboardingRouteRoute,
+const LogoutRoute = LogoutRouteImport.update({
+  id: '/logout',
+  path: '/logout',
+  getParentRoute: () => rootRouteImport,
 } as any)
-const ManagerIndexRoute = ManagerIndexRouteImport.update({
-  id: '/',
-  path: '/',
-  getParentRoute: () => ManagerRouteRoute,
+const ManagerRouteRoute = ManagerRouteRouteImport.update({
+  id: '/manager',
+  path: '/manager',
+  getParentRoute: () => rootRouteImport,
 } as any)
-const LoginIndexRoute = LoginIndexRouteImport.update({
-  id: '/',
-  path: '/',
-  getParentRoute: () => LoginRouteRoute,
-} as any)
-const AppIndexRoute = AppIndexRouteImport.update({
-  id: '/',
-  path: '/',
-  getParentRoute: () => AppRouteRoute,
+const OnboardingRouteRoute = OnboardingRouteRouteImport.update({
+  id: '/onboarding',
+  path: '/onboarding',
+  getParentRoute: () => rootRouteImport,
 } as any)
 const ApiUploadRoute = ApiUploadRouteImport.update({
   id: '/api/upload',
   path: '/api/upload',
   getParentRoute: () => rootRouteImport,
 } as any)
-const ManagerUsersIndexRoute = ManagerUsersIndexRouteImport.update({
-  id: '/users/',
-  path: '/users/',
-  getParentRoute: () => ManagerRouteRoute,
-} as any)
-const ManagerDashboardIndexRoute = ManagerDashboardIndexRouteImport.update({
-  id: '/dashboard/',
-  path: '/dashboard/',
-  getParentRoute: () => ManagerRouteRoute,
-} as any)
-const ManagerAccountIndexRoute = ManagerAccountIndexRouteImport.update({
-  id: '/account/',
-  path: '/account/',
-  getParentRoute: () => ManagerRouteRoute,
-} as any)
-const LoginVerifyIndexRoute = LoginVerifyIndexRouteImport.update({
-  id: '/verify/',
-  path: '/verify/',
-  getParentRoute: () => LoginRouteRoute,
-} as any)
-const LoginErrorIndexRoute = LoginErrorIndexRouteImport.update({
-  id: '/error/',
-  path: '/error/',
-  getParentRoute: () => LoginRouteRoute,
-} as any)
-const AppDesignsIndexRoute = AppDesignsIndexRouteImport.update({
-  id: '/designs/',
-  path: '/designs/',
+const AppIndexRoute = AppIndexRouteImport.update({
+  id: '/',
+  path: '/',
   getParentRoute: () => AppRouteRoute,
 } as any)
-const AppAccountIndexRoute = AppAccountIndexRouteImport.update({
-  id: '/account/',
-  path: '/account/',
-  getParentRoute: () => AppRouteRoute,
+const LoginIndexRoute = LoginIndexRouteImport.update({
+  id: '/',
+  path: '/',
+  getParentRoute: () => LoginRouteRoute,
 } as any)
-const ApiWebhooksResendRoute = ApiWebhooksResendRouteImport.update({
-  id: '/api/webhooks/resend',
-  path: '/api/webhooks/resend',
+const ManagerIndexRoute = ManagerIndexRouteImport.update({
+  id: '/',
+  path: '/',
+  getParentRoute: () => ManagerRouteRoute,
+} as any)
+const OnboardingIndexRoute = OnboardingIndexRouteImport.update({
+  id: '/',
+  path: '/',
+  getParentRoute: () => OnboardingRouteRoute,
+} as any)
+const ApiAuthSplatRoute = ApiAuthSplatRouteImport.update({
+  id: '/api/auth/$',
+  path: '/api/auth/$',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ApiTelemetryLogsRoute = ApiTelemetryLogsRouteImport.update({
+  id: '/api/telemetry/logs',
+  path: '/api/telemetry/logs',
   getParentRoute: () => rootRouteImport,
 } as any)
 const ApiTelemetrySentryTunnelRoute =
@@ -141,30 +111,50 @@ const ApiTelemetrySentryTunnelRoute =
     path: '/api/telemetry/sentry-tunnel',
     getParentRoute: () => rootRouteImport,
   } as any)
-const ApiTelemetryLogsRoute = ApiTelemetryLogsRouteImport.update({
-  id: '/api/telemetry/logs',
-  path: '/api/telemetry/logs',
+const ApiWebhooksResendRoute = ApiWebhooksResendRouteImport.update({
+  id: '/api/webhooks/resend',
+  path: '/api/webhooks/resend',
   getParentRoute: () => rootRouteImport,
 } as any)
-const ApiAuthSplatRoute = ApiAuthSplatRouteImport.update({
-  id: '/api/auth/$',
-  path: '/api/auth/$',
-  getParentRoute: () => rootRouteImport,
-} as any)
-const ManagerUsersNewIndexRoute = ManagerUsersNewIndexRouteImport.update({
-  id: '/users/new/',
-  path: '/users/new/',
-  getParentRoute: () => ManagerRouteRoute,
-} as any)
-const ManagerUsersIdIndexRoute = ManagerUsersIdIndexRouteImport.update({
-  id: '/users/$id/',
-  path: '/users/$id/',
-  getParentRoute: () => ManagerRouteRoute,
-} as any)
-const AppDesignsDesignIdIndexRoute = AppDesignsDesignIdIndexRouteImport.update({
-  id: '/designs/$designId/',
-  path: '/designs/$designId/',
+const AppAccountIndexRoute = AppAccountIndexRouteImport.update({
+  id: '/account/',
+  path: '/account/',
   getParentRoute: () => AppRouteRoute,
+} as any)
+const AppDesignsIndexRoute = AppDesignsIndexRouteImport.update({
+  id: '/designs/',
+  path: '/designs/',
+  getParentRoute: () => AppRouteRoute,
+} as any)
+const LoginErrorIndexRoute = LoginErrorIndexRouteImport.update({
+  id: '/error/',
+  path: '/error/',
+  getParentRoute: () => LoginRouteRoute,
+} as any)
+const LoginVerifyIndexRoute = LoginVerifyIndexRouteImport.update({
+  id: '/verify/',
+  path: '/verify/',
+  getParentRoute: () => LoginRouteRoute,
+} as any)
+const ManagerAccountIndexRoute = ManagerAccountIndexRouteImport.update({
+  id: '/account/',
+  path: '/account/',
+  getParentRoute: () => ManagerRouteRoute,
+} as any)
+const ManagerDashboardIndexRoute = ManagerDashboardIndexRouteImport.update({
+  id: '/dashboard/',
+  path: '/dashboard/',
+  getParentRoute: () => ManagerRouteRoute,
+} as any)
+const ManagerUsersIndexRoute = ManagerUsersIndexRouteImport.update({
+  id: '/users/',
+  path: '/users/',
+  getParentRoute: () => ManagerRouteRoute,
+} as any)
+const ApiDevEmailTemplateRoute = ApiDevEmailTemplateRouteImport.update({
+  id: '/api/dev/email/$template',
+  path: '/api/dev/email/$template',
+  getParentRoute: () => rootRouteImport,
 } as any)
 const ApiImagesImageIdDownloadRoute =
   ApiImagesImageIdDownloadRouteImport.update({
@@ -172,16 +162,26 @@ const ApiImagesImageIdDownloadRoute =
     path: '/api/images/$imageId/download',
     getParentRoute: () => rootRouteImport,
   } as any)
-const ApiDevEmailTemplateRoute = ApiDevEmailTemplateRouteImport.update({
-  id: '/api/dev/email/$template',
-  path: '/api/dev/email/$template',
-  getParentRoute: () => rootRouteImport,
+const AppDesignsDesignIdIndexRoute = AppDesignsDesignIdIndexRouteImport.update({
+  id: '/designs/$designId/',
+  path: '/designs/$designId/',
+  getParentRoute: () => AppRouteRoute,
 } as any)
-const ManagerUsersIdUpdateIndexRoute =
-  ManagerUsersIdUpdateIndexRouteImport.update({
-    id: '/users/$id/update/',
-    path: '/users/$id/update/',
-    getParentRoute: () => ManagerRouteRoute,
+const ManagerUsersIdIndexRoute = ManagerUsersIdIndexRouteImport.update({
+  id: '/users/$id/',
+  path: '/users/$id/',
+  getParentRoute: () => ManagerRouteRoute,
+} as any)
+const ManagerUsersNewIndexRoute = ManagerUsersNewIndexRouteImport.update({
+  id: '/users/new/',
+  path: '/users/new/',
+  getParentRoute: () => ManagerRouteRoute,
+} as any)
+const ApiTelemetryOtelV1MetricsRoute =
+  ApiTelemetryOtelV1MetricsRouteImport.update({
+    id: '/api/telemetry/otel/v1/metrics',
+    path: '/api/telemetry/otel/v1/metrics',
+    getParentRoute: () => rootRouteImport,
   } as any)
 const ApiTelemetryOtelV1TracesRoute =
   ApiTelemetryOtelV1TracesRouteImport.update({
@@ -189,11 +189,11 @@ const ApiTelemetryOtelV1TracesRoute =
     path: '/api/telemetry/otel/v1/traces',
     getParentRoute: () => rootRouteImport,
   } as any)
-const ApiTelemetryOtelV1MetricsRoute =
-  ApiTelemetryOtelV1MetricsRouteImport.update({
-    id: '/api/telemetry/otel/v1/metrics',
-    path: '/api/telemetry/otel/v1/metrics',
-    getParentRoute: () => rootRouteImport,
+const ManagerUsersIdUpdateIndexRoute =
+  ManagerUsersIdUpdateIndexRouteImport.update({
+    id: '/users/$id/update/',
+    path: '/users/$id/update/',
+    getParentRoute: () => ManagerRouteRoute,
   } as any)
 
 export interface FileRoutesByFullPath {
@@ -404,32 +404,11 @@ export interface RootRouteChildren {
 
 declare module '@tanstack/react-router' {
   interface FileRoutesByPath {
-    '/logout': {
-      id: '/logout'
-      path: '/logout'
-      fullPath: '/logout'
-      preLoaderRoute: typeof LogoutRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/onboarding': {
-      id: '/onboarding'
-      path: '/onboarding'
-      fullPath: '/onboarding'
-      preLoaderRoute: typeof OnboardingRouteRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/manager': {
-      id: '/manager'
-      path: '/manager'
-      fullPath: '/manager'
-      preLoaderRoute: typeof ManagerRouteRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/login': {
-      id: '/login'
-      path: '/login'
-      fullPath: '/login'
-      preLoaderRoute: typeof LoginRouteRouteImport
+    '/': {
+      id: '/'
+      path: '/'
+      fullPath: '/'
+      preLoaderRoute: typeof IndexRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/app': {
@@ -439,40 +418,33 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AppRouteRouteImport
       parentRoute: typeof rootRouteImport
     }
-    '/': {
-      id: '/'
-      path: '/'
-      fullPath: '/'
-      preLoaderRoute: typeof IndexRouteImport
+    '/login': {
+      id: '/login'
+      path: '/login'
+      fullPath: '/login'
+      preLoaderRoute: typeof LoginRouteRouteImport
       parentRoute: typeof rootRouteImport
     }
-    '/onboarding/': {
-      id: '/onboarding/'
-      path: '/'
-      fullPath: '/onboarding/'
-      preLoaderRoute: typeof OnboardingIndexRouteImport
-      parentRoute: typeof OnboardingRouteRoute
+    '/logout': {
+      id: '/logout'
+      path: '/logout'
+      fullPath: '/logout'
+      preLoaderRoute: typeof LogoutRouteImport
+      parentRoute: typeof rootRouteImport
     }
-    '/manager/': {
-      id: '/manager/'
-      path: '/'
-      fullPath: '/manager/'
-      preLoaderRoute: typeof ManagerIndexRouteImport
-      parentRoute: typeof ManagerRouteRoute
+    '/manager': {
+      id: '/manager'
+      path: '/manager'
+      fullPath: '/manager'
+      preLoaderRoute: typeof ManagerRouteRouteImport
+      parentRoute: typeof rootRouteImport
     }
-    '/login/': {
-      id: '/login/'
-      path: '/'
-      fullPath: '/login/'
-      preLoaderRoute: typeof LoginIndexRouteImport
-      parentRoute: typeof LoginRouteRoute
-    }
-    '/app/': {
-      id: '/app/'
-      path: '/'
-      fullPath: '/app/'
-      preLoaderRoute: typeof AppIndexRouteImport
-      parentRoute: typeof AppRouteRoute
+    '/onboarding': {
+      id: '/onboarding'
+      path: '/onboarding'
+      fullPath: '/onboarding'
+      preLoaderRoute: typeof OnboardingRouteRouteImport
+      parentRoute: typeof rootRouteImport
     }
     '/api/upload': {
       id: '/api/upload'
@@ -481,67 +453,39 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof ApiUploadRouteImport
       parentRoute: typeof rootRouteImport
     }
-    '/manager/users/': {
-      id: '/manager/users/'
-      path: '/users'
-      fullPath: '/manager/users/'
-      preLoaderRoute: typeof ManagerUsersIndexRouteImport
-      parentRoute: typeof ManagerRouteRoute
-    }
-    '/manager/dashboard/': {
-      id: '/manager/dashboard/'
-      path: '/dashboard'
-      fullPath: '/manager/dashboard/'
-      preLoaderRoute: typeof ManagerDashboardIndexRouteImport
-      parentRoute: typeof ManagerRouteRoute
-    }
-    '/manager/account/': {
-      id: '/manager/account/'
-      path: '/account'
-      fullPath: '/manager/account/'
-      preLoaderRoute: typeof ManagerAccountIndexRouteImport
-      parentRoute: typeof ManagerRouteRoute
-    }
-    '/login/verify/': {
-      id: '/login/verify/'
-      path: '/verify'
-      fullPath: '/login/verify/'
-      preLoaderRoute: typeof LoginVerifyIndexRouteImport
-      parentRoute: typeof LoginRouteRoute
-    }
-    '/login/error/': {
-      id: '/login/error/'
-      path: '/error'
-      fullPath: '/login/error/'
-      preLoaderRoute: typeof LoginErrorIndexRouteImport
-      parentRoute: typeof LoginRouteRoute
-    }
-    '/app/designs/': {
-      id: '/app/designs/'
-      path: '/designs'
-      fullPath: '/app/designs/'
-      preLoaderRoute: typeof AppDesignsIndexRouteImport
+    '/app/': {
+      id: '/app/'
+      path: '/'
+      fullPath: '/app/'
+      preLoaderRoute: typeof AppIndexRouteImport
       parentRoute: typeof AppRouteRoute
     }
-    '/app/account/': {
-      id: '/app/account/'
-      path: '/account'
-      fullPath: '/app/account/'
-      preLoaderRoute: typeof AppAccountIndexRouteImport
-      parentRoute: typeof AppRouteRoute
+    '/login/': {
+      id: '/login/'
+      path: '/'
+      fullPath: '/login/'
+      preLoaderRoute: typeof LoginIndexRouteImport
+      parentRoute: typeof LoginRouteRoute
     }
-    '/api/webhooks/resend': {
-      id: '/api/webhooks/resend'
-      path: '/api/webhooks/resend'
-      fullPath: '/api/webhooks/resend'
-      preLoaderRoute: typeof ApiWebhooksResendRouteImport
-      parentRoute: typeof rootRouteImport
+    '/manager/': {
+      id: '/manager/'
+      path: '/'
+      fullPath: '/manager/'
+      preLoaderRoute: typeof ManagerIndexRouteImport
+      parentRoute: typeof ManagerRouteRoute
     }
-    '/api/telemetry/sentry-tunnel': {
-      id: '/api/telemetry/sentry-tunnel'
-      path: '/api/telemetry/sentry-tunnel'
-      fullPath: '/api/telemetry/sentry-tunnel'
-      preLoaderRoute: typeof ApiTelemetrySentryTunnelRouteImport
+    '/onboarding/': {
+      id: '/onboarding/'
+      path: '/'
+      fullPath: '/onboarding/'
+      preLoaderRoute: typeof OnboardingIndexRouteImport
+      parentRoute: typeof OnboardingRouteRoute
+    }
+    '/api/auth/$': {
+      id: '/api/auth/$'
+      path: '/api/auth/$'
+      fullPath: '/api/auth/$'
+      preLoaderRoute: typeof ApiAuthSplatRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/api/telemetry/logs': {
@@ -551,40 +495,68 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof ApiTelemetryLogsRouteImport
       parentRoute: typeof rootRouteImport
     }
-    '/api/auth/$': {
-      id: '/api/auth/$'
-      path: '/api/auth/$'
-      fullPath: '/api/auth/$'
-      preLoaderRoute: typeof ApiAuthSplatRouteImport
+    '/api/telemetry/sentry-tunnel': {
+      id: '/api/telemetry/sentry-tunnel'
+      path: '/api/telemetry/sentry-tunnel'
+      fullPath: '/api/telemetry/sentry-tunnel'
+      preLoaderRoute: typeof ApiTelemetrySentryTunnelRouteImport
       parentRoute: typeof rootRouteImport
     }
-    '/manager/users/new/': {
-      id: '/manager/users/new/'
-      path: '/users/new'
-      fullPath: '/manager/users/new/'
-      preLoaderRoute: typeof ManagerUsersNewIndexRouteImport
-      parentRoute: typeof ManagerRouteRoute
+    '/api/webhooks/resend': {
+      id: '/api/webhooks/resend'
+      path: '/api/webhooks/resend'
+      fullPath: '/api/webhooks/resend'
+      preLoaderRoute: typeof ApiWebhooksResendRouteImport
+      parentRoute: typeof rootRouteImport
     }
-    '/manager/users/$id/': {
-      id: '/manager/users/$id/'
-      path: '/users/$id'
-      fullPath: '/manager/users/$id/'
-      preLoaderRoute: typeof ManagerUsersIdIndexRouteImport
-      parentRoute: typeof ManagerRouteRoute
-    }
-    '/app/designs/$designId/': {
-      id: '/app/designs/$designId/'
-      path: '/designs/$designId'
-      fullPath: '/app/designs/$designId/'
-      preLoaderRoute: typeof AppDesignsDesignIdIndexRouteImport
+    '/app/account/': {
+      id: '/app/account/'
+      path: '/account'
+      fullPath: '/app/account/'
+      preLoaderRoute: typeof AppAccountIndexRouteImport
       parentRoute: typeof AppRouteRoute
     }
-    '/api/images/$imageId/download': {
-      id: '/api/images/$imageId/download'
-      path: '/api/images/$imageId/download'
-      fullPath: '/api/images/$imageId/download'
-      preLoaderRoute: typeof ApiImagesImageIdDownloadRouteImport
-      parentRoute: typeof rootRouteImport
+    '/app/designs/': {
+      id: '/app/designs/'
+      path: '/designs'
+      fullPath: '/app/designs/'
+      preLoaderRoute: typeof AppDesignsIndexRouteImport
+      parentRoute: typeof AppRouteRoute
+    }
+    '/login/error/': {
+      id: '/login/error/'
+      path: '/error'
+      fullPath: '/login/error/'
+      preLoaderRoute: typeof LoginErrorIndexRouteImport
+      parentRoute: typeof LoginRouteRoute
+    }
+    '/login/verify/': {
+      id: '/login/verify/'
+      path: '/verify'
+      fullPath: '/login/verify/'
+      preLoaderRoute: typeof LoginVerifyIndexRouteImport
+      parentRoute: typeof LoginRouteRoute
+    }
+    '/manager/account/': {
+      id: '/manager/account/'
+      path: '/account'
+      fullPath: '/manager/account/'
+      preLoaderRoute: typeof ManagerAccountIndexRouteImport
+      parentRoute: typeof ManagerRouteRoute
+    }
+    '/manager/dashboard/': {
+      id: '/manager/dashboard/'
+      path: '/dashboard'
+      fullPath: '/manager/dashboard/'
+      preLoaderRoute: typeof ManagerDashboardIndexRouteImport
+      parentRoute: typeof ManagerRouteRoute
+    }
+    '/manager/users/': {
+      id: '/manager/users/'
+      path: '/users'
+      fullPath: '/manager/users/'
+      preLoaderRoute: typeof ManagerUsersIndexRouteImport
+      parentRoute: typeof ManagerRouteRoute
     }
     '/api/dev/email/$template': {
       id: '/api/dev/email/$template'
@@ -593,12 +565,40 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof ApiDevEmailTemplateRouteImport
       parentRoute: typeof rootRouteImport
     }
-    '/manager/users/$id/update/': {
-      id: '/manager/users/$id/update/'
-      path: '/users/$id/update'
-      fullPath: '/manager/users/$id/update/'
-      preLoaderRoute: typeof ManagerUsersIdUpdateIndexRouteImport
+    '/api/images/$imageId/download': {
+      id: '/api/images/$imageId/download'
+      path: '/api/images/$imageId/download'
+      fullPath: '/api/images/$imageId/download'
+      preLoaderRoute: typeof ApiImagesImageIdDownloadRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/app/designs/$designId/': {
+      id: '/app/designs/$designId/'
+      path: '/designs/$designId'
+      fullPath: '/app/designs/$designId/'
+      preLoaderRoute: typeof AppDesignsDesignIdIndexRouteImport
+      parentRoute: typeof AppRouteRoute
+    }
+    '/manager/users/$id/': {
+      id: '/manager/users/$id/'
+      path: '/users/$id'
+      fullPath: '/manager/users/$id/'
+      preLoaderRoute: typeof ManagerUsersIdIndexRouteImport
       parentRoute: typeof ManagerRouteRoute
+    }
+    '/manager/users/new/': {
+      id: '/manager/users/new/'
+      path: '/users/new'
+      fullPath: '/manager/users/new/'
+      preLoaderRoute: typeof ManagerUsersNewIndexRouteImport
+      parentRoute: typeof ManagerRouteRoute
+    }
+    '/api/telemetry/otel/v1/metrics': {
+      id: '/api/telemetry/otel/v1/metrics'
+      path: '/api/telemetry/otel/v1/metrics'
+      fullPath: '/api/telemetry/otel/v1/metrics'
+      preLoaderRoute: typeof ApiTelemetryOtelV1MetricsRouteImport
+      parentRoute: typeof rootRouteImport
     }
     '/api/telemetry/otel/v1/traces': {
       id: '/api/telemetry/otel/v1/traces'
@@ -607,12 +607,12 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof ApiTelemetryOtelV1TracesRouteImport
       parentRoute: typeof rootRouteImport
     }
-    '/api/telemetry/otel/v1/metrics': {
-      id: '/api/telemetry/otel/v1/metrics'
-      path: '/api/telemetry/otel/v1/metrics'
-      fullPath: '/api/telemetry/otel/v1/metrics'
-      preLoaderRoute: typeof ApiTelemetryOtelV1MetricsRouteImport
-      parentRoute: typeof rootRouteImport
+    '/manager/users/$id/update/': {
+      id: '/manager/users/$id/update/'
+      path: '/users/$id/update'
+      fullPath: '/manager/users/$id/update/'
+      preLoaderRoute: typeof ManagerUsersIdUpdateIndexRouteImport
+      parentRoute: typeof ManagerRouteRoute
     }
   }
 }

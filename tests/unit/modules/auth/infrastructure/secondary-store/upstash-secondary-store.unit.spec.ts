@@ -212,4 +212,42 @@ describe('UpstashSecondaryStore', () => {
     );
     expect(fetchFn).not.toHaveBeenCalled();
   });
+
+  it('uses GETDEL for get-and-delete', async () => {
+    const fetchFn = vi.fn(async () => jsonResponse({ result: 'value-1' }));
+    const store = new UpstashSecondaryStore({ config, fetchFn, telemetry });
+    await expectOk(store.getAndDelete('key-1'), {
+      type: 'secondary_store_taken',
+      value: 'value-1',
+    });
+    expect(fetchFn).toHaveBeenCalledWith(
+      config.restUrl,
+      expect.objectContaining({ body: JSON.stringify(['GETDEL', 'key-1']) })
+    );
+  });
+
+  it('increments atomically and sets the TTL only on creation', async () => {
+    const fetchFn = vi.fn(async () => jsonResponse({ result: 3 }));
+    const store = new UpstashSecondaryStore({ config, fetchFn, telemetry });
+    await expectOk(store.increment('rate-1', 60), {
+      type: 'secondary_store_incremented',
+      value: 3,
+    });
+    const [, init] = fetchFn.mock.calls[0] as unknown as [string, RequestInit];
+    const body = JSON.parse(String(init.body)) as unknown[];
+    expect(body[0]).toBe('EVAL');
+    expect(String(body[1])).toContain('INCR');
+    expect(String(body[1])).toContain('if value == 1 then');
+    expect(body.slice(2)).toEqual([1, 'rate-1', 60]);
+  });
+
+  it('reports failed increments', async () => {
+    const fetchFn = vi.fn(async () => new Response('', { status: 503 }));
+    const store = new UpstashSecondaryStore({ config, fetchFn, telemetry });
+    await expectErrorCode(
+      store.increment('rate-1', 60),
+      'AUTH_SECONDARY_STORE_UPSTASH_ERROR'
+    );
+    expect(captureException).toHaveBeenCalledOnce();
+  });
 });

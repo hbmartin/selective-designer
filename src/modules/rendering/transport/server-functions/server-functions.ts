@@ -58,7 +58,7 @@ const runMutation = createServerFunctionInvoker({
 });
 
 export const renderDraftGet = createServerFn({ method: 'GET' })
-  .inputValidator(zImageInput())
+  .validator(zImageInput())
   .handler(async ({ data }) =>
     runProtected.withOperation('rendering.draftGet')(
       data,
@@ -67,7 +67,7 @@ export const renderDraftGet = createServerFn({ method: 'GET' })
   );
 
 export const renderDraftSave = createServerFn({ method: 'POST' })
-  .inputValidator(zSaveDraftInput())
+  .validator(zSaveDraftInput())
   .handler(async ({ data }) =>
     runMutation.withOperation('rendering.draftSave')(
       data,
@@ -80,7 +80,7 @@ export const renderDraftSave = createServerFn({ method: 'POST' })
  * runs with the mutation runner's request checks.
  */
 export const renderPlanPreview = createServerFn({ method: 'POST' })
-  .inputValidator(zPreviewPlanInput())
+  .validator(zPreviewPlanInput())
   .handler(async ({ data }) =>
     runMutation.withOperation('rendering.planPreview')(
       data,
@@ -89,7 +89,7 @@ export const renderPlanPreview = createServerFn({ method: 'POST' })
   );
 
 export const renderSubmit = createServerFn({ method: 'POST' })
-  .inputValidator(zSubmitRenderInput())
+  .validator(zSubmitRenderInput())
   .handler(async ({ data }) =>
     runMutation.withOperation('rendering.submit')(
       data,
@@ -98,7 +98,7 @@ export const renderSubmit = createServerFn({ method: 'POST' })
   );
 
 export const renderSubmitBatch = createServerFn({ method: 'POST' })
-  .inputValidator(zSubmitBatchInput())
+  .validator(zSubmitBatchInput())
   .handler(async ({ data }) =>
     runMutation.withOperation('rendering.submitBatch')(
       data,
@@ -107,7 +107,7 @@ export const renderSubmitBatch = createServerFn({ method: 'POST' })
   );
 
 export const rendersGet = createServerFn({ method: 'GET' })
-  .inputValidator(zImageInput())
+  .validator(zImageInput())
   .handler(async ({ data }) =>
     runProtected.withOperation('rendering.list')(
       data,
@@ -116,7 +116,7 @@ export const rendersGet = createServerFn({ method: 'GET' })
   );
 
 export const renderResultRetry = createServerFn({ method: 'POST' })
-  .inputValidator(zResultInput())
+  .validator(zResultInput())
   .handler(async ({ data }) =>
     runMutation.withOperation('rendering.retry')(
       data,
@@ -125,7 +125,7 @@ export const renderResultRetry = createServerFn({ method: 'POST' })
   );
 
 export const renderResultPrefer = createServerFn({ method: 'POST' })
-  .inputValidator(zPreferInput())
+  .validator(zPreferInput())
   .handler(async ({ data }) =>
     runMutation.withOperation('rendering.prefer')(
       data,
@@ -134,7 +134,7 @@ export const renderResultPrefer = createServerFn({ method: 'POST' })
   );
 
 export const renderResultNameScheme = createServerFn({ method: 'POST' })
-  .inputValidator(zSchemeInput())
+  .validator(zSchemeInput())
   .handler(async ({ data }) =>
     runMutation.withOperation('rendering.nameScheme')(
       data,

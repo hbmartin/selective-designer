@@ -57,7 +57,7 @@ const runMutation = createServerFunctionInvoker({
 });
 
 export const regionsGet = createServerFn({ method: 'GET' })
-  .inputValidator(zRegionsInput())
+  .validator(zRegionsInput())
   .handler(async ({ data }) =>
     runProtected.withOperation('segmentation.regions')(
       data,
@@ -66,7 +66,7 @@ export const regionsGet = createServerFn({ method: 'GET' })
   );
 
 export const regionsSegment = createServerFn({ method: 'POST' })
-  .inputValidator(zSegmentInput())
+  .validator(zSegmentInput())
   .handler(async ({ data }) =>
     runMutation.withOperation('segmentation.segment')(
       data,
@@ -75,7 +75,7 @@ export const regionsSegment = createServerFn({ method: 'POST' })
   );
 
 export const regionsCreateManual = createServerFn({ method: 'POST' })
-  .inputValidator(zManualRegionInput())
+  .validator(zManualRegionInput())
   .handler(async ({ data }) =>
     runMutation.withOperation('segmentation.createManual')(
       data,
@@ -84,7 +84,7 @@ export const regionsCreateManual = createServerFn({ method: 'POST' })
   );
 
 export const regionsUpdate = createServerFn({ method: 'POST' })
-  .inputValidator(zRegionUpdateInput())
+  .validator(zRegionUpdateInput())
   .handler(async ({ data }) =>
     runMutation.withOperation('segmentation.update')(
       data,
@@ -93,7 +93,7 @@ export const regionsUpdate = createServerFn({ method: 'POST' })
   );
 
 export const regionsRemove = createServerFn({ method: 'POST' })
-  .inputValidator(zRegionIdInput())
+  .validator(zRegionIdInput())
   .handler(async ({ data }) =>
     runMutation.withOperation('segmentation.remove')(
       data,

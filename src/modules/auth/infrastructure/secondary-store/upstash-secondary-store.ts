@@ -44,6 +44,15 @@ end
 return nil
 `;
 
+/** INCR, setting the TTL only when the counter is created (fixed window). */
+const INCREMENT_WITH_TTL_SCRIPT = `
+local value = redis.call("INCR", KEYS[1])
+if value == 1 then
+  redis.call("EXPIRE", KEYS[1], ARGV[1])
+end
+return value
+`;
+
 export type UpstashSecondaryStoreOptions = {
   /** Injected telemetry sink used to report best-effort transport failures. */
   telemetry: Pick<TelemetryAdapter, 'captureException'>;
@@ -179,6 +188,43 @@ export class UpstashSecondaryStore implements SecondaryStore {
     return typeof value === 'string'
       ? Result.Ok({ type: 'secondary_store_taken', value })
       : Result.Ok({ type: 'secondary_store_miss' });
+  }
+
+  async getAndDelete(key: string): ReturnType<SecondaryStore['getAndDelete']> {
+    const outcome = await this.command(['GETDEL', key]);
+    if (outcome.isError()) {
+      this.reportFailure('getAndDelete', outcome.getError());
+      return Result.Error(outcome.getError());
+    }
+    const value = outcome.get();
+    return typeof value === 'string'
+      ? Result.Ok({ type: 'secondary_store_taken', value })
+      : Result.Ok({ type: 'secondary_store_miss' });
+  }
+
+  async increment(
+    key: string,
+    ttlSeconds: number
+  ): ReturnType<SecondaryStore['increment']> {
+    if (!Number.isFinite(ttlSeconds) || ttlSeconds <= 0) {
+      return Result.Error(this.invalidTtlError(ttlSeconds));
+    }
+    const outcome = await this.command([
+      'EVAL',
+      INCREMENT_WITH_TTL_SCRIPT,
+      1,
+      key,
+      Math.ceil(ttlSeconds),
+    ]);
+    if (outcome.isError()) {
+      this.reportFailure('increment', outcome.getError());
+      return Result.Error(outcome.getError());
+    }
+    const value = Number(outcome.get());
+    if (!Number.isSafeInteger(value)) {
+      return Result.Error(upstashError('Upstash INCR returned a non-integer'));
+    }
+    return Result.Ok({ type: 'secondary_store_incremented', value });
   }
 
   async delete(key: string): ReturnType<SecondaryStore['delete']> {

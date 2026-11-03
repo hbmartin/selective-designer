@@ -1,10 +1,10 @@
 import { describe, expect, it, vi } from 'vitest';
 
-// Make `createServerFn().inputValidator(...).handler(fn)` resolve to the inner
+// Make `createServerFn().validator(...).handler(fn)` resolve to the inner
 // handler so we can invoke each server function directly in a unit test.
 vi.mock('@tanstack/react-start', () => {
   const builder = {
-    inputValidator: () => builder,
+    validator: () => builder,
     handler: (fn: unknown) => fn,
   };
   return {

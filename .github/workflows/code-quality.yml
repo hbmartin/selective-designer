@@ -360,6 +360,9 @@ jobs:
             printf '%s=%s\n' 'S3_SECURE' 'false'
             printf '%s=%s\n' 'S3_FORCE_PATH_STYLE' 'true'
             printf '%s=%s\n' 'OTEL_COLLECTOR_URL' 'http://localhost:4318'
+            # Production builds validate live image-model keys; placeholders only.
+            printf '%s=%s\n' 'FAL_KEY' 'ci-placeholder'
+            printf '%s=%s\n' 'BFL_API_KEY' 'ci-placeholder'
           } >> "$GITHUB_ENV"
 
       - name: Build app

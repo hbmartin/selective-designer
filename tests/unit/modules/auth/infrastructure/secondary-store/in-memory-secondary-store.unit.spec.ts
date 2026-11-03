@@ -200,4 +200,46 @@ describe('InMemorySecondaryStore', () => {
     });
     await expectMiss(store.get('k'));
   });
+
+  it('gets and deletes a value in one step', async () => {
+    const store = new InMemorySecondaryStore();
+    await store.set('k', 'v');
+    await expect(store.getAndDelete('k')).resolves.toMatchObject({
+      tag: 'Ok',
+      value: { type: 'secondary_store_taken', value: 'v' },
+    });
+    await expectMiss(store.get('k'));
+    await expect(store.getAndDelete('k')).resolves.toMatchObject({
+      tag: 'Ok',
+      value: { type: 'secondary_store_miss' },
+    });
+  });
+
+  it('increments counters in a fixed window that later increments do not extend', async () => {
+    let now = 1_000;
+    const store = new InMemorySecondaryStore({ now: () => now });
+    const increment = async () => {
+      const result = await store.increment('rate', 10);
+      if (result.isError()) throw result.getError();
+      return result.get().value;
+    };
+    expect(await increment()).toBe(1);
+    now += 9_000;
+    expect(await increment()).toBe(2);
+    now += 1_000; // the window opened at 1 000 ms with a 10 s TTL
+    expect(await increment()).toBe(1);
+  });
+
+  it('rejects invalid counter TTLs and non-integer values', async () => {
+    const store = new InMemorySecondaryStore();
+    await expect(store.increment('rate', 0)).resolves.toMatchObject({
+      tag: 'Error',
+      error: { code: 'AUTH_SECONDARY_STORE_INVALID_TTL' },
+    });
+    await store.set('text', 'abc');
+    await expect(store.increment('text', 10)).resolves.toMatchObject({
+      tag: 'Error',
+      error: { code: 'AUTH_SECONDARY_STORE_NOT_A_COUNTER' },
+    });
+  });
 });

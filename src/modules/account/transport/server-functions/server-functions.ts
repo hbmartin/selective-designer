@@ -48,7 +48,7 @@ const runMutation = createServerFunctionInvoker({
 });
 
 export const accountSubmitOnboarding = createServerFn({ method: 'POST' })
-  .inputValidator(zSubmitOnboardingInput())
+  .validator(zSubmitOnboardingInput())
   .handler(async ({ data }) =>
     runMutation.withOperation('account.submitOnboarding')(
       data,
@@ -57,7 +57,7 @@ export const accountSubmitOnboarding = createServerFn({ method: 'POST' })
   );
 
 export const accountUpdateInfo = createServerFn({ method: 'POST' })
-  .inputValidator(zUpdateInfoInput())
+  .validator(zUpdateInfoInput())
   .handler(async ({ data }) =>
     runMutation.withOperation('account.updateInfo')(
       data,

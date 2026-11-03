@@ -136,6 +136,48 @@ export class InMemorySecondaryStore implements SecondaryStore {
     return Result.Ok({ type: 'secondary_store_taken', value: entry.value });
   }
 
+  async getAndDelete(key: string): ReturnType<SecondaryStore['getAndDelete']> {
+    const entry = this.entries.get(key);
+    this.entries.delete(key);
+    if (!entry || this.isExpired(entry, this.now())) {
+      return Result.Ok({ type: 'secondary_store_miss' });
+    }
+    return Result.Ok({ type: 'secondary_store_taken', value: entry.value });
+  }
+
+  async increment(
+    key: string,
+    ttlSeconds: number
+  ): ReturnType<SecondaryStore['increment']> {
+    if (!Number.isFinite(ttlSeconds) || ttlSeconds <= 0) {
+      return Result.Error(this.invalidTtlError(ttlSeconds));
+    }
+    const currentTime = this.now();
+    const entry = this.entries.get(key);
+    if (!entry || this.isExpired(entry, currentTime)) {
+      const set = await this.set(key, '1', ttlSeconds);
+      if (set.isError()) return Result.Error(set.getError());
+      return Result.Ok({ type: 'secondary_store_incremented', value: 1 });
+    }
+    const current = Number(entry.value);
+    if (!Number.isSafeInteger(current)) {
+      return Result.Error(
+        new AppError({
+          code: 'AUTH_SECONDARY_STORE_NOT_A_COUNTER',
+          category: 'system',
+          status: 500,
+          message: 'Secondary store value is not an integer counter.',
+          details: { key },
+        })
+      );
+    }
+    entry.value = String(current + 1);
+    return Result.Ok({
+      type: 'secondary_store_incremented',
+      value: current + 1,
+    });
+  }
+
   async delete(key: string): ReturnType<SecondaryStore['delete']> {
     this.entries.delete(key);
     return Result.Ok({ type: 'secondary_store_deleted' });

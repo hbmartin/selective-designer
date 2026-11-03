@@ -34,6 +34,12 @@ export const ALLOWED_LICENSES = new Set([
 // Keep this list small and justified — every entry is a deliberate acceptance.
 export const LICENSE_EXCEPTIONS = [
   {
+    name: '@vercel/cli-auth',
+    license: 'Unknown',
+    reason:
+      'Pulled in by the Workflow SDK CLI (@workflow/cli). Its package.json omits the license field, but the published package ships an Apache-2.0 LICENSE file (vercel/vercel monorepo).',
+  },
+  {
     name: '@sentry/cli',
     license: 'FSL-1.1-MIT',
     reason:
@@ -191,16 +197,26 @@ export function resolvePnpmCliPath(env = process.env) {
   return npmExecPath;
 }
 
+/**
+ * `npm_execpath` is a JS entry point for npm-installed pnpm, but a native
+ * executable for standalone installs (`@pnpm/exe`); run each accordingly.
+ */
+export function pnpmCommand(pnpmCliPath, args, nodePath = process.execPath) {
+  return /\.(?:c|m)?js$/u.test(pnpmCliPath)
+    ? { file: nodePath, args: [pnpmCliPath, ...args] }
+    : { file: pnpmCliPath, args };
+}
+
 function readLicenseReport() {
-  const pnpmCliPath = resolvePnpmCliPath();
-  const raw = execFileSync(
-    process.execPath,
-    [pnpmCliPath, 'licenses', 'list', '--json'],
-    {
-      encoding: 'utf8',
-      maxBuffer: 64 * 1024 * 1024,
-    }
-  );
+  const command = pnpmCommand(resolvePnpmCliPath(), [
+    'licenses',
+    'list',
+    '--json',
+  ]);
+  const raw = execFileSync(command.file, command.args, {
+    encoding: 'utf8',
+    maxBuffer: 64 * 1024 * 1024,
+  });
 
   const report = JSON.parse(raw);
   if (report === null || typeof report !== 'object') {

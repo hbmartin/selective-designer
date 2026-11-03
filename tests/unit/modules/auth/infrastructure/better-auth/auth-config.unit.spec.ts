@@ -99,6 +99,12 @@ describe('Better Auth security configuration', () => {
       take: vi.fn(async () =>
         Result.Ok({ type: 'secondary_store_miss' as const })
       ),
+      getAndDelete: vi.fn(async () =>
+        Result.Ok({ type: 'secondary_store_miss' as const })
+      ),
+      increment: vi.fn(async () =>
+        Result.Ok({ type: 'secondary_store_incremented' as const, value: 1 })
+      ),
       delete: vi.fn(async () =>
         Result.Ok({ type: 'secondary_store_deleted' as const })
       ),
@@ -159,6 +165,8 @@ describe('Better Auth security configuration', () => {
       get: vi.fn(async () => Result.Error(storeError)),
       set: vi.fn(async () => Result.Error(storeError)),
       take: vi.fn(async () => Result.Error(storeError)),
+      getAndDelete: vi.fn(async () => Result.Error(storeError)),
+      increment: vi.fn(async () => Result.Error(storeError)),
       delete: vi.fn(async () => Result.Error(storeError)),
     } satisfies SecondaryStore;
 

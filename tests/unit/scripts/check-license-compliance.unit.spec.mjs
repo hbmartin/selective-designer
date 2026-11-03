@@ -4,6 +4,7 @@ import { describe, expect, it } from 'vitest';
 import {
   findLicenseViolations,
   isLicenseAllowed,
+  pnpmCommand,
   resolvePnpmCliPath,
 } from '../../../scripts/check-license-compliance.mjs';
 
@@ -108,5 +109,17 @@ describe('license compliance checker', () => {
         ),
       })
     ).toThrow('pnpm');
+  });
+
+  it('runs JS pnpm entry points with node and standalone pnpm directly', () => {
+    expect(
+      pnpmCommand('/opt/pnpm/bin/pnpm.cjs', ['licenses'], '/usr/bin/node')
+    ).toEqual({
+      file: '/usr/bin/node',
+      args: ['/opt/pnpm/bin/pnpm.cjs', 'licenses'],
+    });
+    expect(
+      pnpmCommand('/opt/@pnpm/exe/pnpm', ['licenses'], '/usr/bin/node')
+    ).toEqual({ file: '/opt/@pnpm/exe/pnpm', args: ['licenses'] });
   });
 });

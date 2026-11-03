@@ -13,7 +13,6 @@ type ServerFunction<TResult> = (
 ) => Promise<TResult> | TResult;
 
 type ServerFunctionBuilder<TResult = unknown> = {
-  inputValidator: (_validator?: unknown) => ServerFunctionBuilder<TResult>;
   validator: (_validator?: unknown) => ServerFunctionBuilder<TResult>;
   middleware: (_middleware?: unknown) => ServerFunctionBuilder<TResult>;
   handler: <TNextResult>(
@@ -25,7 +24,6 @@ export function createServerFn<
   TResult = unknown,
 >(): ServerFunctionBuilder<TResult> {
   const builder: ServerFunctionBuilder<TResult> = {
-    inputValidator: () => builder,
     validator: () => builder,
     middleware: () => builder,
     handler: (handler) => (input) => handler(input ?? {}),

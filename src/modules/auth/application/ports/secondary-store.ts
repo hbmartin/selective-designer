@@ -12,6 +12,11 @@ export type SecondaryStoreTakeOutcome =
   | { type: 'secondary_store_taken'; value: string }
   | { type: 'secondary_store_miss' };
 
+export type SecondaryStoreIncrementOutcome = {
+  type: 'secondary_store_incremented';
+  value: number;
+};
+
 /**
  * Durable key/value port used for Better Auth's secondary storage and
  * rate-limit counters. Implementations decide the backend (in-process map,
@@ -31,5 +36,18 @@ export interface SecondaryStore {
     key: string,
     expectedValue: string
   ): Promise<ApplicationResult<SecondaryStoreTakeOutcome>>;
+  /** Atomically read and remove a value. */
+  getAndDelete(
+    key: string
+  ): Promise<ApplicationResult<SecondaryStoreTakeOutcome>>;
+  /**
+   * Atomically add one to the integer counter at `key`, returning the new
+   * value. A missing key starts at 1 with `ttlSeconds`; later increments keep
+   * the original expiry (fixed window).
+   */
+  increment(
+    key: string,
+    ttlSeconds: number
+  ): Promise<ApplicationResult<SecondaryStoreIncrementOutcome>>;
   delete(key: string): Promise<ApplicationResult<SecondaryStoreDeleteOutcome>>;
 }
