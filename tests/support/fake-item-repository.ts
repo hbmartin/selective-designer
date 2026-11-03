@@ -6,6 +6,7 @@ import type { Item, ItemRepository, ItemVersion } from '@/modules/moodboard';
 export const createFakeItemRepository = (now: () => Date) => {
   const items = new Map<string, Item & { removed: boolean }>();
   const versions = new Map<string, ItemVersion>();
+  const attempts = new Map<string, string>();
 
   const visible = (id: string) => {
     const item = items.get(id);
@@ -36,13 +37,16 @@ export const createFakeItemRepository = (now: () => Date) => {
       );
     },
     async create(input) {
+      const { cutoutAttemptId, ...imagery } = input.version;
       const version: ItemVersion = {
-        ...input.version,
+        ...imagery,
         itemId: input.id,
         number: 1,
         createdAt: now(),
       };
       versions.set(version.id, version);
+      if (cutoutAttemptId !== undefined)
+        attempts.set(version.id, cutoutAttemptId);
       const item = {
         id: input.id,
         designId: input.designId,
@@ -68,13 +72,16 @@ export const createFakeItemRepository = (now: () => Date) => {
     async addVersion(input) {
       const item = visible(input.itemId);
       if (!item) return Result.Ok({ type: 'item_not_found' });
+      const { cutoutAttemptId, ...imagery } = input.version;
       const version: ItemVersion = {
-        ...input.version,
+        ...imagery,
         itemId: item.id,
         number: item.currentVersion.number + 1,
         createdAt: now(),
       };
       versions.set(version.id, version);
+      if (cutoutAttemptId !== undefined)
+        attempts.set(version.id, cutoutAttemptId);
       item.currentVersion = version;
       return Result.Ok({ type: 'item_found', item });
     },
@@ -89,16 +96,38 @@ export const createFakeItemRepository = (now: () => Date) => {
       const item = version ? items.get(version.itemId) : undefined;
       return Result.Ok(
         version && item
-          ? { type: 'item_version_found', version, designId: item.designId }
+          ? {
+              type: 'item_version_found',
+              version,
+              designId: item.designId,
+              cutoutAttemptId: attempts.get(version.id) ?? null,
+            }
           : { type: 'item_version_not_found' }
       );
     },
-    async setCutoutResult(input) {
+    async claimCutoutAttempt(input) {
       const version = versions.get(input.versionId);
-      if (version) {
-        version.cutoutStatus = input.cutoutStatus;
-        version.cutoutKey = input.cutoutKey;
+      if (
+        version?.cutoutStatus !== 'failed' ||
+        visible(version.itemId)?.currentVersion.id !== version.id
+      ) {
+        return Result.Ok({ type: 'cutout_attempt_skipped' });
       }
+      version.cutoutStatus = 'pending';
+      version.cutoutKey = null;
+      attempts.set(version.id, input.attemptId);
+      return Result.Ok({ type: 'cutout_attempt_claimed' });
+    },
+    async finishCutoutAttempt(input) {
+      const version = versions.get(input.versionId);
+      if (
+        version?.cutoutStatus !== 'pending' ||
+        (attempts.get(version.id) ?? null) !== input.attemptId
+      ) {
+        return Result.Ok({ type: 'cutout_attempt_skipped' });
+      }
+      version.cutoutStatus = input.cutoutStatus;
+      version.cutoutKey = input.cutoutKey;
       return Result.Ok({ type: 'cutout_result_saved' });
     },
     async categoryUsage() {

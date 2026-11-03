@@ -10,6 +10,8 @@ import { IMMUTABLE_OBJECT_CACHE_CONTROL } from '@/modules/kernel/domain/upload-p
 import type { MoodboardPipelineDeps, MoodboardResult } from './types';
 import { SIGNED_ITEM_URL_SECONDS } from './types';
 
+type CutoutAttempt = { versionId: ItemVersionId; attemptId: string | null };
+
 const CUTOUT_MAX_BYTES = 30 * 1024 * 1024;
 const CUTOUT_TYPES = ['image/png', 'image/webp'] as const;
 
@@ -26,8 +28,9 @@ export type RemoveBackgroundOutcome =
  */
 export async function removeBackgroundForVersion(
   deps: MoodboardPipelineDeps,
-  versionId: ItemVersionId
+  input: CutoutAttempt
 ): Promise<MoodboardResult<RemoveBackgroundOutcome>> {
+  const { versionId, attemptId } = input;
   const found = await deps.itemRepository.findVersion(versionId);
   if (found.isError()) return Result.Error(found.getError());
   const outcome = found.get();
@@ -35,7 +38,10 @@ export async function removeBackgroundForVersion(
     return Result.Ok({ type: 'cutout_skipped' });
   }
   const { version, designId } = outcome;
-  if (version.cutoutStatus !== 'pending') {
+  if (
+    version.cutoutStatus !== 'pending' ||
+    outcome.cutoutAttemptId !== attemptId
+  ) {
     return Result.Ok({ type: 'cutout_skipped' });
   }
 
@@ -57,7 +63,9 @@ export async function removeBackgroundForVersion(
   if (removed.isError()) return Result.Error(removed.getError());
   const removal = removed.get();
 
-  const callId = toProviderCallId(`bg-${versionId}`);
+  const callId = toProviderCallId(
+    attemptId === null ? `bg-${versionId}` : `bg-${versionId}-${attemptId}`
+  );
   if (callId.isError()) return Result.Error(callId.getError());
   const logCall = (input: {
     status: 'succeeded' | 'failed';
@@ -84,17 +92,21 @@ export async function removeBackgroundForVersion(
     });
 
   const markFailed = async (reason: string) => {
-    const saved = await deps.itemRepository.setCutoutResult({
-      versionId,
+    const saved = await deps.itemRepository.finishCutoutAttempt({
+      ...input,
       cutoutStatus: 'failed',
       cutoutKey: null,
     });
     if (saved.isError()) return Result.Error(saved.getError());
     deps.logger.warn({
       event: 'moodboard.cutout.failed',
-      details: { versionId, reason },
+      details: { ...input, reason },
     });
-    return Result.Ok({ type: 'cutout_failed' as const, reason });
+    return Result.Ok(
+      saved.get().type === 'cutout_result_saved'
+        ? { type: 'cutout_failed' as const, reason }
+        : { type: 'cutout_skipped' as const }
+    );
   };
 
   if (removal.type === 'background_removal_failed') {
@@ -106,7 +118,11 @@ export async function removeBackgroundForVersion(
     return markFailed(removal.reason);
   }
 
-  const cutoutKey = toObjectKey(`item-cutouts/${versionId}.png`);
+  const cutoutKey = toObjectKey(
+    attemptId === null
+      ? `item-cutouts/${versionId}.png`
+      : `item-cutouts/${versionId}/${attemptId}.png`
+  );
   if (cutoutKey.isError()) return Result.Error(cutoutKey.getError());
 
   if (removal.result.kind === 'url') {
@@ -152,13 +168,18 @@ export async function removeBackgroundForVersion(
   });
   if (logged.isError()) return Result.Error(logged.getError());
 
-  const saved = await deps.itemRepository.setCutoutResult({
-    versionId,
+  const saved = await deps.itemRepository.finishCutoutAttempt({
+    ...input,
     cutoutStatus: 'ready',
     cutoutKey: cutoutKey.get(),
   });
   if (saved.isError()) return Result.Error(saved.getError());
-  return Result.Ok({ type: 'cutout_ready' });
+  return Result.Ok({
+    type:
+      saved.get().type === 'cutout_result_saved'
+        ? 'cutout_ready'
+        : 'cutout_skipped',
+  });
 }
 
 /**
@@ -167,28 +188,24 @@ export async function removeBackgroundForVersion(
  */
 export async function markCutoutFailed(
   deps: Pick<MoodboardPipelineDeps, 'itemRepository' | 'logger'>,
-  versionId: ItemVersionId
+  input: CutoutAttempt
 ): Promise<
   MoodboardResult<{ type: 'cutout_marked_failed' } | { type: 'cutout_skipped' }>
 > {
-  const found = await deps.itemRepository.findVersion(versionId);
-  if (found.isError()) return Result.Error(found.getError());
-  const outcome = found.get();
-  if (
-    outcome.type === 'item_version_not_found' ||
-    outcome.version.cutoutStatus !== 'pending'
-  ) {
-    return Result.Ok({ type: 'cutout_skipped' });
-  }
-  const saved = await deps.itemRepository.setCutoutResult({
-    versionId,
+  const saved = await deps.itemRepository.finishCutoutAttempt({
+    ...input,
     cutoutStatus: 'failed',
     cutoutKey: null,
   });
   if (saved.isError()) return Result.Error(saved.getError());
   deps.logger.warn({
     event: 'moodboard.cutout.workflow_failed',
-    details: { versionId },
+    details: { ...input, outcome: saved.get().type },
   });
-  return Result.Ok({ type: 'cutout_marked_failed' });
+  return Result.Ok({
+    type:
+      saved.get().type === 'cutout_result_saved'
+        ? 'cutout_marked_failed'
+        : 'cutout_skipped',
+  });
 }

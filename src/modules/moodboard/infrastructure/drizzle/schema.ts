@@ -43,6 +43,7 @@ export const itemVersion = pgTable(
     cutoutKey: text('cutoutKey'),
     maskKey: text('maskKey'),
     cutoutStatus: text('cutoutStatus').notNull(),
+    cutoutAttemptId: text('cutoutAttemptId'),
   },
   (table) => [index('item_version_item_idx').on(table.itemId)]
 );

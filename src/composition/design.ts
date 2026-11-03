@@ -10,7 +10,7 @@ import {
 import { createDesignRepository } from '@/modules/design/backend';
 
 import { getKernel, type Kernel } from './kernel';
-import { getMoodboardPipelineUseCases } from './moodboard-pipeline';
+import { getMoodboardUseCases } from './moodboard';
 import { getRenderingPipelineUseCases } from './rendering-pipeline';
 import { workflowAutoDetectionScheduler } from './segmentation-scheduler';
 import { createCachedFactory } from './shared/singleton';
@@ -43,13 +43,8 @@ const segmentationOnArrival: ImageArrivedListener = {
  */
 const copyIntoRevisedDesign = (kernel: Kernel): DesignCopiedListener => ({
   async designCopied(input) {
-    const design = createDesignPipelineUseCases({
-      designRepository: createDesignRepository({ db: kernel.db }),
-      objectStorage: kernel.objectStorage,
-      idGenerator: kernel.idGenerator,
-      logger: kernel.logger,
-    });
-    const items = await getMoodboardPipelineUseCases().copyItems({
+    const design = buildDesignPipelineUseCases({ kernel });
+    const items = await getMoodboardUseCases({ kernel }).copyItems({
       fromDesignId: input.fromDesignId,
       toDesignId: input.toDesignId,
     });
@@ -58,7 +53,9 @@ const copyIntoRevisedDesign = (kernel: Kernel): DesignCopiedListener => ({
     if (base.isError()) return Result.Error(base.getError());
     const baseOutcome = base.get();
     if (baseOutcome.type === 'base_image') {
-      const draft = await getRenderingPipelineUseCases().copyDraftPlacements({
+      const draft = await getRenderingPipelineUseCases({
+        kernel,
+      }).copyDraftPlacements({
         fromImageId: baseOutcome.imageId,
         toImageId: input.toBaseImageId,
         toDesignId: input.toDesignId,
@@ -92,7 +89,7 @@ const buildDesignUseCases = (overrides?: DesignOverrides) => {
   });
 };
 
-const buildDesignPipelineUseCases = (overrides?: DesignOverrides) => {
+function buildDesignPipelineUseCases(overrides?: DesignOverrides) {
   const kernel = overrides?.kernel ?? getKernel();
   return createDesignPipelineUseCases({
     designRepository:
@@ -101,7 +98,7 @@ const buildDesignPipelineUseCases = (overrides?: DesignOverrides) => {
     idGenerator: kernel.idGenerator,
     logger: kernel.logger,
   });
-};
+}
 
 const factory = createCachedFactory(buildDesignUseCases);
 const pipelineFactory = createCachedFactory(buildDesignPipelineUseCases);

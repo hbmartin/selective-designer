@@ -25,6 +25,9 @@ _Avoid_: Reference group, library, board
 A product, extract or swatch that can be placed on an image. It has a category, a name and an optional vendor and product link.
 _Avoid_: Product reference, reference, asset
 
+**Item version**:
+One state of an item's imagery. A render recipe can pin an item version so later corrections do not change the images used by that render.
+
 **Product**:
 An item made from a product photo with its background removed. It must keep its silhouette, proportions, details and finish when rendered.
 

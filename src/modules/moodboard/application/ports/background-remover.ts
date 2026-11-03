@@ -35,5 +35,6 @@ export interface BackgroundRemover {
 export interface BackgroundRemovalScheduler {
   schedule(input: {
     itemVersionId: string;
+    attemptId: string;
   }): Promise<ApplicationResult<{ type: 'background_removal_scheduled' }>>;
 }

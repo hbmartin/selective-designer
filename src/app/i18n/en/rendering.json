@@ -142,8 +142,15 @@
     "framingChanged": "Framing changed",
     "rebuild": "Edit all changes on the original",
     "rebuildConfirm": "This replaces the current draft on the base image with the combined edits of this render and the ones it continued from.",
-    "rebuilt": "Draft rebuilt on the original with {{count}} edits.",
-    "rebuiltDropped": "{{dropped}} edits used regions that only exist on a result; add them again.",
+    "rebuilt_one": "Draft rebuilt on the base image with {{count}} edit.",
+    "rebuilt_other": "Draft rebuilt on the base image with {{count}} edits.",
+    "rebuildFailed": "Could not rebuild the draft. Try again.",
+    "rebuildConflict": "The draft changed while you were rebuilding it. Retrying will replace the current draft.",
+    "editsOmitted": "Some edits were left out",
+    "omittedRegion_one": "{{count}} edit used a region that could not be matched to the base image.",
+    "omittedRegion_other": "{{count}} edits used regions that could not be matched to the base image.",
+    "omittedLimit_one": "{{count}} edit was left out because the draft reached its edit limit.",
+    "omittedLimit_other": "{{count}} edits were left out because the draft reached its edit limit.",
     "notFound": "This render was not found."
   },
   "check": {

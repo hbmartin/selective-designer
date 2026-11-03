@@ -28,9 +28,7 @@ export type MoodboardOverrides = {
 const workflowBackgroundRemovalScheduler: BackgroundRemovalScheduler = {
   async schedule(input) {
     try {
-      await start(removeBackgroundWorkflow, [
-        { itemVersionId: input.itemVersionId },
-      ]);
+      await start(removeBackgroundWorkflow, [input]);
       return Result.Ok({ type: 'background_removal_scheduled' });
     } catch (error) {
       return Result.Error(

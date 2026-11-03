@@ -23,6 +23,7 @@ import type {
 } from '../../application/use-cases/renders';
 import type { RecipeEdit } from '../../domain/recipe';
 import { isTerminalStatus, parseSkipReason } from '../../domain/render';
+import type { RebuiltDraftResponse } from '../../transport/http/rendering-handlers';
 
 const POLL_MS = 2000;
 
@@ -268,11 +269,7 @@ export const RenderResults = (props: {
   renderId: RenderId;
   baseImageId: ImageId;
   resultActions?: (result: RenderResultView, render: RenderView) => ReactNode;
-  onRebuilt?: (outcome: {
-    baseImageId: ImageId;
-    edits: number;
-    dropped: number;
-  }) => void;
+  onRebuilt?: (outcome: RebuiltDraftResponse) => void;
 }) => {
   const { t } = useTranslation(['rendering']);
   const scopeKey = useCurrentScopeKey();
@@ -289,12 +286,21 @@ export const RenderResults = (props: {
   const rebuild = useMutation({
     ...renderingQueries.draftFromOriginal(),
     onSuccess: async (outcome) => {
+      if (outcome.type !== 'draft_rebuilt') return;
       await queryClient.invalidateQueries({ queryKey: renderingQueries.all() });
       toast.success(t('rendering:review.rebuilt', { count: outcome.edits }));
-      if (outcome.dropped > 0)
-        toast.warning(
-          t('rendering:review.rebuiltDropped', { dropped: outcome.dropped })
+      const { unmappableRegion, editLimit } = outcome.omitted;
+      const reasons = [];
+      if (unmappableRegion > 0)
+        reasons.push(
+          t('rendering:review.omittedRegion', { count: unmappableRegion })
         );
+      if (editLimit > 0)
+        reasons.push(t('rendering:review.omittedLimit', { count: editLimit }));
+      if (reasons.length > 0)
+        toast.warning(t('rendering:review.editsOmitted'), {
+          description: reasons.join(' '),
+        });
       props.onRebuilt?.(outcome);
     },
   });
@@ -342,7 +348,18 @@ export const RenderResults = (props: {
             title={t('rendering:review.rebuild')}
             description={t('rendering:review.rebuildConfirm')}
             confirmText={t('rendering:review.rebuild')}
-            confirmAction={() => rebuild.mutateAsync({ renderId: render.id })}
+            confirmAction={async () => {
+              try {
+                const outcome = await rebuild.mutateAsync({
+                  renderId: render.id,
+                });
+                if (outcome.type === 'draft_rebuilt') return;
+                toast.error(t('rendering:review.rebuildConflict'));
+              } catch {
+                toast.error(t('rendering:review.rebuildFailed'));
+              }
+              return 'keep_open';
+            }}
           >
             <Button size="sm" variant="secondary" loading={rebuild.isPending}>
               {t('rendering:review.rebuild')}

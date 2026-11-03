@@ -53,7 +53,10 @@ const SideBySide = (props: { a: Pane; b: Pane; labels: [string, string] }) => {
     <div className="flex flex-col gap-2">
       <div className="grid gap-2 md:grid-cols-2">
         {([props.a, props.b] as const).map((pane, index) => (
-          <figure key={pane.url} className="flex min-w-0 flex-col gap-1">
+          <figure
+            key={index === 0 ? 'before' : 'after'}
+            className="flex min-w-0 flex-col gap-1"
+          >
             <div
               className="overflow-hidden rounded-md border bg-muted"
               style={{ aspectRatio: `${pane.width} / ${pane.height}` }}

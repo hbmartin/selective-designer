@@ -49,7 +49,9 @@ function EnabledProps() {
 function WithPromise() {
   return (
     <ConfirmResponsiveDrawer
-      confirmAction={async () => new Promise((r) => setTimeout(r, 2000))}
+      confirmAction={async () =>
+        new Promise<void>((resolve) => setTimeout(resolve, 2000))
+      }
     >
       <Button>Confirm</Button>
     </ConfirmResponsiveDrawer>

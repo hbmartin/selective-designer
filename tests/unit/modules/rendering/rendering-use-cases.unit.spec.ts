@@ -26,6 +26,7 @@ import {
   type ImageModelAdapter,
   type InputItem,
   type InputRegion,
+  MAX_EDITS,
   type ModelId,
   modelIds,
   type ModelPoll,
@@ -886,6 +887,90 @@ describe('review', () => {
     );
   });
 
+  it('reports no omissions for a rebuild that fits', async () => {
+    const ctx = setup({ enabledModelIds: ['gpt-image-2'] });
+    ctx.addItem('chair');
+    const render = await rendered(ctx, {
+      edits: [placement('first', 'chair')],
+      prompt: '',
+    });
+    expect(
+      okValue(
+        await ctx.useCases.draftFromOriginal({
+          currentUserId: ownerId,
+          renderId: render.id,
+        })
+      )
+    ).toMatchObject({
+      edits: 1,
+      omitted: { unmappableRegion: 0, editLimit: 0 },
+    });
+  });
+
+  it.each([false, true])(
+    'counts only mapped edits against the draft cap (with unmappable region: %s)',
+    async (withUnmappableRegion) => {
+      const ctx = setup({ enabledModelIds: ['gpt-image-2'] });
+      ctx.addItem('chair');
+      const first = await rendered(ctx, {
+        edits: [placement('first', 'chair')],
+        prompt: '',
+      });
+      const resultImageId = unwrapParseResult(toImageId('result-from-first'));
+      const result = first.results[0]!;
+      result.status = 'succeeded';
+      result.outputImageId = resultImageId;
+      ctx.addImage(resultImageId);
+      const second = await rendered(
+        ctx,
+        {
+          edits: [placement('second', 'chair')],
+          prompt: '',
+        },
+        resultImageId
+      );
+      // Stored recipes are snapshots. Expand the fixture without involving model limits.
+      const edit = first.recipe.edits[0]!;
+      first.recipe.edits = Array.from({ length: MAX_EDITS }, (_, index) => ({
+        ...edit,
+        id: `edit-${index}`,
+      }));
+      if (withUnmappableRegion) {
+        second.recipe.edits.unshift({
+          kind: 'removal',
+          id: 'missing-region',
+          region: {
+            regionId: 'unknown',
+            label: 'Missing',
+            maskKey: key('region-masks/missing.png'),
+            box,
+          },
+          note: '',
+        });
+      }
+
+      expect(
+        okValue(
+          await ctx.useCases.draftFromOriginal({
+            currentUserId: ownerId,
+            renderId: second.id,
+          })
+        )
+      ).toMatchObject({
+        edits: MAX_EDITS,
+        omitted: {
+          unmappableRegion: withUnmappableRegion ? 1 : 0,
+          editLimit: 1,
+        },
+      });
+      expect(
+        ctx.renders.drafts.get(baseImageId)?.editSet.edits.map(({ id }) => id)
+      ).toEqual(
+        Array.from({ length: MAX_EDITS }, (_, index) => `r0-edit-${index}`)
+      );
+    }
+  );
+
   it('rebuilds the combined edits of a render chain on the base image', async () => {
     const ctx = setup({ enabledModelIds: ['gpt-image-2'] });
     ctx.addItem('chair');
@@ -967,7 +1052,7 @@ describe('review', () => {
       type: 'draft_rebuilt',
       baseImageId,
       edits: 4,
-      dropped: 1,
+      omitted: { unmappableRegion: 1, editLimit: 0 },
     });
     const draft = ctx.renders.drafts.get(baseImageId);
     expect(draft?.editSet.prompt).toBe('Dusk\nWarm light');

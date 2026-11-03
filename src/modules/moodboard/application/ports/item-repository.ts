@@ -23,6 +23,7 @@ export type NewItemVersion = {
   cutoutKey: ObjectKey | null;
   maskKey: ObjectKey | null;
   cutoutStatus: CutoutStatus;
+  cutoutAttemptId?: string;
 };
 
 export type ItemChanges = {
@@ -37,6 +38,7 @@ export type ItemNotFound = { type: 'item_not_found' };
 export type VersionFound = {
   type: 'item_version_found';
   version: ItemVersion;
+  cutoutAttemptId: string | null;
   designId: DesignId;
 };
 export type VersionNotFound = { type: 'item_version_not_found' };
@@ -80,11 +82,24 @@ export interface ItemRepository {
   findVersion(
     versionId: ItemVersionId
   ): Promise<ApplicationResult<VersionFound | VersionNotFound>>;
-  setCutoutResult(input: {
+  claimCutoutAttempt(input: {
     versionId: ItemVersionId;
-    cutoutStatus: CutoutStatus;
-    cutoutKey: ObjectKey | null;
-  }): Promise<ApplicationResult<{ type: 'cutout_result_saved' }>>;
+    attemptId: string;
+  }): Promise<
+    ApplicationResult<
+      { type: 'cutout_attempt_claimed' } | { type: 'cutout_attempt_skipped' }
+    >
+  >;
+  finishCutoutAttempt(
+    input: { versionId: ItemVersionId; attemptId: string | null } & (
+      | { cutoutStatus: 'ready'; cutoutKey: ObjectKey }
+      | { cutoutStatus: 'failed'; cutoutKey: null }
+    )
+  ): Promise<
+    ApplicationResult<
+      { type: 'cutout_result_saved' } | { type: 'cutout_attempt_skipped' }
+    >
+  >;
   /** How often the owner used each category across their designs. */
   categoryUsage(ownerId: UserId): Promise<
     ApplicationResult<{

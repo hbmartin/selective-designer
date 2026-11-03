@@ -83,6 +83,12 @@ function RouteComponent() {
       </PageLayoutTopBar>
       <PageLayoutContent className="pb-20">
         <CompareView
+          key={JSON.stringify([
+            search.a,
+            search.b,
+            search.render,
+            search.result,
+          ])}
           a={parseRouteImageId(search.a)}
           b={parseRouteImageId(search.b)}
           mode={search.mode}
