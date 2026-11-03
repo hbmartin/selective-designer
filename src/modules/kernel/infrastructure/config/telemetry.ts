@@ -117,7 +117,7 @@ export function getTelemetryConfig(): TelemetryConfig {
     authToken: env.SENTRY_AUTH_TOKEN,
     collectorUrl: env.OTEL_COLLECTOR_URL,
     collectorBearerToken: env.OTEL_COLLECTOR_BEARER_TOKEN,
-    serviceName: env.OTEL_SERVICE_NAME ?? 'start-ui-web',
+    serviceName: env.OTEL_SERVICE_NAME ?? 'selective-designer',
     serviceVersion: env.OTEL_SERVICE_VERSION,
     otelEnvironment:
       env.OTEL_ENVIRONMENT ??

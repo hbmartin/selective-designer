@@ -6,7 +6,7 @@ export const EmailFooter = () => {
   return (
     <Section style={styles.footer}>
       <Link style={styles.link} href="https://start-ui.com" target="_blank">
-        <strong>Start UI</strong>
+        <strong>Selective Designer</strong>
       </Link>
       <br />
       Opinionated UI starters

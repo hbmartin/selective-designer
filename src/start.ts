@@ -18,7 +18,6 @@ import {
   shouldProtectBrowserMutation,
   validateSameOriginBrowserMutationRequest,
 } from '@/platform/http/browser-mutation-protection';
-import { replaceCspNoncePlaceholderInHtmlResponse } from '@/platform/http/csp-nonce';
 import { createCspNonce } from '@/platform/http/csp-nonce-server';
 import { violatesServerFnBodyLimit } from '@/platform/http/request-body-limit';
 import { applySecurityHeaders } from '@/platform/http/security-headers';
@@ -149,20 +148,23 @@ export const authRequestContextMiddleware = createMiddleware({
   })
 );
 
+/**
+ * Applies security headers in place. The response body must stay the same
+ * stream: TanStack Start disposes the SSR stream when a request middleware
+ * replaces the body, which stalls streamed HTML until the 60 s serialization
+ * timeout. The nonce placeholder in HTML is therefore rewritten outside the
+ * middleware chain, in `src/server.ts`, which also creates the nonce.
+ */
 export const securityHeadersMiddleware = createMiddleware({
   type: 'request',
 }).server(async ({ context, next }) => {
-  const cspNonce = createCspNonce();
+  const cspNonce = getCspNonceFromContext(context) ?? createCspNonce();
   const nextContext = mergeRequestContext(context, { cspNonce });
   const result = await next({ context: nextContext });
-  const response = applyAppSecurityHeaders(
-    await replaceCspNoncePlaceholderInHtmlResponse(result.response, cspNonce),
-    nextContext
-  );
 
   return {
     ...result,
-    response,
+    response: applyAppSecurityHeaders(result.response, nextContext),
   };
 });
 

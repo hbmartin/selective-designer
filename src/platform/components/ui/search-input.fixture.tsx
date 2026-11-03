@@ -15,12 +15,12 @@ function Default() {
       </p>
       <div className="flex gap-2">
         <Button
-          disabled={searchTerm === 'Start UI'}
+          disabled={searchTerm === 'Selective Designer'}
           size="xs"
           variant="secondary"
-          onClick={() => setSearchTerm('Start UI')}
+          onClick={() => setSearchTerm('Selective Designer')}
         >
-          Set to "Start UI"
+          Set to "Selective Designer"
         </Button>
         <Button
           disabled={searchTerm === 'React'}

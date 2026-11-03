@@ -7,6 +7,8 @@ import { randomUUID } from 'node:crypto';
 import '../instrument.server.mjs';
 
 import { validateServerConfig } from '@/modules/kernel/backend';
+import { replaceCspNoncePlaceholderInHtmlResponse } from '@/platform/http/csp-nonce';
+import { createCspNonce } from '@/platform/http/csp-nonce-server';
 
 import type { AppStartRequestContext } from './start';
 
@@ -16,14 +18,19 @@ type ServerEntryRequestContext = AppStartRequestContext & { nonce?: string };
 validateServerConfig();
 
 const requestHandler: ServerEntry = wrapFetchWithSentry({
-  fetch(request) {
+  async fetch(request) {
+    const cspNonce = createCspNonce();
     const context: ServerEntryRequestContext = {
       requestId: randomUUID(),
+      cspNonce,
     };
 
-    return handler.fetch(request, {
+    const response = await handler.fetch(request, {
       context,
     });
+    // Rewrite the nonce placeholder only after Start returned the response, so
+    // the SSR stream keeps owning its own cleanup (see securityHeadersMiddleware).
+    return replaceCspNoncePlaceholderInHtmlResponse(response, cspNonce);
   },
 });
 

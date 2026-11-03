@@ -51,10 +51,8 @@ services:
       timeout: 5s
       retries: 5
 
-  # LOCAL-DEV ONLY. This grants anonymous public download on the bucket
-  # (`mc anonymous set download` below) so the app can serve public assets
-  # locally. Do NOT replicate this anonymous-read grant on production object
-  # storage — scope production bucket access explicitly instead.
+  # LOCAL-DEV bucket setup. The bucket stays private (no anonymous access):
+  # the app serves images through short-lived signed URLs, as in production.
   createbucket:
     image: minio/mc:RELEASE.2025-08-13T08-35-41Z-cpuv1@sha256:95b5f3f7969a5c5a9f3a700ba72d5c84172819e13385aaf916e237cf111ab868
     profiles:
@@ -72,7 +70,6 @@ services:
         mc admin user add default ${S3_ACCESS_KEY_ID} ${S3_SECRET_ACCESS_KEY};
         mc admin policy attach default readwrite --user ${S3_ACCESS_KEY_ID};
         mc mb --ignore-existing default/${S3_BUCKET_NAME} 2>/dev/null;
-        mc anonymous set download default/${S3_BUCKET_NAME};
         echo ''Bucket configuration completed successfully'';
         ',
       ]

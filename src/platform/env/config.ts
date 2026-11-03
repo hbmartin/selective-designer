@@ -94,7 +94,10 @@ const clientSchema = () =>
       .optional()
       .prefault('true')
       .transform((value) => value === 'true'),
-    VITE_OTEL_SERVICE_NAME: z.string().optional().prefault('start-ui-web'),
+    VITE_OTEL_SERVICE_NAME: z
+      .string()
+      .optional()
+      .prefault('selective-designer'),
     VITE_OTEL_SERVICE_VERSION: z.string().optional(),
     VITE_OTEL_ENVIRONMENT: z.string().optional(),
     VITE_OTEL_TRACES_SAMPLE_RATE: z.coerce.number().min(0).max(1).prefault(1),

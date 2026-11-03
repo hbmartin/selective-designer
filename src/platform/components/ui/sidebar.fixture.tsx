@@ -19,27 +19,27 @@ import {
 const items = [
   {
     title: 'Home',
-    url: 'https://start-ui.com/',
+    url: 'https://example.com/',
     icon: Home,
   },
   {
     title: 'Inbox',
-    url: 'https://start-ui.com/',
+    url: 'https://example.com/',
     icon: Inbox,
   },
   {
     title: 'Calendar',
-    url: 'https://start-ui.com/',
+    url: 'https://example.com/',
     icon: Calendar,
   },
   {
     title: 'Search',
-    url: 'https://start-ui.com/',
+    url: 'https://example.com/',
     icon: Search,
   },
   {
     title: 'Settings',
-    url: 'https://start-ui.com/',
+    url: 'https://example.com/',
     icon: Settings,
   },
 ];
@@ -55,7 +55,7 @@ function AppSidebar() {
                 className="h-auto"
                 render={
                   <a
-                    href="https://start-ui.com/"
+                    href="https://example.com/"
                     target="_blank"
                     rel="noopener noreferrer"
                   >

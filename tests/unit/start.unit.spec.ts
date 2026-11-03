@@ -126,16 +126,11 @@ describe('TanStack Start instance', () => {
   it('applies security headers to successful responses', async () => {
     const { securityHeadersMiddleware } = await import('@/start');
     type NextOptions = { context: { cspNonce: string; requestId: string } };
-    const next = vi.fn(async (_options: NextOptions) => ({
-      response: new Response(
-        `<meta property="csp-nonce" content="${CSP_NONCE_PLACEHOLDER}" nonce="${CSP_NONCE_PLACEHOLDER}"><script nonce="${CSP_NONCE_PLACEHOLDER}">window.__nonce__="${CSP_NONCE_PLACEHOLDER}"</script>`,
-        {
-          headers: {
-            'Content-Type': 'text/html; charset=utf-8',
-          },
-        }
-      ),
-    }));
+    const response = new Response(
+      `<meta property="csp-nonce" content="${CSP_NONCE_PLACEHOLDER}">`,
+      { headers: { 'Content-Type': 'text/html; charset=utf-8' } }
+    );
+    const next = vi.fn(async (_options: NextOptions) => ({ response }));
 
     const result = await (securityHeadersMiddleware as ExplicitAny).handler({
       context: { requestId: 'request-1' },
@@ -164,8 +159,22 @@ describe('TanStack Start instance', () => {
     expect(result.response.headers.get('Cross-Origin-Opener-Policy')).toBe(
       'same-origin-allow-popups'
     );
-    await expect(result.response.text()).resolves.toBe(
-      `<meta property="csp-nonce" content="${cspNonce}" nonce="${cspNonce}"><script nonce="${cspNonce}">window.__nonce__="${cspNonce}"</script>`
+    // The body must remain the SSR stream so TanStack Start keeps owning its
+    // cleanup; the placeholder is rewritten later in src/server.ts.
+    expect(result.response.body).toBe(response.body);
+  });
+
+  it('reuses the nonce created by the server entry', async () => {
+    const { securityHeadersMiddleware } = await import('@/start');
+    const next = vi.fn(async () => ({ response: new Response('ok') }));
+
+    const result = await (securityHeadersMiddleware as ExplicitAny).handler({
+      context: { requestId: 'request-1', cspNonce: 'entry-nonce' },
+      next,
+    });
+
+    expect(result.response.headers.get('Content-Security-Policy')).toContain(
+      "script-src 'self' 'nonce-entry-nonce'"
     );
   });
 

@@ -531,7 +531,7 @@ describe('server config accessors', () => {
 
   it('defaults the Resend webhook body limit to one megabyte', async () => {
     vi.stubEnv('RESEND_API_KEY', makeTestSecret('resend-api-key'));
-    vi.stubEnv('EMAIL_FROM', 'Start UI <noreply@example.com>');
+    vi.stubEnv('EMAIL_FROM', 'Selective Designer <noreply@example.com>');
     vi.stubEnv('RESEND_WEBHOOK_MAX_BYTES', undefined);
     const { getEmailConfig } =
       await import('@/modules/kernel/infrastructure/config/email');
@@ -541,7 +541,7 @@ describe('server config accessors', () => {
 
   it('parses an explicit Resend webhook body limit', async () => {
     vi.stubEnv('RESEND_API_KEY', makeTestSecret('resend-api-key'));
-    vi.stubEnv('EMAIL_FROM', 'Start UI <noreply@example.com>');
+    vi.stubEnv('EMAIL_FROM', 'Selective Designer <noreply@example.com>');
     vi.stubEnv('RESEND_WEBHOOK_MAX_BYTES', '4096');
     const { getEmailConfig } =
       await import('@/modules/kernel/infrastructure/config/email');
@@ -551,7 +551,7 @@ describe('server config accessors', () => {
 
   it('parses an explicit SMTP email server', async () => {
     vi.stubEnv('RESEND_API_KEY', makeTestSecret('resend-api-key'));
-    vi.stubEnv('EMAIL_FROM', 'Start UI <noreply@example.com>');
+    vi.stubEnv('EMAIL_FROM', 'Selective Designer <noreply@example.com>');
     vi.stubEnv('EMAIL_SERVER', 'smtp://127.0.0.1:1025');
     const { getEmailConfig } =
       await import('@/modules/kernel/infrastructure/config/email');
@@ -561,7 +561,7 @@ describe('server config accessors', () => {
 
   it('does not require Resend credentials for SMTP email delivery', async () => {
     vi.stubEnv('RESEND_API_KEY', undefined);
-    vi.stubEnv('EMAIL_FROM', 'Start UI <noreply@example.com>');
+    vi.stubEnv('EMAIL_FROM', 'Selective Designer <noreply@example.com>');
     vi.stubEnv('EMAIL_SERVER', 'smtp://127.0.0.1:1025');
     const { getEmailConfig } =
       await import('@/modules/kernel/infrastructure/config/email');
@@ -574,7 +574,7 @@ describe('server config accessors', () => {
 
   it('requires Resend credentials when SMTP email delivery is not configured', async () => {
     vi.stubEnv('RESEND_API_KEY', undefined);
-    vi.stubEnv('EMAIL_FROM', 'Start UI <noreply@example.com>');
+    vi.stubEnv('EMAIL_FROM', 'Selective Designer <noreply@example.com>');
     const { getEmailConfig } =
       await import('@/modules/kernel/infrastructure/config/email');
     const { ConfigurationError } =
@@ -586,7 +586,7 @@ describe('server config accessors', () => {
 
   it('rejects unsupported email server protocols', async () => {
     vi.stubEnv('RESEND_API_KEY', makeTestSecret('resend-api-key'));
-    vi.stubEnv('EMAIL_FROM', 'Start UI <noreply@example.com>');
+    vi.stubEnv('EMAIL_FROM', 'Selective Designer <noreply@example.com>');
     vi.stubEnv('EMAIL_SERVER', 'https://mail.example.com');
     const { getEmailConfig } =
       await import('@/modules/kernel/infrastructure/config/email');
@@ -600,7 +600,7 @@ describe('server config accessors', () => {
   it('rejects SMTP email server configuration in production', async () => {
     vi.stubEnv('NODE_ENV', 'production');
     vi.stubEnv('RESEND_API_KEY', makeTestSecret('resend-api-key'));
-    vi.stubEnv('EMAIL_FROM', 'Start UI <noreply@example.com>');
+    vi.stubEnv('EMAIL_FROM', 'Selective Designer <noreply@example.com>');
     vi.stubEnv('EMAIL_SERVER', 'smtp://127.0.0.1:1025');
     const { getEmailConfig } =
       await import('@/modules/kernel/infrastructure/config/email');
@@ -615,7 +615,7 @@ describe('server config accessors', () => {
     vi.stubEnv('NODE_ENV', 'production');
     vi.stubEnv('RESEND_API_KEY', makeTestSecret('resend-api-key'));
     vi.stubEnv('RESEND_WEBHOOK_SECRET', 'REPLACE ME');
-    vi.stubEnv('EMAIL_FROM', 'Start UI <noreply@example.com>');
+    vi.stubEnv('EMAIL_FROM', 'Selective Designer <noreply@example.com>');
     const { getEmailConfig } =
       await import('@/modules/kernel/infrastructure/config/email');
     const { ConfigurationError } =

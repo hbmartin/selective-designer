@@ -13,7 +13,7 @@ const testState = vi.hoisted(() => {
     resendWebhookSecret: 'resend-webhook-secret', // pragma: allowlist secret
     resendWebhookMaxBytes: 1_000_000,
     server: undefined as string | undefined,
-    from: 'Start UI <noreply@example.com>',
+    from: 'Selective Designer <noreply@example.com>',
     deliveryDisabled: true,
   });
 

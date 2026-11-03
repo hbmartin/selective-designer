@@ -1,8 +1,8 @@
 {
-  "name": "start-ui-web",
+  "name": "selective-designer",
   "version": "4.0.0",
   "private": true,
-  "description": "Opinionated TanStack Start starter",
+  "description": "Place selected products and materials into architectural images and compare AI renders",
   "homepage": "https://github.com/hbmartin/start-ui-web#readme",
   "bugs": {
     "url": "https://github.com/hbmartin/start-ui-web/issues"

@@ -24,7 +24,7 @@ const testState = vi.hoisted(() => {
     resendApiKey: makeSecret('resend-api-key'),
     resendWebhookSecret: makeSecret('resend-webhook'),
     resendWebhookMaxBytes: 1_000_000,
-    from: 'Start UI <noreply@example.com>',
+    from: 'Selective Designer <noreply@example.com>',
     deliveryDisabled: false,
   });
 
@@ -196,7 +196,7 @@ describe('EmailGatewayResend', () => {
     });
     expect(resend.emails.send).toHaveBeenCalledWith(
       {
-        from: 'Start UI <noreply@example.com>',
+        from: 'Selective Designer <noreply@example.com>',
         to: 'user@example.com',
         subject: 'Login code',
         react: template,

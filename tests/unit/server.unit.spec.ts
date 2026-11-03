@@ -41,8 +41,33 @@ describe('server entry', () => {
       expect.objectContaining({
         context: {
           requestId: expect.any(String),
+          cspNonce: expect.any(String),
         },
       })
+    );
+  });
+
+  it('rewrites the CSP nonce placeholder after Start returns the response', async () => {
+    mocks.handlerFetch.mockImplementationOnce(
+      async () =>
+        new Response('<script nonce="__START_UI_CSP_NONCE__"></script>', {
+          headers: { 'Content-Type': 'text/html; charset=utf-8' },
+        })
+    );
+    const server = (await import('@/server')).default as {
+      fetch: (request: Request) => Promise<Response>;
+    };
+
+    const response = await server.fetch(new Request('https://app.example/'));
+    const context = (
+      mocks.handlerFetch.mock.calls[0] as unknown as [
+        Request,
+        { context: { cspNonce: string } },
+      ]
+    )[1].context;
+
+    await expect(response.text()).resolves.toBe(
+      `<script nonce="${context.cspNonce}"></script>`
     );
   });
 

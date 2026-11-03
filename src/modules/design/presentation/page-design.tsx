@@ -57,6 +57,7 @@ export const PageDesign = (props: { designId: DesignId }) => {
               <Button
                 variant="ghost"
                 size="sm"
+                nativeButton={false}
                 render={
                   // oxlint-disable-next-line jsx-a11y/anchor-has-content -- Button renders the label.
                   <a href={`/api/images/${design.baseImage.id}/download`} />

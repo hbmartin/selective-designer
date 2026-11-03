@@ -33,8 +33,15 @@ export const handleImageDownload = async (
   });
   return match(result)
     .with(Result.P.Error(P._), () => status(502))
-    .with(Result.P.Ok({ type: 'image_download_url', url: P.select() }), (url) =>
-      Response.redirect(url, 302)
+    .with(
+      Result.P.Ok({ type: 'image_download_url', url: P.select() }),
+      // Not Response.redirect(): its headers are immutable and the security
+      // header middleware must still be able to set headers.
+      (url) =>
+        new Response(null, {
+          status: 302,
+          headers: { Location: url, 'Cache-Control': 'no-store' },
+        })
     )
     .with(Result.P.Ok({ type: 'image_not_found' }), () => status(404))
     .with(Result.P.Ok({ type: 'design_forbidden' }), () => status(403))

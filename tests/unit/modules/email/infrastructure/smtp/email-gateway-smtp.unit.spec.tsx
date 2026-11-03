@@ -30,7 +30,7 @@ const testState = vi.hoisted(() => {
     resendWebhookSecret: makeSecret('resend-webhook'),
     resendWebhookMaxBytes: 1_000_000,
     server: 'smtp://127.0.0.1:1025',
-    from: 'Start UI <noreply@example.com>',
+    from: 'Selective Designer <noreply@example.com>',
     deliveryDisabled: false,
   });
 

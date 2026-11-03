@@ -19,9 +19,9 @@ import type {
 } from '@/platform/telemetry';
 import { hashUserIdForMetrics } from '@/platform/telemetry/metadata';
 
-const tracer = trace.getTracer('start-ui-web');
-const meter = metrics.getMeter('start-ui-web');
-const otelLogger = logs.getLogger('start-ui-web');
+const tracer = trace.getTracer('selective-designer');
+const meter = metrics.getMeter('selective-designer');
+const otelLogger = logs.getLogger('selective-designer');
 
 const counters = new Map<string, ReturnType<typeof meter.createCounter>>();
 const histograms = new Map<string, ReturnType<typeof meter.createHistogram>>();

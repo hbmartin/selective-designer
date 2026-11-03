@@ -8,7 +8,7 @@ const testState = vi.hoisted(() => {
     resendApiKey: makeSecret('resend-api-key'),
     resendWebhookSecret: makeSecret('resend-webhook'),
     resendWebhookMaxBytes: 1_000_000,
-    from: 'Start UI <noreply@example.com>',
+    from: 'Selective Designer <noreply@example.com>',
     deliveryDisabled: false,
   });
 

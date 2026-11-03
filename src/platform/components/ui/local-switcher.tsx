@@ -28,6 +28,9 @@ export const LocalSwitcher = (props: { iconOnly?: boolean }) => {
     });
   };
 
+  // Nothing to switch between while the app ships a single language.
+  if (AVAILABLE_LANGUAGES.length < 2) return null;
+
   return (
     <DropdownMenu>
       <DropdownMenuTrigger

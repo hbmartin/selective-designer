@@ -34,7 +34,7 @@ const Render = () => {
     <Button
       render={
         <a
-          href="https://start-ui.com/"
+          href="https://example.com/"
           target="_blank"
           rel="noopener noreferrer"
         />

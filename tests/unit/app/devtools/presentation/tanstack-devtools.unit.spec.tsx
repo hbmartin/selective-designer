@@ -86,7 +86,7 @@ describe('TanStackDevtoolsPanel', () => {
 
     expect(getEnvHintTitlePrefix()).toBe('[LOCAL]');
     expect(getPageTitle(undefined, getEnvHintTitlePrefix())).toBe(
-      '[LOCAL] Start UI'
+      '[LOCAL] Selective Designer'
     );
   });
 });

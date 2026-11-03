@@ -81,7 +81,7 @@ const Default = () => (
           <DataListCell>
             <DataListText className="font-medium">
               <a
-                href="https://start-ui.com/"
+                href="https://example.com/"
                 target="_blank"
                 rel="noopener noreferrer"
               >
@@ -139,7 +139,7 @@ const WithHeader = () => (
           <DataListCell>
             <DataListText className="font-medium">
               <a
-                href="https://start-ui.com/"
+                href="https://example.com/"
                 target="_blank"
                 rel="noopener noreferrer"
               >
@@ -240,7 +240,7 @@ const RowResults = () => (
           <DataListCell>
             <DataListText className="font-medium">
               <a
-                href="https://start-ui.com/"
+                href="https://example.com/"
                 target="_blank"
                 rel="noopener noreferrer"
               >

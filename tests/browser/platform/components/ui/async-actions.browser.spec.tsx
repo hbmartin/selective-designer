@@ -12,7 +12,6 @@ import {
 import { LocalSwitcher } from '@/platform/components/ui/local-switcher';
 import { SearchButton } from '@/platform/components/ui/search-button';
 import { SearchInput } from '@/platform/components/ui/search-input';
-import i18n from '@/platform/lib/i18n';
 
 const SearchHarness = (props: {
   persistSearch: (value: string) => Promise<void>;
@@ -145,29 +144,11 @@ test('retry actions expose localized pending feedback and prevent duplicates', a
   await expect.element(retryButton).not.toBeDisabled();
 });
 
-test('locale changes expose localized transition feedback', async () => {
-  const user = setupUser();
-  let resolveLanguageChange!: () => void;
-  const changeLanguage = vi.spyOn(i18n, 'changeLanguage').mockImplementation(
-    () =>
-      new Promise((resolve) => {
-        resolveLanguageChange = () => resolve(i18n.t);
-      })
-  );
+test('hides the language switcher while only one language ships', async () => {
+  await render(<LocalSwitcher />);
 
-  render(<LocalSwitcher />);
-
-  await user.click(page.getByRole('button'));
-  (page.getByRole('menuitem').nth(1).element() as HTMLElement).click();
-
-  await vi.waitFor(() => expect(changeLanguage).toHaveBeenCalledOnce());
+  await expect.element(page.getByRole('button')).not.toBeInTheDocument();
   await expect
-    .element(page.getByText('Changing language...'))
-    .toBeInTheDocument();
-
-  resolveLanguageChange();
-  await expect
-    .element(page.getByText('Changing language...'))
+    .element(page.getByRole('img', { name: /language/i }))
     .not.toBeInTheDocument();
-  changeLanguage.mockRestore();
 });
