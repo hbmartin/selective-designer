@@ -1,5 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { RotateCwIcon, StarIcon } from 'lucide-react';
+import type { ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
 import { toast } from 'sonner';
 
@@ -19,9 +20,12 @@ import { isTerminalStatus, parseSkipReason } from '../domain/render';
 
 const POLL_MS = 2000;
 
+type ResultActions = (result: RenderResultView) => ReactNode;
+
 const ResultTile = (props: {
   result: RenderResultView;
   preferred: boolean;
+  actions?: ResultActions;
 }) => {
   const { t } = useTranslation(['rendering']);
   const queryClient = useQueryClient();
@@ -82,6 +86,7 @@ const ResultTile = (props: {
           </Badge>
         </span>
       </div>
+      {result.status === 'succeeded' && props.actions?.(result)}
       {skip && (
         <p className="text-xs text-muted-foreground">
           {skip.reason === 'too_many_references'
@@ -115,7 +120,11 @@ const ResultTile = (props: {
   );
 };
 
-const RenderEntry = (props: { render: RenderView; baseImageId: ImageId }) => {
+const RenderEntry = (props: {
+  render: RenderView;
+  baseImageId: ImageId;
+  actions?: ResultActions;
+}) => {
   const { t } = useTranslation(['rendering']);
   const { render } = props;
   return (
@@ -137,6 +146,7 @@ const RenderEntry = (props: { render: RenderView; baseImageId: ImageId }) => {
             key={result.id}
             result={result}
             preferred={render.preferredResultId === result.id}
+            actions={props.actions}
           />
         ))}
       </ul>
@@ -145,7 +155,11 @@ const RenderEntry = (props: { render: RenderView; baseImageId: ImageId }) => {
 };
 
 /** Every render of the design, newest first, polling while any is running. */
-export const RenderHistory = (props: { baseImageId: ImageId }) => {
+export const RenderHistory = (props: {
+  baseImageId: ImageId;
+  /** Per-result actions composed by the route (e.g. continue editing). */
+  resultActions?: ResultActions;
+}) => {
   const { t } = useTranslation(['rendering']);
   const scopeKey = useCurrentScopeKey();
   const rendersQuery = useQuery({
@@ -178,6 +192,7 @@ export const RenderHistory = (props: { baseImageId: ImageId }) => {
               key={render.id}
               render={render}
               baseImageId={props.baseImageId}
+              actions={props.resultActions}
             />
           ))}
         </ol>

@@ -7,6 +7,7 @@ import {
   renderResultPrefer,
   renderResultRetry,
   rendersGet,
+  renderSourceGet,
   renderSubmit,
   renderSubmitBatch,
 } from '../server';
@@ -14,6 +15,7 @@ import {
 export const renderingQueries = createRenderingQueries({
   renderDraftGet,
   renderDraftSave,
+  renderSourceGet,
   renderPlanPreview,
   renderResultNameScheme,
   renderResultPrefer,

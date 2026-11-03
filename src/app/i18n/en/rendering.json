@@ -6,7 +6,9 @@
     "fromSource": "From an earlier result",
     "preferred": "Preferred",
     "retry": "Retry",
-    "outputAlt": "{{model}} result"
+    "outputAlt": "{{model}} result",
+    "edit": "Edit",
+    "continue": "Continue from this result"
   },
   "models": {
     "krea-3": "Krea 3",
@@ -26,5 +28,96 @@
   },
   "errors": {
     "retryFailed": "Could not retry this model."
+  },
+  "editor": {
+    "title": "Edit {{name}}",
+    "fromResult": "Editing a render result",
+    "back": "Back to design",
+    "saving": "Saving…",
+    "saved": "Saved",
+    "unsaved": "Unsaved changes",
+    "draftReloaded": "This draft changed in another tab; showing the latest version.",
+    "saveFailed": "Could not save the draft.",
+    "undo": "Undo",
+    "redo": "Redo",
+    "canvasLabel": "Image editor",
+    "loadingImage": "Loading image…",
+    "imageFailed": "The image could not be loaded."
+  },
+  "tools": {
+    "title": "Tools",
+    "select": "Move",
+    "click": "Select region",
+    "lasso": "Lasso",
+    "brush": "Brush",
+    "brushSize": "Brush size",
+    "saveBrush": "Save brushed region",
+    "clearBrush": "Clear",
+    "hintSelect": "Drag items onto the image, then move, resize or rotate them.",
+    "hintClick": "Click an object in the image to select it as a region.",
+    "hintLasso": "Draw around an area to make a region.",
+    "hintBrush": "Paint over an area, then save it as a region."
+  },
+  "items": {
+    "title": "Mood board",
+    "empty": "Add items to the mood board first.",
+    "place": "Place {{name}}",
+    "notReady": "Cut-out not ready",
+    "swatchHint": "Swatches change a region's material."
+  },
+  "regions": {
+    "title": "Regions",
+    "empty": "No regions yet. Use Select region, Lasso or Brush.",
+    "remove": "Remove",
+    "replace": "Replace with…",
+    "material": "Change material…",
+    "chooseItem": "Choose an item",
+    "chooseSwatch": "Swatch",
+    "materialText": "Or describe the material",
+    "materialPlaceholder": "e.g. white oak boards",
+    "add": "Add"
+  },
+  "edits": {
+    "title": "Edits",
+    "empty": "No edits yet.",
+    "placement": "Place {{item}}",
+    "replacement": "Replace {{region}} with {{item}}",
+    "removal": "Remove {{region}}",
+    "material": "Change {{region}} to {{material}}",
+    "note": "Note",
+    "notePlaceholder": "Optional detail for this edit",
+    "delete": "Delete edit",
+    "unknownItem": "missing item",
+    "unknownRegion": "missing region"
+  },
+  "prompt": {
+    "label": "Notes for every model",
+    "placeholder": "e.g. warm evening light, keep the furniture as is"
+  },
+  "render": {
+    "open": "Render",
+    "needsEdit": "Add at least one edit to render.",
+    "title": "Render with every model",
+    "checking": "Checking the edits…",
+    "willRender": "Will render",
+    "skipped": "Skipped",
+    "tooManyReferences": "Needs {{references}} reference images; takes at most {{limit}}.",
+    "smallItems": "Small targets",
+    "smallItem": "{{item}} is {{width}}×{{height}} px; {{model}} works best from {{minWidth}}×{{minHeight}} px.",
+    "noModels": "No enabled model can take these edits. Remove some reference items.",
+    "problem": {
+      "item_missing": "An item in the edits no longer exists.",
+      "item_not_ready": "{{item}} is still being cut out.",
+      "region_missing": "A region in the edits no longer exists.",
+      "nothing_to_render": "Add at least one edit to render."
+    },
+    "batch": "Batch: try several items in one placement",
+    "batchPlacement": "Placement to vary",
+    "batchOptions": "Items to try",
+    "submit": "Render",
+    "submitBatch": "Render {{count}} variants",
+    "submitted": "Render started.",
+    "outOfDate": "The draft changed; review and render again.",
+    "failed": "Could not start the render."
   }
 }

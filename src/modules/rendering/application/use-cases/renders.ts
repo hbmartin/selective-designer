@@ -2,6 +2,7 @@ import { Result } from '@bloodyowl/boxed';
 
 import {
   type BatchId,
+  type DesignId,
   type ImageId,
   type ParseResult,
   type RenderId,
@@ -69,6 +70,42 @@ const newId = <T>(
   if (parsed.isError()) return Result.Error(parsed.getError());
   return Result.Ok(parsed.get());
 };
+
+// ---- Render sources ------------------------------------------------------
+
+export type RenderSourceView = {
+  imageId: ImageId;
+  designId: DesignId;
+  url: string;
+  width: number;
+  height: number;
+};
+
+export type RenderSourceOutcome =
+  | { type: 'render_source'; source: RenderSourceView }
+  | RenderingForbidden
+  | ImageNotFound;
+
+/** The image an editor works on (base image or a render result), signed. */
+export async function getRenderSource(
+  deps: RenderingUseCaseDeps,
+  input: { currentUserId: UserId; imageId: ImageId }
+): Promise<RenderingResult<RenderSourceOutcome>> {
+  const owned = await loadOwnedSource(deps, { ...input, action: 'read' });
+  if (owned.isError()) return Result.Error(owned.getError());
+  const outcome = owned.get();
+  if (outcome.type !== 'ok') return Result.Ok(outcome);
+  const signed = await deps.objectStorage.createSignedReadUrl({
+    objectKey: outcome.source.workingKey,
+    expiresInSeconds: SIGNED_VIEW_URL_SECONDS,
+  });
+  if (signed.isError()) return Result.Error(signed.getError());
+  const { imageId, designId, width, height } = outcome.source;
+  return Result.Ok({
+    type: 'render_source',
+    source: { imageId, designId, url: signed.get().url, width, height },
+  });
+}
 
 // ---- Drafts -------------------------------------------------------------
 

@@ -26,6 +26,8 @@ export const PageDesign = (props: {
   aside?: ReactNode;
   /** Replaces the plain base image (e.g. with region tools). */
   renderBaseImage?: (image: DesignImageView) => ReactNode;
+  /** Extra top-bar actions composed by the route (e.g. open the editor). */
+  actions?: ReactNode;
 }) => {
   const { t } = useTranslation(['design']);
   const scopeKey = useCurrentScopeKey();
@@ -62,6 +64,7 @@ export const PageDesign = (props: {
         endActions={
           design && (
             <>
+              {props.actions}
               <Button
                 variant="ghost"
                 size="sm"

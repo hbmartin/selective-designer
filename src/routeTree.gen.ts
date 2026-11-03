@@ -34,6 +34,7 @@ import { Route as ManagerUsersIndexRouteImport } from './routes/manager/users/in
 import { Route as ApiDevEmailTemplateRouteImport } from './routes/api/dev.email.$template'
 import { Route as ApiImagesImageIdDownloadRouteImport } from './routes/api/images.$imageId.download'
 import { Route as AppDesignsDesignIdIndexRouteImport } from './routes/app/designs/$designId/index'
+import { Route as AppDesignsDesignIdEditRouteImport } from './routes/app/designs/$designId/edit'
 import { Route as ManagerUsersIdIndexRouteImport } from './routes/manager/users/$id.index'
 import { Route as ManagerUsersNewIndexRouteImport } from './routes/manager/users/new.index'
 import { Route as ApiTelemetryOtelV1MetricsRouteImport } from './routes/api/telemetry.otel.v1.metrics'
@@ -167,6 +168,11 @@ const AppDesignsDesignIdIndexRoute = AppDesignsDesignIdIndexRouteImport.update({
   path: '/designs/$designId/',
   getParentRoute: () => AppRouteRoute,
 } as any)
+const AppDesignsDesignIdEditRoute = AppDesignsDesignIdEditRouteImport.update({
+  id: '/designs/$designId/edit',
+  path: '/designs/$designId/edit',
+  getParentRoute: () => AppRouteRoute,
+} as any)
 const ManagerUsersIdIndexRoute = ManagerUsersIdIndexRouteImport.update({
   id: '/users/$id/',
   path: '/users/$id/',
@@ -221,6 +227,7 @@ export interface FileRoutesByFullPath {
   '/manager/users/': typeof ManagerUsersIndexRoute
   '/api/dev/email/$template': typeof ApiDevEmailTemplateRoute
   '/api/images/$imageId/download': typeof ApiImagesImageIdDownloadRoute
+  '/app/designs/$designId/edit': typeof AppDesignsDesignIdEditRoute
   '/app/designs/$designId/': typeof AppDesignsDesignIdIndexRoute
   '/manager/users/$id/': typeof ManagerUsersIdIndexRoute
   '/manager/users/new/': typeof ManagerUsersNewIndexRoute
@@ -249,6 +256,7 @@ export interface FileRoutesByTo {
   '/manager/users': typeof ManagerUsersIndexRoute
   '/api/dev/email/$template': typeof ApiDevEmailTemplateRoute
   '/api/images/$imageId/download': typeof ApiImagesImageIdDownloadRoute
+  '/app/designs/$designId/edit': typeof AppDesignsDesignIdEditRoute
   '/app/designs/$designId': typeof AppDesignsDesignIdIndexRoute
   '/manager/users/$id': typeof ManagerUsersIdIndexRoute
   '/manager/users/new': typeof ManagerUsersNewIndexRoute
@@ -282,6 +290,7 @@ export interface FileRoutesById {
   '/manager/users/': typeof ManagerUsersIndexRoute
   '/api/dev/email/$template': typeof ApiDevEmailTemplateRoute
   '/api/images/$imageId/download': typeof ApiImagesImageIdDownloadRoute
+  '/app/designs/$designId/edit': typeof AppDesignsDesignIdEditRoute
   '/app/designs/$designId/': typeof AppDesignsDesignIdIndexRoute
   '/manager/users/$id/': typeof ManagerUsersIdIndexRoute
   '/manager/users/new/': typeof ManagerUsersNewIndexRoute
@@ -316,6 +325,7 @@ export interface FileRouteTypes {
     | '/manager/users/'
     | '/api/dev/email/$template'
     | '/api/images/$imageId/download'
+    | '/app/designs/$designId/edit'
     | '/app/designs/$designId/'
     | '/manager/users/$id/'
     | '/manager/users/new/'
@@ -344,6 +354,7 @@ export interface FileRouteTypes {
     | '/manager/users'
     | '/api/dev/email/$template'
     | '/api/images/$imageId/download'
+    | '/app/designs/$designId/edit'
     | '/app/designs/$designId'
     | '/manager/users/$id'
     | '/manager/users/new'
@@ -376,6 +387,7 @@ export interface FileRouteTypes {
     | '/manager/users/'
     | '/api/dev/email/$template'
     | '/api/images/$imageId/download'
+    | '/app/designs/$designId/edit'
     | '/app/designs/$designId/'
     | '/manager/users/$id/'
     | '/manager/users/new/'
@@ -579,6 +591,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AppDesignsDesignIdIndexRouteImport
       parentRoute: typeof AppRouteRoute
     }
+    '/app/designs/$designId/edit': {
+      id: '/app/designs/$designId/edit'
+      path: '/designs/$designId/edit'
+      fullPath: '/app/designs/$designId/edit'
+      preLoaderRoute: typeof AppDesignsDesignIdEditRouteImport
+      parentRoute: typeof AppRouteRoute
+    }
     '/manager/users/$id/': {
       id: '/manager/users/$id/'
       path: '/users/$id'
@@ -621,6 +640,7 @@ interface AppRouteRouteChildren {
   AppIndexRoute: typeof AppIndexRoute
   AppAccountIndexRoute: typeof AppAccountIndexRoute
   AppDesignsIndexRoute: typeof AppDesignsIndexRoute
+  AppDesignsDesignIdEditRoute: typeof AppDesignsDesignIdEditRoute
   AppDesignsDesignIdIndexRoute: typeof AppDesignsDesignIdIndexRoute
 }
 
@@ -628,6 +648,7 @@ const AppRouteRouteChildren: AppRouteRouteChildren = {
   AppIndexRoute: AppIndexRoute,
   AppAccountIndexRoute: AppAccountIndexRoute,
   AppDesignsIndexRoute: AppDesignsIndexRoute,
+  AppDesignsDesignIdEditRoute: AppDesignsDesignIdEditRoute,
   AppDesignsDesignIdIndexRoute: AppDesignsDesignIdIndexRoute,
 }
 

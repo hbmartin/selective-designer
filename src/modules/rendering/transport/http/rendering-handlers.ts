@@ -8,7 +8,10 @@ import {
 } from '@/modules/kernel/domain/ids';
 import { unwrapApplicationResult } from '@/modules/kernel/transport/tanstack/result-mapper';
 
-import type { RenderView } from '../../application/use-cases/renders';
+import type {
+  RenderSourceView,
+  RenderView,
+} from '../../application/use-cases/renders';
 import type { RecipeProblem } from '../../application/use-cases/resolve-recipe';
 import { zEditSet } from '../../domain/edit-set';
 import type { Draft } from '../../domain/render';
@@ -109,6 +112,21 @@ export const createRenderingHandlers = ({
 }: {
   getUseCases: (ctx: ProtectedContext) => RenderingUseCases;
 }) => ({
+  getRenderSource: (
+    ctx: ProtectedContext,
+    data: z.output<ReturnType<typeof zImageInput>>
+  ) =>
+    unwrapApplicationResult(
+      getUseCases(ctx).getRenderSource({
+        currentUserId: ctx.scope.userId,
+        imageId: data.imageId,
+      }),
+      {
+        ...access,
+        render_source: (outcome: { source: RenderSourceView }) =>
+          outcome.source,
+      }
+    ),
   getDraft: (
     ctx: ProtectedContext,
     data: z.output<ReturnType<typeof zImageInput>>

@@ -1,6 +1,7 @@
 export type * from './application/ports/ports';
 export type {
   RenderResultView,
+  RenderSourceView,
   RenderView,
 } from './application/use-cases/renders';
 export type { RecipeProblem } from './application/use-cases/resolve-recipe';

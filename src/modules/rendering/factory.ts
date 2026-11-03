@@ -6,6 +6,7 @@ import {
 } from './application/use-cases/pipeline';
 import {
   getDraft,
+  getRenderSource,
   listRenders,
   markPreferredResult,
   nameScheme,
@@ -25,6 +26,8 @@ type Input<TFn extends (deps: never, input: never) => unknown> =
 
 export function createRenderingUseCases(deps: RenderingUseCaseDeps) {
   return {
+    getRenderSource: (input: Input<typeof getRenderSource>) =>
+      getRenderSource(deps, input),
     getDraft: (input: Input<typeof getDraft>) => getDraft(deps, input),
     saveDraft: (input: Input<typeof saveDraft>) => saveDraft(deps, input),
     previewPlan: (input: Input<typeof previewPlan>) => previewPlan(deps, input),

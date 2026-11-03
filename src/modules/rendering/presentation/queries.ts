@@ -7,6 +7,7 @@ import type { ServerFunctionFacade } from '@/platform/lib/tanstack-start/server-
 
 import type { ImageId, ScopeKey } from '@/modules/kernel/domain/ids';
 
+import type { EditSet } from '../domain/edit-set';
 import type { RenderingServerFunctions } from '../server';
 
 export type RenderingQueryFacade =
@@ -18,6 +19,16 @@ export const createRenderingQueries = <TFacade extends RenderingQueryFacade>(
   const all = () => ['rendering', 'v1'] as const;
   return {
     all,
+    source: (input: { imageId: ImageId } & ScopedQueryInput<ScopeKey>) => ({
+      ...scopedEntityQueryOptions({
+        baseKey: (scopeKey: ScopeKey) =>
+          [...all(), { scopeKey }, 'source'] as const,
+        input,
+        queryFn: (data) => facade.renderSourceGet({ data }),
+      }),
+      // Signed URLs last an hour; refresh well before that.
+      staleTime: 20 * 60 * 1000,
+    }),
     draft: (input: { imageId: ImageId } & ScopedQueryInput<ScopeKey>) =>
       scopedEntityQueryOptions({
         baseKey: (scopeKey: ScopeKey) =>
@@ -32,15 +43,20 @@ export const createRenderingQueries = <TFacade extends RenderingQueryFacade>(
         input,
         queryFn: (data) => facade.rendersGet({ data }),
       }),
+    /** Read-only preview of which models will run (POST: edit sets are large). */
+    plan: (
+      input: { imageId: ImageId; editSet: EditSet } & ScopedQueryInput<ScopeKey>
+    ) =>
+      scopedEntityQueryOptions({
+        baseKey: (scopeKey: ScopeKey) =>
+          [...all(), { scopeKey }, 'plan'] as const,
+        input,
+        queryFn: (data) => facade.renderPlanPreview({ data }),
+      }),
     saveDraft: () =>
       serverMutationOptions({
         mutationKey: [...all(), 'saveDraft'],
         mutationFn: facade.renderDraftSave,
-      }),
-    previewPlan: () =>
-      serverMutationOptions({
-        mutationKey: [...all(), 'previewPlan'],
-        mutationFn: facade.renderPlanPreview,
       }),
     submit: () =>
       serverMutationOptions({

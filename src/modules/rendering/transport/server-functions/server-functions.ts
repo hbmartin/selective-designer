@@ -57,6 +57,15 @@ const runMutation = createServerFunctionInvoker({
   selectRunner: (deps) => deps.withProtectedMutation,
 });
 
+export const renderSourceGet = createServerFn({ method: 'GET' })
+  .validator(zImageInput())
+  .handler(async ({ data }) =>
+    runProtected.withOperation('rendering.sourceGet')(
+      data,
+      ({ handlers }, ctx, input) => handlers.getRenderSource(ctx, input)
+    )
+  );
+
 export const renderDraftGet = createServerFn({ method: 'GET' })
   .validator(zImageInput())
   .handler(async ({ data }) =>
@@ -143,6 +152,7 @@ export const renderResultNameScheme = createServerFn({ method: 'POST' })
   );
 
 export type RenderingServerFunctions = {
+  renderSourceGet: typeof renderSourceGet;
   renderDraftGet: typeof renderDraftGet;
   renderDraftSave: typeof renderDraftSave;
   renderPlanPreview: typeof renderPlanPreview;

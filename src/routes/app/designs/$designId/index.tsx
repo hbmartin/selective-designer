@@ -1,4 +1,8 @@
-import { createFileRoute } from '@tanstack/react-router';
+import { createFileRoute, Link } from '@tanstack/react-router';
+import { PencilIcon } from 'lucide-react';
+import { useTranslation } from 'react-i18next';
+
+import { Button } from '@/platform/components/ui/button';
 
 import { designQueries } from '@/modules/design/client';
 import { PageDesign } from '@/modules/design/presentation';
@@ -25,11 +29,24 @@ export const Route = createFileRoute('/app/designs/$designId/')({
 });
 
 function RouteComponent() {
+  const { t } = useTranslation(['rendering']);
   const { designId } = Route.useParams();
   const id = parseRouteDesignId(designId);
   return (
     <PageDesign
       designId={id}
+      actions={
+        <Button
+          size="sm"
+          nativeButton={false}
+          render={
+            <Link to="/app/designs/$designId/edit" params={{ designId }} />
+          }
+        >
+          <PencilIcon />
+          {t('rendering:history.edit')}
+        </Button>
+      }
       aside={<MoodboardPanel designId={id} />}
       renderBaseImage={(image) => (
         <>
@@ -39,7 +56,27 @@ function RouteComponent() {
             width={image.working.width}
             height={image.working.height}
           />
-          <RenderHistory baseImageId={image.id} />
+          <RenderHistory
+            baseImageId={image.id}
+            resultActions={(result) =>
+              result.outputImageId ? (
+                <Button
+                  size="xs"
+                  variant="ghost"
+                  nativeButton={false}
+                  render={
+                    <Link
+                      to="/app/designs/$designId/edit"
+                      params={{ designId }}
+                      search={{ sourceImageId: result.outputImageId }}
+                    />
+                  }
+                >
+                  {t('rendering:history.continue')}
+                </Button>
+              ) : null
+            }
+          />
         </>
       )}
     />

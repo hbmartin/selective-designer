@@ -245,6 +245,37 @@ const renderedIds = (outcome: { type: string; renderIds?: string[] }) => {
   return (outcome.renderIds ?? []) as RenderId[];
 };
 
+describe('render sources', () => {
+  it('signs the working image for its owner and hides it from others', async () => {
+    const ctx = setup();
+    expect(
+      okValue(
+        await ctx.useCases.getRenderSource({
+          currentUserId: ownerId,
+          imageId: baseImageId,
+        })
+      )
+    ).toEqual({
+      type: 'render_source',
+      source: {
+        imageId: baseImageId,
+        designId,
+        url: expect.stringContaining('working-images/base.png'),
+        width: 40,
+        height: 20,
+      },
+    });
+    expect(
+      okValue(
+        await ctx.useCases.getRenderSource({
+          currentUserId: strangerId,
+          imageId: baseImageId,
+        })
+      )
+    ).toEqual({ type: 'image_not_found' });
+  });
+});
+
 describe('drafts', () => {
   it('starts empty at revision 0 and is private to the owner', async () => {
     const ctx = setup();

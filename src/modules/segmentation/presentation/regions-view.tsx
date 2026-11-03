@@ -17,15 +17,9 @@ import { useCurrentScopeKey } from '@/modules/auth/client';
 import type { ImageId } from '@/modules/kernel/domain/ids';
 
 import { RegionOverlay } from './region-overlay';
+import { useRegionsPolling } from './use-regions-polling';
 import { segmentationQueries } from './wired-queries';
 import type { RegionView } from '../application/use-cases/regions';
-
-/**
- * Poll while eager detection may still be running: until detections appear,
- * for at most two minutes after this view mounted (independent of clocks).
- */
-const DETECTION_WINDOW_MS = 2 * 60 * 1000;
-const POLL_MS = 3000;
 
 export type RegionsViewProps = {
   imageId: ImageId;
@@ -45,16 +39,12 @@ export const RegionsView = (props: RegionsViewProps) => {
   const [selectMode, setSelectMode] = useState(false);
   const [text, setText] = useState('');
   const [activeId, setActiveId] = useState<string | null>(null);
-  const [mountedAt] = useState(() => Date.now());
+  const regionsPolling = useRegionsPolling();
   const [showAll, setShowAll] = useState(false);
 
   const regionsQuery = useQuery({
     ...segmentationQueries.regions({ scopeKey, imageId: props.imageId }),
-    refetchInterval: (query) =>
-      !query.state.data?.some((region) => region.source === 'detection') &&
-      Date.now() - mountedAt < DETECTION_WINDOW_MS
-        ? POLL_MS
-        : false,
+    refetchInterval: regionsPolling,
   });
   const invalidate = () =>
     queryClient.invalidateQueries({ queryKey: segmentationQueries.all() });

@@ -2,6 +2,13 @@ export { createRenderRepository } from './infrastructure/drizzle/render-reposito
 export { createPngMaskCompositor } from './infrastructure/masks/png-mask-compositor';
 export { recordedSettings } from './infrastructure/providers/fal-image-models';
 export {
+  addEdit,
+  createDraftStore,
+  removeEdit,
+  setPrompt,
+  updateEdit,
+} from './presentation/editor/draft-store';
+export {
   MAX_POLLS,
   pollDelayMs,
   renderResultWorkflow,
