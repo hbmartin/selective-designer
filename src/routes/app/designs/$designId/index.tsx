@@ -1,11 +1,11 @@
 import { createFileRoute, Link } from '@tanstack/react-router';
-import { PencilIcon } from 'lucide-react';
+import { CopyPlusIcon, PencilIcon } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 
 import { Button } from '@/platform/components/ui/button';
 
 import { designQueries } from '@/modules/design/client';
-import { PageDesign } from '@/modules/design/presentation';
+import { CreateDesignDialog, PageDesign } from '@/modules/design/presentation';
 import { moodboardQueries } from '@/modules/moodboard/client';
 import { MoodboardPanel } from '@/modules/moodboard/presentation';
 import { RenderHistory } from '@/modules/rendering/presentation';
@@ -29,23 +29,31 @@ export const Route = createFileRoute('/app/designs/$designId/')({
 });
 
 function RouteComponent() {
-  const { t } = useTranslation(['rendering']);
+  const { t } = useTranslation(['rendering', 'design']);
   const { designId } = Route.useParams();
   const id = parseRouteDesignId(designId);
   return (
     <PageDesign
       designId={id}
       actions={
-        <Button
-          size="sm"
-          nativeButton={false}
-          render={
-            <Link to="/app/designs/$designId/edit" params={{ designId }} />
-          }
-        >
-          <PencilIcon />
-          {t('rendering:history.edit')}
-        </Button>
+        <>
+          <Button
+            size="sm"
+            nativeButton={false}
+            render={
+              <Link to="/app/designs/$designId/edit" params={{ designId }} />
+            }
+          >
+            <PencilIcon />
+            {t('rendering:history.edit')}
+          </Button>
+          <CreateDesignDialog copyFromDesignId={id}>
+            <Button size="sm" variant="ghost">
+              <CopyPlusIcon />
+              {t('design:detail.revised')}
+            </Button>
+          </CreateDesignDialog>
+        </>
       }
       aside={<MoodboardPanel designId={id} />}
       renderBaseImage={(image) => (
@@ -58,6 +66,21 @@ function RouteComponent() {
           />
           <RenderHistory
             baseImageId={image.id}
+            renderLink={(render) => (
+              <Button
+                size="xs"
+                variant="ghost"
+                nativeButton={false}
+                render={
+                  <Link
+                    to="/app/designs/$designId/renders/$renderId"
+                    params={{ designId, renderId: render.id }}
+                  />
+                }
+              >
+                {t('rendering:history.viewResults')}
+              </Button>
+            )}
             resultActions={(result) =>
               result.outputImageId ? (
                 <Button

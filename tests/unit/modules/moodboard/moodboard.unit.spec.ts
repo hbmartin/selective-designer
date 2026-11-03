@@ -376,3 +376,35 @@ describe('background removal fallback', () => {
     });
   });
 });
+
+describe('copying a mood board', () => {
+  it('copies every item into another design, reusing the image objects', async () => {
+    const ctx = setup();
+    const item = await createProduct(ctx);
+    const target = unwrapParseResult(toDesignId('design-revised'));
+    const outcome = okValue(
+      await ctx
+        .pipeline({
+          removeBackground: async () =>
+            Result.Ok({
+              type: 'background_removal_rejected',
+              reason: 'unused',
+            }),
+        } as unknown as BackgroundRemover)
+        .copyItems({ fromDesignId: item.designId, toDesignId: target })
+    );
+    const copiedId = outcome.itemIds[item.id];
+    expect(copiedId).toBeDefined();
+    expect(copiedId).not.toBe(item.id);
+    const copies = okValue(
+      await ctx.items.repository.listByDesign(target)
+    ).items;
+    expect(copies).toHaveLength(1);
+    expect(copies[0]).toMatchObject({
+      id: copiedId,
+      name: item.name,
+      kind: item.kind,
+      currentVersion: { photo: item.currentVersion.photo },
+    });
+  });
+});

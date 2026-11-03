@@ -13,7 +13,10 @@ import {
   toRenderResultId,
   toUserId,
 } from '@/modules/kernel/domain/ids';
-import { user as userTable } from '@/modules/kernel/infrastructure/db/schema';
+import {
+  image as imageTable,
+  user as userTable,
+} from '@/modules/kernel/infrastructure/db/schema';
 import { unwrapParseResult } from '@/modules/kernel/testing';
 import type { RenderRecipe } from '@/modules/rendering';
 import { createRenderRepository } from '@/modules/rendering/testing';
@@ -247,5 +250,85 @@ describe('RenderRepositoryDrizzle', () => {
     }
     const listed = okValue(await repository.listRenders(designId));
     expect(listed.renders.map((r) => r.id)).toEqual(['render-2', 'render-1']);
+  });
+
+  it('finds the render that produced an image and scores preferred results', async () => {
+    const resultImageId = unwrapParseResult(toImageId('result-1'));
+    await database.db.insert(imageTable).values({
+      id: resultImageId,
+      designId,
+      kind: 'result',
+      originalKey: 'results/r/1/raw.png',
+      originalContentType: 'image/png',
+      originalWidth: 100,
+      originalHeight: 50,
+      workingKey: 'results/r/1/raw.png',
+      workingWidth: 100,
+      workingHeight: 50,
+    });
+    await repository.createRender({
+      id: renderId('render-1'),
+      designId,
+      renderSourceImageId: imageId,
+      batchId: null,
+      batchOptionItemId: null,
+      recipe,
+      results: [
+        {
+          id: resultId('krea'),
+          modelId: 'krea-3',
+          status: 'pending',
+          skipReason: null,
+        },
+        {
+          id: resultId('gpt'),
+          modelId: 'gpt-image-2',
+          status: 'pending',
+          skipReason: null,
+        },
+      ],
+    });
+    await repository.updateResult({
+      resultId: resultId('krea'),
+      changes: { status: 'succeeded', outputImageId: resultImageId },
+    });
+    await repository.updateResult({
+      resultId: resultId('gpt'),
+      changes: { status: 'succeeded' },
+    });
+    await repository.setPreferredResult({
+      renderId: renderId('render-1'),
+      resultId: resultId('krea'),
+    });
+
+    const produced = okValue(
+      await repository.findRenderByOutputImage(resultImageId)
+    );
+    expect(produced.type === 'render_found' && produced.render.id).toBe(
+      'render-1'
+    );
+    expect(
+      okValue(await repository.findRenderByOutputImage(imageId)).type
+    ).toBe('render_not_found');
+
+    expect(okValue(await repository.scorecard(ownerId)).rows).toEqual([
+      {
+        modelId: 'krea-3',
+        succeeded: 1,
+        preferred: 1,
+        rendersWithPreference: 1,
+      },
+      {
+        modelId: 'gpt-image-2',
+        succeeded: 1,
+        preferred: 0,
+        rendersWithPreference: 1,
+      },
+    ]);
+    expect(
+      okValue(
+        await repository.scorecard(unwrapParseResult(toUserId('someone-else')))
+      ).rows
+    ).toEqual([]);
   });
 });

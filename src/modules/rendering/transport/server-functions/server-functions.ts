@@ -13,6 +13,7 @@ import {
   zImageInput,
   zPreferInput,
   zPreviewPlanInput,
+  zRenderInput,
   zResultInput,
   zSaveDraftInput,
   zSchemeInput,
@@ -151,7 +152,36 @@ export const renderResultNameScheme = createServerFn({ method: 'POST' })
     )
   );
 
+export const renderGet = createServerFn({ method: 'GET' })
+  .validator(zRenderInput())
+  .handler(async ({ data }) =>
+    runProtected.withOperation('rendering.get')(
+      data,
+      ({ handlers }, ctx, input) => handlers.getRender(ctx, input)
+    )
+  );
+
+export const renderScorecardGet = createServerFn({ method: 'GET' }).handler(
+  async () =>
+    runProtected.withOperation('rendering.scorecard')(
+      undefined,
+      ({ handlers }, ctx) => handlers.getScorecard(ctx)
+    )
+);
+
+export const renderDraftFromOriginal = createServerFn({ method: 'POST' })
+  .validator(zRenderInput())
+  .handler(async ({ data }) =>
+    runMutation.withOperation('rendering.draftFromOriginal')(
+      data,
+      ({ handlers }, ctx, input) => handlers.draftFromOriginal(ctx, input)
+    )
+  );
+
 export type RenderingServerFunctions = {
+  renderGet: typeof renderGet;
+  renderScorecardGet: typeof renderScorecardGet;
+  renderDraftFromOriginal: typeof renderDraftFromOriginal;
   renderSourceGet: typeof renderSourceGet;
   renderDraftGet: typeof renderDraftGet;
   renderDraftSave: typeof renderDraftSave;

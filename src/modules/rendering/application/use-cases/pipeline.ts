@@ -1,6 +1,8 @@
 import { Result } from '@bloodyowl/boxed';
 
 import {
+  type DesignId,
+  type ImageId,
   type RenderId,
   type RenderResultId,
   toObjectKey,
@@ -14,6 +16,7 @@ import {
   type RenderingResult,
 } from './types';
 import type { ModelRequest } from '../ports/ports';
+import type { Edit } from '../../domain/edit-set';
 import { MODEL_CATALOG } from '../../domain/model-catalog';
 import { buildPrompt } from '../../domain/prompt-builder';
 import { recipeReferences, targetBoxes } from '../../domain/recipe';
@@ -339,4 +342,47 @@ export async function markResultFailed(
   if (saved.isError()) return Result.Error(saved.getError());
   deps.logger.warn({ event: 'rendering.result.failed', details: input });
   return Result.Ok({ type: 'result_marked_failed' });
+}
+
+/**
+ * Copy the placements of one image's draft onto another design's base image
+ * (revised architect image). Region edits cannot move between images and are
+ * counted, not copied; items are remapped to the copied ones.
+ */
+export async function copyDraftPlacements(
+  deps: Pick<RenderingPipelineDeps, 'renderRepository'>,
+  input: {
+    fromImageId: ImageId;
+    toImageId: ImageId;
+    toDesignId: DesignId;
+    itemIds: Record<string, string>;
+  }
+): Promise<
+  RenderingResult<{ type: 'draft_copied'; placements: number; dropped: number }>
+> {
+  const found = await deps.renderRepository.findDraft(input.fromImageId);
+  if (found.isError()) return Result.Error(found.getError());
+  const outcome = found.get();
+  if (outcome.type === 'draft_missing') {
+    return Result.Ok({ type: 'draft_copied', placements: 0, dropped: 0 });
+  }
+  const edits: Edit[] = [];
+  let dropped = 0;
+  for (const edit of outcome.draft.editSet.edits) {
+    const itemId =
+      edit.kind === 'placement' ? input.itemIds[edit.itemId] : undefined;
+    if (edit.kind === 'placement' && itemId) edits.push({ ...edit, itemId });
+    else dropped += 1;
+  }
+  if (edits.length === 0 && !outcome.draft.editSet.prompt) {
+    return Result.Ok({ type: 'draft_copied', placements: 0, dropped });
+  }
+  const saved = await deps.renderRepository.saveDraft({
+    designId: input.toDesignId,
+    renderSourceImageId: input.toImageId,
+    editSet: { edits, prompt: outcome.draft.editSet.prompt },
+    expectedRevision: 0,
+  });
+  if (saved.isError()) return Result.Error(saved.getError());
+  return Result.Ok({ type: 'draft_copied', placements: edits.length, dropped });
 }

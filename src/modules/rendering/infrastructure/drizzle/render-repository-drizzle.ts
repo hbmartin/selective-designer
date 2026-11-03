@@ -1,5 +1,5 @@
 import { type Result as BoxedResult, Result } from '@bloodyowl/boxed';
-import { and, asc, desc, eq, inArray } from 'drizzle-orm';
+import { and, asc, desc, eq, inArray, sql } from 'drizzle-orm';
 
 import type { ProviderCostSource } from '@/modules/kernel';
 import { AppError } from '@/modules/kernel/domain/errors/app-error';
@@ -11,6 +11,7 @@ import {
   toRenderResultId,
 } from '@/modules/kernel/domain/ids';
 import { observeRepository } from '@/modules/kernel/infrastructure/db/observability';
+import { design as designTable } from '@/modules/kernel/infrastructure/db/schema';
 import type { DbLike } from '@/modules/kernel/infrastructure/db/types';
 import type { RenderRepository } from '@/modules/rendering/application/ports/ports';
 import { isModelId, modelIds } from '@/modules/rendering/domain/model-catalog';
@@ -318,6 +319,56 @@ export const createRenderRepository = ({
         const renders = await loadRenders(rows);
         if (renders.isError()) return Result.Error(renders.getError());
         return Result.Ok({ type: 'renders_listed', renders: renders.get() });
+      } catch (error) {
+        return Result.Error(dbError(error));
+      }
+    },
+
+    async findRenderByOutputImage(imageId) {
+      try {
+        const [row] = await db
+          .select({ renderId: resultTable.renderId })
+          .from(resultTable)
+          .where(eq(resultTable.outputImageId, imageId))
+          .limit(1);
+        if (!row) return Result.Ok({ type: 'render_not_found' });
+        const renderId = toRenderId(row.renderId);
+        if (renderId.isError()) return Result.Error(rowError(row.renderId));
+        return await repository.findRender(renderId.get());
+      } catch (error) {
+        return Result.Error(dbError(error));
+      }
+    },
+
+    async scorecard(ownerId) {
+      try {
+        const rows = await db
+          .select({
+            modelId: resultTable.modelId,
+            succeeded:
+              sql<number>`count(*) filter (where ${resultTable.status} = 'succeeded')`.mapWith(
+                Number
+              ),
+            preferred:
+              sql<number>`count(*) filter (where ${renderTable.preferredResultId} = ${resultTable.id})`.mapWith(
+                Number
+              ),
+            rendersWithPreference:
+              sql<number>`count(*) filter (where ${resultTable.status} = 'succeeded' and ${renderTable.preferredResultId} is not null)`.mapWith(
+                Number
+              ),
+          })
+          .from(resultTable)
+          .innerJoin(renderTable, eq(renderTable.id, resultTable.renderId))
+          .innerJoin(designTable, eq(designTable.id, renderTable.designId))
+          .where(eq(designTable.ownerId, ownerId))
+          .groupBy(resultTable.modelId);
+        return Result.Ok({
+          type: 'scorecard',
+          rows: rows.toSorted(
+            (a, b) => catalogIndex(a.modelId) - catalogIndex(b.modelId)
+          ),
+        });
       } catch (error) {
         return Result.Error(dbError(error));
       }

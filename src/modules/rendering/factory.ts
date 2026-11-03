@@ -1,12 +1,16 @@
 import {
+  copyDraftPlacements,
   markResultFailed,
   pollResult,
   runnableResults,
   submitResult,
 } from './application/use-cases/pipeline';
 import {
+  draftFromOriginal,
   getDraft,
+  getRender,
   getRenderSource,
+  getScorecard,
   listRenders,
   markPreferredResult,
   nameScheme,
@@ -39,6 +43,11 @@ export function createRenderingUseCases(deps: RenderingUseCaseDeps) {
     markPreferredResult: (input: Input<typeof markPreferredResult>) =>
       markPreferredResult(deps, input),
     nameScheme: (input: Input<typeof nameScheme>) => nameScheme(deps, input),
+    getRender: (input: Input<typeof getRender>) => getRender(deps, input),
+    getScorecard: (input: Input<typeof getScorecard>) =>
+      getScorecard(deps, input),
+    draftFromOriginal: (input: Input<typeof draftFromOriginal>) =>
+      draftFromOriginal(deps, input),
   };
 }
 export type RenderingUseCases = ReturnType<typeof createRenderingUseCases>;
@@ -52,6 +61,8 @@ export function createRenderingPipelineUseCases(deps: RenderingPipelineDeps) {
     poll: (resultId: Input<typeof pollResult>) => pollResult(deps, resultId),
     markFailed: (input: Input<typeof markResultFailed>) =>
       markResultFailed(deps, input),
+    copyDraftPlacements: (input: Input<typeof copyDraftPlacements>) =>
+      copyDraftPlacements(deps, input),
   };
 }
 export type RenderingPipelineUseCases = ReturnType<

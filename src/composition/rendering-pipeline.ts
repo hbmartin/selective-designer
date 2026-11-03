@@ -125,6 +125,7 @@ export const createRenderInputs = (kernel: InputsKernel): RenderInputs => ({
       region: {
         regionId: outcome.region.id,
         imageId: outcome.region.imageId,
+        carriedFromRegionId: outcome.region.carriedFromRegionId,
         label: outcome.region.label,
         maskKey: outcome.region.maskKey,
         box: outcome.region.box,

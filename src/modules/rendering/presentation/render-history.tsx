@@ -120,25 +120,72 @@ const ResultTile = (props: {
   );
 };
 
+type RenderNode = { render: RenderView; children: RenderNode[] };
+
+/** Renders continued from a result nest under the render that produced it. */
+const buildTree = (renders: readonly RenderView[]): RenderNode[] => {
+  const nodes = new Map(
+    renders.map((render) => [
+      render.id,
+      { render, children: [] as RenderNode[] },
+    ])
+  );
+  const producedBy = new Map<string, RenderView['id']>();
+  for (const render of renders) {
+    for (const result of render.results) {
+      if (result.outputImageId) producedBy.set(result.outputImageId, render.id);
+    }
+  }
+  const roots: RenderNode[] = [];
+  for (const render of renders) {
+    const node = nodes.get(render.id);
+    if (!node) continue;
+    const parentId = producedBy.get(render.renderSourceImageId);
+    const parent = parentId ? nodes.get(parentId) : undefined;
+    if (parent && parent !== node) parent.children.push(node);
+    else roots.push(node);
+  }
+  return roots;
+};
+
 const RenderEntry = (props: {
-  render: RenderView;
-  baseImageId: ImageId;
+  node: RenderNode;
+  depth: number;
   actions?: ResultActions;
+  renderLink?: (render: RenderView) => ReactNode;
 }) => {
   const { t } = useTranslation(['rendering']);
-  const { render } = props;
+  const { render } = props.node;
   return (
-    <li className="flex flex-col gap-2" data-testid="render">
-      <div className="flex items-center gap-2 text-xs text-muted-foreground">
-        <time dateTime={new Date(render.createdAt).toISOString()}>
+    <li
+      className={
+        props.depth > 0
+          ? 'flex flex-col gap-2 border-l-2 pl-3'
+          : 'flex flex-col gap-2'
+      }
+      data-testid="render"
+      data-depth={props.depth}
+    >
+      <div className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
+        {render.sourceUrl && (
+          <img
+            src={render.sourceUrl}
+            alt={t('rendering:history.sourceAlt')}
+            className="h-8 rounded border object-contain"
+          />
+        )}
+        {/* Local time differs between server and browser by design. */}
+        <time
+          dateTime={new Date(render.createdAt).toISOString()}
+          suppressHydrationWarning
+        >
           {new Date(render.createdAt).toLocaleString()}
         </time>
         {render.batchId && (
           <Badge variant="secondary">{t('rendering:history.batch')}</Badge>
         )}
-        {render.renderSourceImageId !== props.baseImageId && (
-          <span>{t('rendering:history.fromSource')}</span>
-        )}
+        {props.depth > 0 && <span>{t('rendering:history.fromSource')}</span>}
+        <span className="ml-auto">{props.renderLink?.(render)}</span>
       </div>
       <ul className="grid grid-cols-2 gap-2">
         {render.results.map((result) => (
@@ -150,6 +197,19 @@ const RenderEntry = (props: {
           />
         ))}
       </ul>
+      {props.node.children.length > 0 && (
+        <ol className="flex flex-col gap-4">
+          {props.node.children.map((child) => (
+            <RenderEntry
+              key={child.render.id}
+              node={child}
+              depth={props.depth + 1}
+              actions={props.actions}
+              renderLink={props.renderLink}
+            />
+          ))}
+        </ol>
+      )}
     </li>
   );
 };
@@ -159,6 +219,8 @@ export const RenderHistory = (props: {
   baseImageId: ImageId;
   /** Per-result actions composed by the route (e.g. continue editing). */
   resultActions?: ResultActions;
+  /** Link to a render's results page, composed by the route. */
+  renderLink?: (render: RenderView) => ReactNode;
 }) => {
   const { t } = useTranslation(['rendering']);
   const scopeKey = useCurrentScopeKey();
@@ -187,12 +249,13 @@ export const RenderHistory = (props: {
         </p>
       ) : (
         <ol className="flex flex-col gap-4">
-          {renders.map((render) => (
+          {buildTree(renders).map((node) => (
             <RenderEntry
-              key={render.id}
-              render={render}
-              baseImageId={props.baseImageId}
+              key={node.render.id}
+              node={node}
+              depth={0}
               actions={props.resultActions}
+              renderLink={props.renderLink}
             />
           ))}
         </ol>

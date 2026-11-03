@@ -96,6 +96,38 @@ export const createFakeRenderRepository = (now: () => Date) => {
         renders: renders.filter((r) => r.designId === designId),
       });
     },
+    async findRenderByOutputImage(imageId) {
+      const render = renders.find((r) =>
+        r.results.some((result) => result.outputImageId === imageId)
+      );
+      return Result.Ok(
+        render ? { type: 'render_found', render } : { type: 'render_not_found' }
+      );
+    },
+    async scorecard() {
+      const counts = new Map<
+        string,
+        { succeeded: number; preferred: number; rendersWithPreference: number }
+      >();
+      for (const render of renders) {
+        for (const result of render.results) {
+          const row = counts.get(result.modelId) ?? {
+            succeeded: 0,
+            preferred: 0,
+            rendersWithPreference: 0,
+          };
+          if (result.status === 'succeeded') row.succeeded += 1;
+          if (render.preferredResultId === result.id) row.preferred += 1;
+          if (result.status === 'succeeded' && render.preferredResultId)
+            row.rendersWithPreference += 1;
+          counts.set(result.modelId, row);
+        }
+      }
+      return Result.Ok({
+        type: 'scorecard',
+        rows: [...counts].map(([modelId, row]) => ({ modelId, ...row })),
+      });
+    },
     async findResult(resultId) {
       const found = findResult(resultId);
       return Result.Ok(

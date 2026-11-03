@@ -17,7 +17,9 @@
     "submitButton": "Create design",
     "missingImage": "Choose a base image first.",
     "unsupportedType": "Use a PNG, JPEG or WebP image.",
-    "errorMessage": "The design could not be created. Please try again."
+    "errorMessage": "The design could not be created. Please try again.",
+    "revisedTitle": "New design from a revised image",
+    "revisedDescription": "Upload the architect's revised image. The mood board and placements are copied from this design; adjust them on the new image."
   },
   "detail": {
     "download": "Download",
@@ -26,7 +28,8 @@
     "archived": "Design archived",
     "unarchived": "Design restored",
     "baseImageAlt": "Base image",
-    "dimensions": "Original size {{width}} × {{height}} px"
+    "dimensions": "Original size {{width}} × {{height}} px",
+    "revised": "New from revised image"
   },
   "upload": {
     "errors": {

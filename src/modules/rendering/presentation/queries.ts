@@ -1,11 +1,12 @@
 import {
   scopedEntityQueryOptions,
+  scopedListQueryOptions,
   type ScopedQueryInput,
   serverMutationOptions,
 } from '@/platform/lib/tanstack-query/scoped-query-options';
 import type { ServerFunctionFacade } from '@/platform/lib/tanstack-start/server-function-types';
 
-import type { ImageId, ScopeKey } from '@/modules/kernel/domain/ids';
+import type { ImageId, RenderId, ScopeKey } from '@/modules/kernel/domain/ids';
 
 import type { EditSet } from '../domain/edit-set';
 import type { RenderingServerFunctions } from '../server';
@@ -52,6 +53,27 @@ export const createRenderingQueries = <TFacade extends RenderingQueryFacade>(
           [...all(), { scopeKey }, 'plan'] as const,
         input,
         queryFn: (data) => facade.renderPlanPreview({ data }),
+      }),
+    render: (input: { renderId: RenderId } & ScopedQueryInput<ScopeKey>) => ({
+      ...scopedEntityQueryOptions({
+        baseKey: (scopeKey: ScopeKey) =>
+          [...all(), { scopeKey }, 'render'] as const,
+        input,
+        queryFn: (data) => facade.renderGet({ data }),
+      }),
+      staleTime: 20 * 60 * 1000,
+    }),
+    scorecard: (input: ScopedQueryInput<ScopeKey>) =>
+      scopedListQueryOptions({
+        baseKey: (scopeKey: ScopeKey) =>
+          [...all(), { scopeKey }, 'scorecard'] as const,
+        input,
+        queryFn: () => facade.renderScorecardGet(),
+      }),
+    draftFromOriginal: () =>
+      serverMutationOptions({
+        mutationKey: [...all(), 'draftFromOriginal'],
+        mutationFn: facade.renderDraftFromOriginal,
       }),
     saveDraft: () =>
       serverMutationOptions({

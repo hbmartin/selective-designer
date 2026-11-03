@@ -4,6 +4,7 @@ import { getImageDownloadUrl } from './application/use-cases/image-access';
 import { listDesigns } from './application/use-cases/list-designs';
 import {
   addImageForPipeline,
+  baseImageOfDesign,
   findImageForPipeline,
 } from './application/use-cases/pipeline-images';
 import { prepareDesignUpload } from './application/use-cases/prepare-design-upload';
@@ -46,6 +47,8 @@ export function createDesignPipelineUseCases(deps: DesignPipelineDeps) {
       findImageForPipeline(deps, imageId),
     addImage: (input: Input<typeof addImageForPipeline>) =>
       addImageForPipeline(deps, input),
+    baseImageOf: (designId: Input<typeof baseImageOfDesign>) =>
+      baseImageOfDesign(deps, designId),
     findOwner: (
       designId: Parameters<
         DesignPipelineDeps['designRepository']['findOwner']

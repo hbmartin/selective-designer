@@ -26,6 +26,7 @@ import { Route as ApiTelemetrySentryTunnelRouteImport } from './routes/api/telem
 import { Route as ApiWebhooksResendRouteImport } from './routes/api/webhooks.resend'
 import { Route as AppAccountIndexRouteImport } from './routes/app/account.index'
 import { Route as AppDesignsIndexRouteImport } from './routes/app/designs/index'
+import { Route as AppScorecardIndexRouteImport } from './routes/app/scorecard/index'
 import { Route as LoginErrorIndexRouteImport } from './routes/login/error.index'
 import { Route as LoginVerifyIndexRouteImport } from './routes/login/verify.index'
 import { Route as ManagerAccountIndexRouteImport } from './routes/manager/account.index'
@@ -34,11 +35,13 @@ import { Route as ManagerUsersIndexRouteImport } from './routes/manager/users/in
 import { Route as ApiDevEmailTemplateRouteImport } from './routes/api/dev.email.$template'
 import { Route as ApiImagesImageIdDownloadRouteImport } from './routes/api/images.$imageId.download'
 import { Route as AppDesignsDesignIdIndexRouteImport } from './routes/app/designs/$designId/index'
+import { Route as AppDesignsDesignIdCompareRouteImport } from './routes/app/designs/$designId/compare'
 import { Route as AppDesignsDesignIdEditRouteImport } from './routes/app/designs/$designId/edit'
 import { Route as ManagerUsersIdIndexRouteImport } from './routes/manager/users/$id.index'
 import { Route as ManagerUsersNewIndexRouteImport } from './routes/manager/users/new.index'
 import { Route as ApiTelemetryOtelV1MetricsRouteImport } from './routes/api/telemetry.otel.v1.metrics'
 import { Route as ApiTelemetryOtelV1TracesRouteImport } from './routes/api/telemetry.otel.v1.traces'
+import { Route as AppDesignsDesignIdRendersRenderIdRouteImport } from './routes/app/designs/$designId/renders/$renderId'
 import { Route as ManagerUsersIdUpdateIndexRouteImport } from './routes/manager/users/$id.update.index'
 
 const IndexRoute = IndexRouteImport.update({
@@ -127,6 +130,11 @@ const AppDesignsIndexRoute = AppDesignsIndexRouteImport.update({
   path: '/designs/',
   getParentRoute: () => AppRouteRoute,
 } as any)
+const AppScorecardIndexRoute = AppScorecardIndexRouteImport.update({
+  id: '/scorecard/',
+  path: '/scorecard/',
+  getParentRoute: () => AppRouteRoute,
+} as any)
 const LoginErrorIndexRoute = LoginErrorIndexRouteImport.update({
   id: '/error/',
   path: '/error/',
@@ -168,6 +176,12 @@ const AppDesignsDesignIdIndexRoute = AppDesignsDesignIdIndexRouteImport.update({
   path: '/designs/$designId/',
   getParentRoute: () => AppRouteRoute,
 } as any)
+const AppDesignsDesignIdCompareRoute =
+  AppDesignsDesignIdCompareRouteImport.update({
+    id: '/designs/$designId/compare',
+    path: '/designs/$designId/compare',
+    getParentRoute: () => AppRouteRoute,
+  } as any)
 const AppDesignsDesignIdEditRoute = AppDesignsDesignIdEditRouteImport.update({
   id: '/designs/$designId/edit',
   path: '/designs/$designId/edit',
@@ -195,6 +209,12 @@ const ApiTelemetryOtelV1TracesRoute =
     path: '/api/telemetry/otel/v1/traces',
     getParentRoute: () => rootRouteImport,
   } as any)
+const AppDesignsDesignIdRendersRenderIdRoute =
+  AppDesignsDesignIdRendersRenderIdRouteImport.update({
+    id: '/designs/$designId/renders/$renderId',
+    path: '/designs/$designId/renders/$renderId',
+    getParentRoute: () => AppRouteRoute,
+  } as any)
 const ManagerUsersIdUpdateIndexRoute =
   ManagerUsersIdUpdateIndexRouteImport.update({
     id: '/users/$id/update/',
@@ -220,6 +240,7 @@ export interface FileRoutesByFullPath {
   '/api/webhooks/resend': typeof ApiWebhooksResendRoute
   '/app/account/': typeof AppAccountIndexRoute
   '/app/designs/': typeof AppDesignsIndexRoute
+  '/app/scorecard/': typeof AppScorecardIndexRoute
   '/login/error/': typeof LoginErrorIndexRoute
   '/login/verify/': typeof LoginVerifyIndexRoute
   '/manager/account/': typeof ManagerAccountIndexRoute
@@ -227,12 +248,14 @@ export interface FileRoutesByFullPath {
   '/manager/users/': typeof ManagerUsersIndexRoute
   '/api/dev/email/$template': typeof ApiDevEmailTemplateRoute
   '/api/images/$imageId/download': typeof ApiImagesImageIdDownloadRoute
+  '/app/designs/$designId/compare': typeof AppDesignsDesignIdCompareRoute
   '/app/designs/$designId/edit': typeof AppDesignsDesignIdEditRoute
   '/app/designs/$designId/': typeof AppDesignsDesignIdIndexRoute
   '/manager/users/$id/': typeof ManagerUsersIdIndexRoute
   '/manager/users/new/': typeof ManagerUsersNewIndexRoute
   '/api/telemetry/otel/v1/metrics': typeof ApiTelemetryOtelV1MetricsRoute
   '/api/telemetry/otel/v1/traces': typeof ApiTelemetryOtelV1TracesRoute
+  '/app/designs/$designId/renders/$renderId': typeof AppDesignsDesignIdRendersRenderIdRoute
   '/manager/users/$id/update/': typeof ManagerUsersIdUpdateIndexRoute
 }
 export interface FileRoutesByTo {
@@ -249,6 +272,7 @@ export interface FileRoutesByTo {
   '/api/webhooks/resend': typeof ApiWebhooksResendRoute
   '/app/account': typeof AppAccountIndexRoute
   '/app/designs': typeof AppDesignsIndexRoute
+  '/app/scorecard': typeof AppScorecardIndexRoute
   '/login/error': typeof LoginErrorIndexRoute
   '/login/verify': typeof LoginVerifyIndexRoute
   '/manager/account': typeof ManagerAccountIndexRoute
@@ -256,12 +280,14 @@ export interface FileRoutesByTo {
   '/manager/users': typeof ManagerUsersIndexRoute
   '/api/dev/email/$template': typeof ApiDevEmailTemplateRoute
   '/api/images/$imageId/download': typeof ApiImagesImageIdDownloadRoute
+  '/app/designs/$designId/compare': typeof AppDesignsDesignIdCompareRoute
   '/app/designs/$designId/edit': typeof AppDesignsDesignIdEditRoute
   '/app/designs/$designId': typeof AppDesignsDesignIdIndexRoute
   '/manager/users/$id': typeof ManagerUsersIdIndexRoute
   '/manager/users/new': typeof ManagerUsersNewIndexRoute
   '/api/telemetry/otel/v1/metrics': typeof ApiTelemetryOtelV1MetricsRoute
   '/api/telemetry/otel/v1/traces': typeof ApiTelemetryOtelV1TracesRoute
+  '/app/designs/$designId/renders/$renderId': typeof AppDesignsDesignIdRendersRenderIdRoute
   '/manager/users/$id/update': typeof ManagerUsersIdUpdateIndexRoute
 }
 export interface FileRoutesById {
@@ -283,6 +309,7 @@ export interface FileRoutesById {
   '/api/webhooks/resend': typeof ApiWebhooksResendRoute
   '/app/account/': typeof AppAccountIndexRoute
   '/app/designs/': typeof AppDesignsIndexRoute
+  '/app/scorecard/': typeof AppScorecardIndexRoute
   '/login/error/': typeof LoginErrorIndexRoute
   '/login/verify/': typeof LoginVerifyIndexRoute
   '/manager/account/': typeof ManagerAccountIndexRoute
@@ -290,12 +317,14 @@ export interface FileRoutesById {
   '/manager/users/': typeof ManagerUsersIndexRoute
   '/api/dev/email/$template': typeof ApiDevEmailTemplateRoute
   '/api/images/$imageId/download': typeof ApiImagesImageIdDownloadRoute
+  '/app/designs/$designId/compare': typeof AppDesignsDesignIdCompareRoute
   '/app/designs/$designId/edit': typeof AppDesignsDesignIdEditRoute
   '/app/designs/$designId/': typeof AppDesignsDesignIdIndexRoute
   '/manager/users/$id/': typeof ManagerUsersIdIndexRoute
   '/manager/users/new/': typeof ManagerUsersNewIndexRoute
   '/api/telemetry/otel/v1/metrics': typeof ApiTelemetryOtelV1MetricsRoute
   '/api/telemetry/otel/v1/traces': typeof ApiTelemetryOtelV1TracesRoute
+  '/app/designs/$designId/renders/$renderId': typeof AppDesignsDesignIdRendersRenderIdRoute
   '/manager/users/$id/update/': typeof ManagerUsersIdUpdateIndexRoute
 }
 export interface FileRouteTypes {
@@ -318,6 +347,7 @@ export interface FileRouteTypes {
     | '/api/webhooks/resend'
     | '/app/account/'
     | '/app/designs/'
+    | '/app/scorecard/'
     | '/login/error/'
     | '/login/verify/'
     | '/manager/account/'
@@ -325,12 +355,14 @@ export interface FileRouteTypes {
     | '/manager/users/'
     | '/api/dev/email/$template'
     | '/api/images/$imageId/download'
+    | '/app/designs/$designId/compare'
     | '/app/designs/$designId/edit'
     | '/app/designs/$designId/'
     | '/manager/users/$id/'
     | '/manager/users/new/'
     | '/api/telemetry/otel/v1/metrics'
     | '/api/telemetry/otel/v1/traces'
+    | '/app/designs/$designId/renders/$renderId'
     | '/manager/users/$id/update/'
   fileRoutesByTo: FileRoutesByTo
   to:
@@ -347,6 +379,7 @@ export interface FileRouteTypes {
     | '/api/webhooks/resend'
     | '/app/account'
     | '/app/designs'
+    | '/app/scorecard'
     | '/login/error'
     | '/login/verify'
     | '/manager/account'
@@ -354,12 +387,14 @@ export interface FileRouteTypes {
     | '/manager/users'
     | '/api/dev/email/$template'
     | '/api/images/$imageId/download'
+    | '/app/designs/$designId/compare'
     | '/app/designs/$designId/edit'
     | '/app/designs/$designId'
     | '/manager/users/$id'
     | '/manager/users/new'
     | '/api/telemetry/otel/v1/metrics'
     | '/api/telemetry/otel/v1/traces'
+    | '/app/designs/$designId/renders/$renderId'
     | '/manager/users/$id/update'
   id:
     | '__root__'
@@ -380,6 +415,7 @@ export interface FileRouteTypes {
     | '/api/webhooks/resend'
     | '/app/account/'
     | '/app/designs/'
+    | '/app/scorecard/'
     | '/login/error/'
     | '/login/verify/'
     | '/manager/account/'
@@ -387,12 +423,14 @@ export interface FileRouteTypes {
     | '/manager/users/'
     | '/api/dev/email/$template'
     | '/api/images/$imageId/download'
+    | '/app/designs/$designId/compare'
     | '/app/designs/$designId/edit'
     | '/app/designs/$designId/'
     | '/manager/users/$id/'
     | '/manager/users/new/'
     | '/api/telemetry/otel/v1/metrics'
     | '/api/telemetry/otel/v1/traces'
+    | '/app/designs/$designId/renders/$renderId'
     | '/manager/users/$id/update/'
   fileRoutesById: FileRoutesById
 }
@@ -535,6 +573,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AppDesignsIndexRouteImport
       parentRoute: typeof AppRouteRoute
     }
+    '/app/scorecard/': {
+      id: '/app/scorecard/'
+      path: '/scorecard'
+      fullPath: '/app/scorecard/'
+      preLoaderRoute: typeof AppScorecardIndexRouteImport
+      parentRoute: typeof AppRouteRoute
+    }
     '/login/error/': {
       id: '/login/error/'
       path: '/error'
@@ -591,6 +636,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AppDesignsDesignIdIndexRouteImport
       parentRoute: typeof AppRouteRoute
     }
+    '/app/designs/$designId/compare': {
+      id: '/app/designs/$designId/compare'
+      path: '/designs/$designId/compare'
+      fullPath: '/app/designs/$designId/compare'
+      preLoaderRoute: typeof AppDesignsDesignIdCompareRouteImport
+      parentRoute: typeof AppRouteRoute
+    }
     '/app/designs/$designId/edit': {
       id: '/app/designs/$designId/edit'
       path: '/designs/$designId/edit'
@@ -626,6 +678,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof ApiTelemetryOtelV1TracesRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/app/designs/$designId/renders/$renderId': {
+      id: '/app/designs/$designId/renders/$renderId'
+      path: '/designs/$designId/renders/$renderId'
+      fullPath: '/app/designs/$designId/renders/$renderId'
+      preLoaderRoute: typeof AppDesignsDesignIdRendersRenderIdRouteImport
+      parentRoute: typeof AppRouteRoute
+    }
     '/manager/users/$id/update/': {
       id: '/manager/users/$id/update/'
       path: '/users/$id/update'
@@ -640,16 +699,23 @@ interface AppRouteRouteChildren {
   AppIndexRoute: typeof AppIndexRoute
   AppAccountIndexRoute: typeof AppAccountIndexRoute
   AppDesignsIndexRoute: typeof AppDesignsIndexRoute
+  AppScorecardIndexRoute: typeof AppScorecardIndexRoute
+  AppDesignsDesignIdCompareRoute: typeof AppDesignsDesignIdCompareRoute
   AppDesignsDesignIdEditRoute: typeof AppDesignsDesignIdEditRoute
   AppDesignsDesignIdIndexRoute: typeof AppDesignsDesignIdIndexRoute
+  AppDesignsDesignIdRendersRenderIdRoute: typeof AppDesignsDesignIdRendersRenderIdRoute
 }
 
 const AppRouteRouteChildren: AppRouteRouteChildren = {
   AppIndexRoute: AppIndexRoute,
   AppAccountIndexRoute: AppAccountIndexRoute,
   AppDesignsIndexRoute: AppDesignsIndexRoute,
+  AppScorecardIndexRoute: AppScorecardIndexRoute,
+  AppDesignsDesignIdCompareRoute: AppDesignsDesignIdCompareRoute,
   AppDesignsDesignIdEditRoute: AppDesignsDesignIdEditRoute,
   AppDesignsDesignIdIndexRoute: AppDesignsDesignIdIndexRoute,
+  AppDesignsDesignIdRendersRenderIdRoute:
+    AppDesignsDesignIdRendersRenderIdRoute,
 }
 
 const AppRouteRouteWithChildren = AppRouteRoute._addFileChildren(

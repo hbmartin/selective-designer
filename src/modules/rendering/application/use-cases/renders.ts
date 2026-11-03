@@ -22,7 +22,12 @@ import {
   SIGNED_VIEW_URL_SECONDS,
 } from './types';
 import type { NewRenderResult, SourceImage } from '../ports/ports';
-import type { EditSet } from '../../domain/edit-set';
+import {
+  type Edit,
+  type EditSet,
+  MAX_EDITS,
+  PROMPT_MAX_LENGTH,
+} from '../../domain/edit-set';
 import { enabledModels } from '../../domain/model-catalog';
 import type { RenderRecipe } from '../../domain/recipe';
 import type { Draft, Render, RenderResult } from '../../domain/render';
@@ -453,6 +458,35 @@ export type RenderResultView = Omit<RenderResult, 'providerRequestId'> & {
 };
 export type RenderView = Omit<Render, 'results'> & {
   results: RenderResultView[];
+  /** Signed working image of the render source (tree thumbnails, compare). */
+  sourceUrl: string | null;
+  sourceSize: { width: number; height: number } | null;
+  /** Signed combined edit mask (white = edit), for the change checker. */
+  editMaskUrl: string | null;
+};
+
+const signedImage = async (
+  deps: RenderingUseCaseDeps,
+  imageId: ImageId
+): Promise<
+  RenderingResult<{
+    url: string;
+    size: { width: number; height: number };
+  } | null>
+> => {
+  const image = await deps.renderInputs.sourceImage(imageId);
+  if (image.isError()) return Result.Error(image.getError());
+  const outcome = image.get();
+  if (outcome.type !== 'found') return Result.Ok(null);
+  const signed = await deps.objectStorage.createSignedReadUrl({
+    objectKey: outcome.image.workingKey,
+    expiresInSeconds: SIGNED_VIEW_URL_SECONDS,
+  });
+  if (signed.isError()) return Result.Error(signed.getError());
+  return Result.Ok({
+    url: signed.get().url,
+    size: { width: outcome.image.width, height: outcome.image.height },
+  });
 };
 
 const toRenderView = async (
@@ -461,31 +495,41 @@ const toRenderView = async (
 ): Promise<RenderingResult<RenderView>> => {
   const results: RenderResultView[] = [];
   for (const result of render.results) {
-    let outputUrl: string | null = null;
-    let outputSize: RenderResultView['outputSize'] = null;
+    let output: {
+      url: string;
+      size: { width: number; height: number };
+    } | null = null;
     if (result.outputImageId) {
       // oxlint-disable-next-line no-await-in-loop -- a handful of results.
-      const image = await deps.renderInputs.sourceImage(result.outputImageId);
-      if (image.isError()) return Result.Error(image.getError());
-      const imageOutcome = image.get();
-      if (imageOutcome.type === 'found') {
-        // oxlint-disable-next-line no-await-in-loop -- signing is local HMAC.
-        const signed = await deps.objectStorage.createSignedReadUrl({
-          objectKey: imageOutcome.image.workingKey,
-          expiresInSeconds: SIGNED_VIEW_URL_SECONDS,
-        });
-        if (signed.isError()) return Result.Error(signed.getError());
-        outputUrl = signed.get().url;
-        outputSize = {
-          width: imageOutcome.image.width,
-          height: imageOutcome.image.height,
-        };
-      }
+      const signed = await signedImage(deps, result.outputImageId);
+      if (signed.isError()) return Result.Error(signed.getError());
+      output = signed.get();
     }
     const { providerRequestId: _providerRequestId, ...visible } = result;
-    results.push({ ...visible, outputUrl, outputSize });
+    results.push({
+      ...visible,
+      outputUrl: output?.url ?? null,
+      outputSize: output?.size ?? null,
+    });
   }
-  return Result.Ok({ ...render, results });
+  const source = await signedImage(deps, render.renderSourceImageId);
+  if (source.isError()) return Result.Error(source.getError());
+  let editMaskUrl: string | null = null;
+  if (render.recipe.editMaskKey) {
+    const mask = await deps.objectStorage.createSignedReadUrl({
+      objectKey: render.recipe.editMaskKey,
+      expiresInSeconds: SIGNED_VIEW_URL_SECONDS,
+    });
+    if (mask.isError()) return Result.Error(mask.getError());
+    editMaskUrl = mask.get().url;
+  }
+  return Result.Ok({
+    ...render,
+    results,
+    sourceUrl: source.get()?.url ?? null,
+    sourceSize: source.get()?.size ?? null,
+    editMaskUrl,
+  });
 };
 
 export type ListRendersOutcome =
@@ -636,4 +680,225 @@ export async function nameScheme(
   });
   if (saved.isError()) return Result.Error(saved.getError());
   return reloadView(deps, ownedOutcome.render.id);
+}
+
+// ---- Review -------------------------------------------------------------
+
+export type GetRenderOutcome =
+  | { type: 'render_found'; render: RenderView }
+  | { type: 'render_not_found' }
+  | RenderingForbidden;
+
+/** One render with its results (results grid, compare, checker). */
+export async function getRender(
+  deps: RenderingUseCaseDeps,
+  input: { currentUserId: UserId; renderId: RenderId }
+): Promise<RenderingResult<GetRenderOutcome>> {
+  const found = await deps.renderRepository.findRender(input.renderId);
+  if (found.isError()) return Result.Error(found.getError());
+  const outcome = found.get();
+  if (outcome.type === 'render_not_found') return Result.Ok(outcome);
+  const owned = await loadOwnedSource(deps, {
+    currentUserId: input.currentUserId,
+    imageId: outcome.render.renderSourceImageId,
+    action: 'read',
+  });
+  if (owned.isError()) return Result.Error(owned.getError());
+  const ownedOutcome = owned.get();
+  if (ownedOutcome.type === 'image_not_found')
+    return Result.Ok({ type: 'render_not_found' });
+  if (ownedOutcome.type === 'rendering_forbidden')
+    return Result.Ok(ownedOutcome);
+  const view = await toRenderView(deps, outcome.render);
+  if (view.isError()) return Result.Error(view.getError());
+  return Result.Ok({ type: 'render_found', render: view.get() });
+}
+
+export type ScorecardRow = {
+  modelId: string;
+  /** Finished results. */
+  succeeded: number;
+  /** Times this model's result was the preferred one. */
+  preferred: number;
+  /** Finished results in renders that have a preferred result. */
+  contested: number;
+};
+
+export type ScorecardOutcome =
+  | { type: 'scorecard'; rows: ScorecardRow[] }
+  | RenderingForbidden;
+
+/** How often each model's result was preferred, across the user's designs. */
+export async function getScorecard(
+  deps: RenderingUseCaseDeps,
+  input: { currentUserId: UserId }
+): Promise<RenderingResult<ScorecardOutcome>> {
+  const permission = await deps.permissionChecker.hasPermission(
+    input.currentUserId,
+    {
+      design: ['read'],
+    }
+  );
+  if (permission.isError()) return Result.Error(permission.getError());
+  if (permission.get().type === 'permission_denied') {
+    return Result.Ok({ type: 'rendering_forbidden' });
+  }
+  const rows = await deps.renderRepository.scorecard(input.currentUserId);
+  if (rows.isError()) return Result.Error(rows.getError());
+  return Result.Ok({
+    type: 'scorecard',
+    rows: rows.get().rows.map((row) => ({
+      modelId: row.modelId,
+      succeeded: row.succeeded,
+      preferred: row.preferred,
+      contested: row.rendersWithPreference,
+    })),
+  });
+}
+
+const MAX_LINEAGE = 50;
+
+export type DraftFromOriginalOutcome =
+  | {
+      type: 'draft_rebuilt';
+      baseImageId: ImageId;
+      edits: number;
+      /** Edits that could not be mapped onto the base image (reported, not hidden). */
+      dropped: number;
+    }
+  | { type: 'draft_conflict' }
+  | { type: 'render_not_found' }
+  | RenderingForbidden;
+
+/**
+ * "Compare from original": combine the edits of a render and every render
+ * it continued from into one editable draft on the base image. Regions made
+ * on results map back through region carry-over; others are reported.
+ */
+export async function draftFromOriginal(
+  deps: RenderingUseCaseDeps,
+  input: { currentUserId: UserId; renderId: RenderId }
+): Promise<RenderingResult<DraftFromOriginalOutcome>> {
+  const found = await deps.renderRepository.findRender(input.renderId);
+  if (found.isError()) return Result.Error(found.getError());
+  const start = found.get();
+  if (start.type === 'render_not_found') return Result.Ok(start);
+
+  const chain: Render[] = [start.render];
+  let baseImageId = start.render.renderSourceImageId;
+  for (let hop = 0; hop < MAX_LINEAGE; hop += 1) {
+    // oxlint-disable-next-line no-await-in-loop -- walks a short lineage.
+    const parent =
+      await deps.renderRepository.findRenderByOutputImage(baseImageId);
+    if (parent.isError()) return Result.Error(parent.getError());
+    const parentOutcome = parent.get();
+    if (parentOutcome.type === 'render_not_found') break;
+    chain.unshift(parentOutcome.render);
+    baseImageId = parentOutcome.render.renderSourceImageId;
+  }
+
+  const owned = await loadOwnedSource(deps, {
+    currentUserId: input.currentUserId,
+    imageId: baseImageId,
+    action: 'update',
+  });
+  if (owned.isError()) return Result.Error(owned.getError());
+  const ownedOutcome = owned.get();
+  if (ownedOutcome.type === 'image_not_found')
+    return Result.Ok({ type: 'render_not_found' });
+  if (ownedOutcome.type === 'rendering_forbidden')
+    return Result.Ok(ownedOutcome);
+
+  const toBaseRegion = async (
+    regionId: string
+  ): Promise<RenderingResult<string | null>> => {
+    let current = regionId;
+    for (let hop = 0; hop < MAX_LINEAGE; hop += 1) {
+      // oxlint-disable-next-line no-await-in-loop -- follows carry-over links.
+      const region = await deps.renderInputs.region(current);
+      if (region.isError()) return Result.Error(region.getError());
+      const outcome = region.get();
+      if (outcome.type === 'missing') return Result.Ok(null);
+      if (outcome.region.imageId === baseImageId)
+        return Result.Ok(outcome.region.regionId);
+      if (!outcome.region.carriedFromRegionId) return Result.Ok(null);
+      current = outcome.region.carriedFromRegionId;
+    }
+    return Result.Ok(null);
+  };
+
+  const edits: Edit[] = [];
+  let dropped = 0;
+  for (const [index, render] of chain.entries()) {
+    for (const edit of render.recipe.edits) {
+      const id = `r${index}-${edit.id}`.slice(0, 64);
+      if (edit.kind === 'placement') {
+        edits.push({
+          kind: 'placement',
+          id,
+          itemId: edit.item.itemId,
+          box: edit.box,
+          rotationDeg: edit.rotationDeg,
+          note: edit.note,
+        });
+        continue;
+      }
+      // oxlint-disable-next-line no-await-in-loop -- a handful of edits.
+      const mapped = await toBaseRegion(edit.region.regionId);
+      if (mapped.isError()) return Result.Error(mapped.getError());
+      const regionId = mapped.get();
+      if (!regionId) {
+        dropped += 1;
+        continue;
+      }
+      if (edit.kind === 'removal')
+        edits.push({ kind: 'removal', id, regionId, note: edit.note });
+      else if (edit.kind === 'replacement') {
+        edits.push({
+          kind: 'replacement',
+          id,
+          regionId,
+          itemId: edit.item.itemId,
+          note: edit.note,
+        });
+      } else {
+        edits.push({
+          kind: 'material',
+          id,
+          regionId,
+          swatchItemId: edit.swatch?.itemId ?? null,
+          text: edit.text,
+        });
+      }
+    }
+  }
+  const kept = edits.slice(0, MAX_EDITS);
+  dropped += edits.length - kept.length;
+  const prompt = [
+    ...new Set(
+      chain.map((render) => render.recipe.prompt.trim()).filter(Boolean)
+    ),
+  ]
+    .join('\n')
+    .slice(0, PROMPT_MAX_LENGTH);
+
+  const current = await deps.renderRepository.findDraft(baseImageId);
+  if (current.isError()) return Result.Error(current.getError());
+  const currentOutcome = current.get();
+  const saved = await deps.renderRepository.saveDraft({
+    designId: ownedOutcome.source.designId,
+    renderSourceImageId: baseImageId,
+    editSet: { edits: kept, prompt },
+    expectedRevision:
+      currentOutcome.type === 'draft_found' ? currentOutcome.draft.revision : 0,
+  });
+  if (saved.isError()) return Result.Error(saved.getError());
+  if (saved.get().type === 'draft_conflict')
+    return Result.Ok({ type: 'draft_conflict' });
+  return Result.Ok({
+    type: 'draft_rebuilt',
+    baseImageId,
+    edits: kept.length,
+    dropped,
+  });
 }

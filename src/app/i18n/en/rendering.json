@@ -8,7 +8,10 @@
     "retry": "Retry",
     "outputAlt": "{{model}} result",
     "edit": "Edit",
-    "continue": "Continue from this result"
+    "continue": "Continue from this result",
+    "viewResults": "View results",
+    "continuedFrom": "Continued from a {{model}} result",
+    "sourceAlt": "Render source"
   },
   "models": {
     "krea-3": "Krea 3",
@@ -119,5 +122,65 @@
     "submitted": "Render started.",
     "outOfDate": "The draft changed; review and render again.",
     "failed": "Could not start the render."
+  },
+  "review": {
+    "title": "Render results",
+    "back": "Back to design",
+    "recipe": "Edits in this render",
+    "notes": "Notes",
+    "prefer": "Mark as preferred",
+    "unprefer": "Remove preferred mark",
+    "preferred": "Preferred",
+    "schemeName": "Scheme name",
+    "schemePlaceholder": "Name this result as a scheme",
+    "download": "Download",
+    "compare": "Compare with source",
+    "details": "Details",
+    "modelVersion": "Version",
+    "cost": "Cost",
+    "costUnavailable": "not reported",
+    "framingChanged": "Framing changed",
+    "rebuild": "Edit all changes on the original",
+    "rebuildConfirm": "This replaces the current draft on the base image with the combined edits of this render and the ones it continued from.",
+    "rebuilt": "Draft rebuilt on the original with {{count}} edits.",
+    "rebuiltDropped": "{{dropped}} edits used regions that only exist on a result; add them again.",
+    "notFound": "This render was not found."
+  },
+  "check": {
+    "title": "Change check",
+    "checking": "Checking for changes outside the edits…",
+    "result": "{{percent}}% changed outside the edits",
+    "warning": "Change warning",
+    "ok": "No unexpected changes",
+    "heatmap": "Show heatmap",
+    "hideHeatmap": "Hide heatmap",
+    "unavailable": {
+      "framing_changed": "Unavailable: the framing changed",
+      "no_edit_mask": "Unavailable: no edit area",
+      "image_unreadable": "Unavailable: the images could not be read"
+    },
+    "advisory": "Advisory only; results are never altered."
+  },
+  "compare": {
+    "title": "Compare",
+    "modes": {
+      "side": "Side by side",
+      "swipe": "Swipe",
+      "onion": "Onion skin"
+    },
+    "opacity": "Opacity",
+    "before": "Source",
+    "after": "Result",
+    "resetZoom": "Reset zoom"
+  },
+  "scorecard": {
+    "title": "Model scorecard",
+    "description": "How often each model's result was marked preferred.",
+    "model": "Model",
+    "finished": "Finished results",
+    "preferred": "Preferred",
+    "rate": "Preferred share",
+    "empty": "Mark preferred results to build the scorecard.",
+    "nav": "Scorecard"
   }
 }

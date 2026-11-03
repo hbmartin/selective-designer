@@ -203,6 +203,16 @@ const setup = (options: { enabledModelIds?: readonly string[] } = {}) => {
     logger,
   });
 
+  const addImage = (imageId: ImageId) =>
+    images.set(imageId, {
+      imageId,
+      designId,
+      ownerId,
+      workingKey: key(`working-images/${imageId}.png`),
+      width: 40,
+      height: 20,
+    });
+
   const saveDraft = async (editSet: EditSet, revision = 0) =>
     okValue(
       await useCases.saveDraft({
@@ -231,6 +241,7 @@ const setup = (options: { enabledModelIds?: readonly string[] } = {}) => {
     items,
     regions,
     addItem,
+    addImage,
     scheduled,
     models,
     registered,
@@ -753,6 +764,7 @@ describe('edit masks from regions', () => {
     ctx.regions.set('door', {
       regionId: 'door',
       imageId: baseImageId,
+      carriedFromRegionId: null,
       label: 'door',
       maskKey: key('region-masks/door.png'),
       box: { x: 0, y: 0, width: 0.5, height: 1 },
@@ -775,6 +787,7 @@ describe('edit masks from regions', () => {
     ctx.regions.set('elsewhere', {
       regionId: 'elsewhere',
       imageId: unwrapParseResult(toImageId('other')),
+      carriedFromRegionId: null,
       label: 'door',
       maskKey: key('region-masks/x.png'),
       box,
@@ -786,6 +799,220 @@ describe('edit masks from regions', () => {
     expect(await ctx.submit()).toEqual({
       type: 'region_missing',
       editId: 'e1',
+    });
+  });
+});
+
+describe('review', () => {
+  const rendered = async (
+    ctx: ReturnType<typeof setup>,
+    editSet: EditSet,
+    imageId = baseImageId
+  ) => {
+    const current = ctx.renders.drafts.get(imageId);
+    await ctx.useCases.saveDraft({
+      currentUserId: ownerId,
+      imageId,
+      editSet,
+      revision: current?.revision ?? 0,
+    });
+    const outcome = okValue(
+      await ctx.useCases.submitRender({
+        currentUserId: ownerId,
+        imageId,
+        revision: (current?.revision ?? 0) + 1,
+      })
+    );
+    const [renderId] = renderedIds(outcome);
+    const render = ctx.renders.renders.find((r) => r.id === renderId);
+    if (!render) throw new Error('render missing');
+    return render;
+  };
+
+  it('returns one render with signed source and edit mask URLs', async () => {
+    const ctx = setup();
+    ctx.addItem('chair');
+    const render = await rendered(ctx, {
+      edits: [placement('e1', 'chair')],
+      prompt: '',
+    });
+    const outcome = okValue(
+      await ctx.useCases.getRender({
+        currentUserId: ownerId,
+        renderId: render.id,
+      })
+    );
+    expect(outcome).toMatchObject({
+      type: 'render_found',
+      render: {
+        sourceUrl: expect.stringContaining('working-images/base.png'),
+        sourceSize: { width: 40, height: 20 },
+        editMaskUrl: expect.stringContaining('edit-masks/'),
+      },
+    });
+    expect(
+      okValue(
+        await ctx.useCases.getRender({
+          currentUserId: strangerId,
+          renderId: render.id,
+        })
+      )
+    ).toEqual({ type: 'render_not_found' });
+  });
+
+  it('scores preferred results per model', async () => {
+    const ctx = setup({ enabledModelIds: ['krea-3', 'gpt-image-2'] });
+    ctx.addItem('chair');
+    const render = await rendered(ctx, {
+      edits: [placement('e1', 'chair')],
+      prompt: '',
+    });
+    for (const result of render.results) result.status = 'succeeded';
+    const gpt = render.results.find((r) => r.modelId === 'gpt-image-2');
+    if (!gpt) throw new Error('missing');
+    await ctx.useCases.markPreferredResult({
+      currentUserId: ownerId,
+      resultId: gpt.id,
+      preferred: true,
+    });
+    const outcome = okValue(
+      await ctx.useCases.getScorecard({ currentUserId: ownerId })
+    );
+    expect(outcome.type === 'scorecard' ? outcome.rows : []).toEqual(
+      expect.arrayContaining([
+        { modelId: 'gpt-image-2', succeeded: 1, preferred: 1, contested: 1 },
+        { modelId: 'krea-3', succeeded: 1, preferred: 0, contested: 1 },
+      ])
+    );
+  });
+
+  it('rebuilds the combined edits of a render chain on the base image', async () => {
+    const ctx = setup({ enabledModelIds: ['gpt-image-2'] });
+    ctx.addItem('chair');
+    ctx.addItem('lamp');
+    ctx.regions.set('door', {
+      regionId: 'door',
+      imageId: baseImageId,
+      carriedFromRegionId: null,
+      label: 'door',
+      maskKey: key('region-masks/door.png'),
+      box,
+    });
+    ctx.storage.objects.set('region-masks/door.png', {
+      bytes: encode({
+        width: 2,
+        height: 2,
+        channels: 1,
+        depth: 8,
+        data: new Uint8Array([255, 0, 0, 0]),
+      }),
+      contentType: 'image/png',
+    });
+    const first = await rendered(ctx, {
+      edits: [
+        placement('e1', 'chair'),
+        { kind: 'removal', id: 'e2', regionId: 'door', note: '' },
+      ],
+      prompt: 'Dusk',
+    });
+    // The result becomes a render source with a carried region and a new one.
+    const resultImageId = unwrapParseResult(toImageId('result-from-first'));
+    const firstResult = first.results[0];
+    if (!firstResult) throw new Error('missing result');
+    firstResult.status = 'succeeded';
+    firstResult.outputImageId = resultImageId;
+    ctx.addImage(resultImageId);
+    ctx.regions.set('door-copy', {
+      regionId: 'door-copy',
+      imageId: resultImageId,
+      carriedFromRegionId: 'door',
+      label: 'door',
+      maskKey: key('region-masks/door.png'),
+      box,
+    });
+    ctx.regions.set('only-on-result', {
+      regionId: 'only-on-result',
+      imageId: resultImageId,
+      carriedFromRegionId: null,
+      label: 'awning',
+      maskKey: key('region-masks/door.png'),
+      box,
+    });
+    const second = await rendered(
+      ctx,
+      {
+        edits: [
+          placement('e1', 'lamp'),
+          {
+            kind: 'material',
+            id: 'e2',
+            regionId: 'door-copy',
+            swatchItemId: null,
+            text: 'oak',
+          },
+          { kind: 'removal', id: 'e3', regionId: 'only-on-result', note: '' },
+        ],
+        prompt: 'Warm light',
+      },
+      resultImageId
+    );
+
+    const outcome = okValue(
+      await ctx.useCases.draftFromOriginal({
+        currentUserId: ownerId,
+        renderId: second.id,
+      })
+    );
+    expect(outcome).toEqual({
+      type: 'draft_rebuilt',
+      baseImageId,
+      edits: 4,
+      dropped: 1,
+    });
+    const draft = ctx.renders.drafts.get(baseImageId);
+    expect(draft?.editSet.prompt).toBe('Dusk\nWarm light');
+    expect(
+      draft?.editSet.edits.map((e) => [
+        e.kind,
+        'regionId' in e ? e.regionId : e.itemId,
+      ])
+    ).toEqual([
+      ['placement', 'chair'],
+      ['removal', 'door'],
+      ['placement', 'lamp'],
+      ['material', 'door'],
+    ]);
+  });
+});
+
+describe('copying a design for a revised image', () => {
+  it('copies placements with remapped items and counts region edits', async () => {
+    const ctx = setup();
+    ctx.addItem('chair');
+    await ctx.saveDraft({
+      edits: [
+        placement('e1', 'chair'),
+        { kind: 'removal', id: 'e2', regionId: 'door', note: '' },
+      ],
+      prompt: 'Dusk',
+    });
+    const newImage = unwrapParseResult(toImageId('revised-base'));
+    const outcome = okValue(
+      await ctx.pipeline.copyDraftPlacements({
+        fromImageId: baseImageId,
+        toImageId: newImage,
+        toDesignId: designId,
+        itemIds: { chair: 'chair-copy' },
+      })
+    );
+    expect(outcome).toEqual({
+      type: 'draft_copied',
+      placements: 1,
+      dropped: 1,
+    });
+    expect(ctx.renders.drafts.get(newImage)?.editSet).toEqual({
+      edits: [{ ...placement('e1', 'chair-copy') }],
+      prompt: 'Dusk',
     });
   });
 });

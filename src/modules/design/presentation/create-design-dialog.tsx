@@ -32,7 +32,7 @@ import {
 } from '@/platform/components/ui/dialog';
 import { uploadFileToRoute } from '@/platform/components/upload/upload-file';
 
-import { toObjectKey } from '@/modules/kernel/domain/ids';
+import { type DesignId, toObjectKey } from '@/modules/kernel/domain/ids';
 
 import {
   ACCEPTED_BASE_IMAGE_TYPES,
@@ -52,7 +52,11 @@ const uploadedKey = async (file: File, route: string) => {
   return key.get();
 };
 
-export const CreateDesignDialog = (props: { children: ReactElement }) => {
+export const CreateDesignDialog = (props: {
+  children: ReactElement;
+  /** Revised architect image: copy this design's mood board and placements. */
+  copyFromDesignId?: DesignId;
+}) => {
   const { t } = useTranslation(['design']);
   const navigate = useNavigate();
   const queryClient = useQueryClient();
@@ -90,6 +94,9 @@ export const CreateDesignDialog = (props: { children: ReactElement }) => {
         ]);
         await createDesign.mutateAsync({
           name: value.name,
+          ...(props.copyFromDesignId
+            ? { copiedFromDesignId: props.copyFromDesignId }
+            : {}),
           baseImage: {
             originalKey,
             original: prepared.originalSize,
@@ -154,9 +161,15 @@ export const CreateDesignDialog = (props: { children: ReactElement }) => {
       <DialogContent className="sm:max-w-lg" onPaste={onPaste}>
         <Form form={form} className="flex flex-col gap-4">
           <DialogHeader>
-            <DialogTitle>{t('design:create.title')}</DialogTitle>
+            <DialogTitle>
+              {props.copyFromDesignId
+                ? t('design:create.revisedTitle')
+                : t('design:create.title')}
+            </DialogTitle>
             <DialogDescription>
-              {t('design:create.description')}
+              {props.copyFromDesignId
+                ? t('design:create.revisedDescription')
+                : t('design:create.description')}
             </DialogDescription>
           </DialogHeader>
           <DialogBody className="flex flex-col gap-4">

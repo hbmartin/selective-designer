@@ -1,3 +1,4 @@
+import { copyItems } from './application/use-cases/copy-items';
 import {
   correctCutout,
   createItem,
@@ -41,6 +42,7 @@ export function createMoodboardPipelineUseCases(deps: MoodboardPipelineDeps) {
       removeBackgroundForVersion(deps, versionId),
     markCutoutFailed: (versionId: Input<typeof markCutoutFailed>) =>
       markCutoutFailed(deps, versionId),
+    copyItems: (input: Input<typeof copyItems>) => copyItems(deps, input),
   };
 }
 

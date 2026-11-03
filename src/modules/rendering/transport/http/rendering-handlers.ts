@@ -4,13 +4,16 @@ import type { ProtectedContext } from '@/modules/auth/backend';
 import {
   zImageId,
   zItemId,
+  zRenderId,
   zRenderResultId,
 } from '@/modules/kernel/domain/ids';
 import { unwrapApplicationResult } from '@/modules/kernel/transport/tanstack/result-mapper';
 
 import type {
+  DraftFromOriginalOutcome,
   RenderSourceView,
   RenderView,
+  ScorecardRow,
 } from '../../application/use-cases/renders';
 import type { RecipeProblem } from '../../application/use-cases/resolve-recipe';
 import { zEditSet } from '../../domain/edit-set';
@@ -39,6 +42,7 @@ export const zSubmitBatchInput = () =>
     placementEditId: z.string().min(1).max(64),
     optionItemIds: z.array(zItemId()).min(2).max(MAX_BATCH_OPTIONS),
   });
+export const zRenderInput = () => z.object({ renderId: zRenderId() });
 export const zResultInput = () => z.object({ resultId: zRenderResultId() });
 export const zPreferInput = () =>
   z.object({ resultId: zRenderResultId(), preferred: z.boolean() });
@@ -232,6 +236,49 @@ export const createRenderingHandlers = ({
       }),
       toRenderView
     ),
+  getRender: (
+    ctx: ProtectedContext,
+    data: z.output<ReturnType<typeof zRenderInput>>
+  ) =>
+    unwrapApplicationResult(
+      getUseCases(ctx).getRender({
+        currentUserId: ctx.scope.userId,
+        renderId: data.renderId,
+      }),
+      {
+        rendering_forbidden: 'FORBIDDEN',
+        render_not_found: 'NOT_FOUND',
+        render_found: (outcome: { render: RenderView }) => outcome.render,
+      }
+    ),
+  getScorecard: (ctx: ProtectedContext) =>
+    unwrapApplicationResult(
+      getUseCases(ctx).getScorecard({ currentUserId: ctx.scope.userId }),
+      {
+        rendering_forbidden: 'FORBIDDEN',
+        scorecard: (outcome: { rows: ScorecardRow[] }) => outcome.rows,
+      }
+    ),
+  draftFromOriginal: (
+    ctx: ProtectedContext,
+    data: z.output<ReturnType<typeof zRenderInput>>
+  ) =>
+    unwrapApplicationResult(
+      getUseCases(ctx).draftFromOriginal({
+        currentUserId: ctx.scope.userId,
+        renderId: data.renderId,
+      }),
+      {
+        rendering_forbidden: 'FORBIDDEN',
+        render_not_found: 'NOT_FOUND',
+        draft_conflict: {
+          code: 'CONFLICT',
+          message: 'The draft changed; try again.',
+        },
+        draft_rebuilt: (outcome: RebuiltDraftResponse): RebuiltDraftResponse =>
+          outcome,
+      }
+    ),
   nameScheme: (
     ctx: ProtectedContext,
     data: z.output<ReturnType<typeof zSchemeInput>>
@@ -242,4 +289,8 @@ export const createRenderingHandlers = ({
     ),
 });
 
+export type RebuiltDraftResponse = Extract<
+  DraftFromOriginalOutcome,
+  { type: 'draft_rebuilt' }
+>;
 export type RenderingHandlers = ReturnType<typeof createRenderingHandlers>;

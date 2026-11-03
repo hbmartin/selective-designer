@@ -3,6 +3,7 @@ export type {
   RenderResultView,
   RenderSourceView,
   RenderView,
+  ScorecardRow,
 } from './application/use-cases/renders';
 export type { RecipeProblem } from './application/use-cases/resolve-recipe';
 export type {

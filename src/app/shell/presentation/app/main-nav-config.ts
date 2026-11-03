@@ -1,5 +1,5 @@
 import { linkOptions } from '@tanstack/react-router';
-import { ImagesIcon } from 'lucide-react';
+import { ImagesIcon, TrophyIcon } from 'lucide-react';
 
 import {
   IconUserCircleDuotone,
@@ -12,6 +12,12 @@ export const MAIN_NAV_LINKS = linkOptions([
     icon: ImagesIcon,
     iconActive: ImagesIcon,
     to: '/app/designs',
+  },
+  {
+    labelTranslationKey: 'layout:nav.scorecard',
+    icon: TrophyIcon,
+    iconActive: TrophyIcon,
+    to: '/app/scorecard',
   },
   {
     labelTranslationKey: 'layout:nav.account',

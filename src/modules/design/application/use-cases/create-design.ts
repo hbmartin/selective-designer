@@ -161,6 +161,24 @@ export async function createDesign(
     });
   }
 
+  // A revised image: copy the mood board and placements; never fail creation.
+  if (input.copiedFromDesignId) {
+    const copied = await deps.designCopiedListener.designCopied({
+      fromDesignId: input.copiedFromDesignId,
+      toDesignId: design.id,
+      toBaseImageId: design.baseImage.id,
+    });
+    if (copied.isError()) {
+      deps.logger.warn({
+        event: 'design.copy.failed',
+        details: {
+          designId: design.id,
+          fromDesignId: input.copiedFromDesignId,
+        },
+      });
+    }
+  }
+
   const view = await toDesignView(deps, design);
   if (view.isError()) return Result.Error(view.getError());
   return Result.Ok({ type: 'design_created', design: view.get() });

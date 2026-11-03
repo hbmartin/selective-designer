@@ -1,11 +1,14 @@
 import { createRenderingQueries, type RenderingQueryFacade } from './queries';
 import {
+  renderDraftFromOriginal,
   renderDraftGet,
   renderDraftSave,
+  renderGet,
   renderPlanPreview,
   renderResultNameScheme,
   renderResultPrefer,
   renderResultRetry,
+  renderScorecardGet,
   rendersGet,
   renderSourceGet,
   renderSubmit,
@@ -13,8 +16,11 @@ import {
 } from '../server';
 
 export const renderingQueries = createRenderingQueries({
+  renderDraftFromOriginal,
   renderDraftGet,
   renderDraftSave,
+  renderGet,
+  renderScorecardGet,
   renderSourceGet,
   renderPlanPreview,
   renderResultNameScheme,

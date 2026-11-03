@@ -68,6 +68,26 @@ export interface RenderRepository {
   listRenders(
     designId: DesignId
   ): Promise<ApplicationResult<{ type: 'renders_listed'; renders: Render[] }>>;
+  /** The render that produced `imageId` as one of its results, if any. */
+  findRenderByOutputImage(
+    imageId: ImageId
+  ): Promise<
+    ApplicationResult<
+      { type: 'render_found'; render: Render } | { type: 'render_not_found' }
+    >
+  >;
+  /** Per model: finished results and how often each was preferred. */
+  scorecard(ownerId: UserId): Promise<
+    ApplicationResult<{
+      type: 'scorecard';
+      rows: {
+        modelId: string;
+        succeeded: number;
+        preferred: number;
+        rendersWithPreference: number;
+      }[];
+    }>
+  >;
   findResult(
     resultId: RenderResultId
   ): Promise<
@@ -129,6 +149,8 @@ export type InputItem = {
 export type InputRegion = {
   regionId: string;
   imageId: ImageId;
+  /** Set when the region was carried over from the render source. */
+  carriedFromRegionId: string | null;
   label: string;
   maskKey: ObjectKey;
   box: FractionalBox;

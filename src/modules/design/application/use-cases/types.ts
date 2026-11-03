@@ -8,6 +8,7 @@ import type {
   UploadIntentStore,
 } from '@/modules/kernel';
 
+import type { DesignCopiedListener } from '../ports/design-copied-listener';
 import type { DesignRepository } from '../ports/design-repository';
 import type { ImageArrivedListener } from '../ports/image-arrived-listener';
 
@@ -20,6 +21,7 @@ export type DesignUseCaseDeps = {
   clock: Clock;
   logger: Logger;
   imageArrivedListener: ImageArrivedListener;
+  designCopiedListener: DesignCopiedListener;
 };
 
 /** Pipeline use cases run inside workflow steps: no request, no permission. */
