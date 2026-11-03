@@ -51,6 +51,22 @@ export const createDesignQueries = <TFacade extends DesignQueryFacade>(
       }),
       staleTime: DESIGN_STALE_TIME_MS,
     }),
+    sourcePhotos: (
+      input: { designId: DesignId } & ScopedQueryInput<ScopeKey>
+    ) => ({
+      ...scopedEntityQueryOptions({
+        baseKey: (scopeKey: ScopeKey) =>
+          [...all(), { scopeKey }, 'sourcePhotos'] as const,
+        input,
+        queryFn: (data) => facade.designListSourcePhotos({ data }),
+      }),
+      staleTime: DESIGN_STALE_TIME_MS,
+    }),
+    addSourcePhoto: () =>
+      serverMutationOptions({
+        mutationKey: [...all(), 'addSourcePhoto'],
+        mutationFn: facade.designAddSourcePhoto,
+      }),
     create: () =>
       serverMutationOptions({
         mutationKey: [...all(), 'create'],

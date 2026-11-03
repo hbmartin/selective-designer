@@ -70,6 +70,21 @@ export interface DesignRepository {
     ownerId: UserId;
     changes: { name?: DesignName; archivedAt?: Date | null };
   }): Promise<ApplicationResult<DesignUpdatedOutcome | DesignNotFoundOutcome>>;
+  /** Pipeline: the owner of a design, or missing. */
+  findOwner(
+    id: DesignId
+  ): Promise<
+    ApplicationResult<
+      { type: 'design_owner'; ownerId: UserId } | DesignNotFoundOutcome
+    >
+  >;
+  /** Images of one kind attached to a design, oldest first. */
+  listImages(input: {
+    designId: DesignId;
+    kind: DesignImageKind;
+  }): Promise<
+    ApplicationResult<{ type: 'images_listed'; images: DesignImage[] }>
+  >;
   /** Any image of the design, with the design's owner for access checks. */
   findImage(
     imageId: ImageId

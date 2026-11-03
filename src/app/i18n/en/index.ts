@@ -6,6 +6,7 @@ import components from './components.json' with { type: 'json' };
 import design from './design.json' with { type: 'json' };
 import emails from './emails.json' with { type: 'json' };
 import layout from './layout.json' with { type: 'json' };
+import moodboard from './moodboard.json' with { type: 'json' };
 import user from './user.json' with { type: 'json' };
 
 export default {
@@ -17,5 +18,6 @@ export default {
   design,
   emails,
   layout,
+  moodboard,
   user,
 } as const;

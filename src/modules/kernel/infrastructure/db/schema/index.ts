@@ -5,6 +5,7 @@ export * from './upload-intent';
 export * from '@/modules/auth/infrastructure/drizzle/schema';
 export * from '@/modules/design/infrastructure/drizzle/schema';
 export * from '@/modules/email/infrastructure/drizzle/schema';
+export * from '@/modules/moodboard/infrastructure/drizzle/schema';
 
 import {
   account,

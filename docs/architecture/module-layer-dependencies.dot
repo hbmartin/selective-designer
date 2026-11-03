@@ -61,6 +61,18 @@ digraph ModuleLayerDependencies {
     "kernel/transport" [label="transport", fillcolor="#ede9fe"];
   }
 
+  subgraph cluster_moodboard {
+    label="moodboard";
+    color="#d1d5db";
+    style="rounded";
+    "moodboard/public" [label="public", fillcolor="#f3f4f6"];
+    "moodboard/application" [label="application", fillcolor="#dbeafe"];
+    "moodboard/domain" [label="domain", fillcolor="#dcfce7"];
+    "moodboard/infrastructure" [label="infrastructure", fillcolor="#ffedd5"];
+    "moodboard/presentation" [label="presentation", fillcolor="#fef9c3"];
+    "moodboard/transport" [label="transport", fillcolor="#ede9fe"];
+  }
+
   subgraph cluster_user {
     label="user";
     color="#d1d5db";
@@ -146,11 +158,32 @@ digraph ModuleLayerDependencies {
   "kernel/infrastructure" -> "email/infrastructure" [style="dotted"];
   "kernel/infrastructure" -> "kernel/domain" [style="solid"];
   "kernel/infrastructure" -> "kernel/transport" [style="solid"];
+  "kernel/infrastructure" -> "moodboard/infrastructure" [style="dotted"];
   "kernel/public" -> "kernel/application" [style="dotted"];
   "kernel/public" -> "kernel/domain" [style="dotted"];
   "kernel/public" -> "kernel/infrastructure" [style="solid"];
   "kernel/public" -> "kernel/transport" [style="dashed"];
   "kernel/transport" -> "kernel/domain" [style="solid"];
+  "moodboard/application" -> "kernel/domain" [style="solid"];
+  "moodboard/application" -> "moodboard/domain" [style="solid"];
+  "moodboard/infrastructure" -> "design/infrastructure" [style="solid"];
+  "moodboard/infrastructure" -> "kernel/domain" [style="solid"];
+  "moodboard/infrastructure" -> "kernel/infrastructure" [style="solid"];
+  "moodboard/infrastructure" -> "moodboard/domain" [style="solid"];
+  "moodboard/presentation" -> "auth/public" [style="solid"];
+  "moodboard/presentation" -> "design/public" [style="solid"];
+  "moodboard/presentation" -> "kernel/domain" [style="solid"];
+  "moodboard/presentation" -> "moodboard/domain" [style="solid"];
+  "moodboard/presentation" -> "moodboard/public" [style="solid"];
+  "moodboard/public" -> "moodboard/application" [style="solid"];
+  "moodboard/public" -> "moodboard/domain" [style="dotted"];
+  "moodboard/public" -> "moodboard/infrastructure" [style="solid"];
+  "moodboard/public" -> "moodboard/presentation" [style="dotted"];
+  "moodboard/public" -> "moodboard/transport" [style="dotted"];
+  "moodboard/transport" -> "auth/public" [style="dashed"];
+  "moodboard/transport" -> "kernel/domain" [style="solid"];
+  "moodboard/transport" -> "kernel/transport" [style="solid"];
+  "moodboard/transport" -> "moodboard/domain" [style="solid"];
   "user/application" -> "user/domain" [style="solid"];
   "user/domain" -> "kernel/domain" [style="solid"];
   "user/presentation" -> "auth/public" [style="solid"];

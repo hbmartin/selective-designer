@@ -7,6 +7,10 @@ import {
   findImageForPipeline,
 } from './application/use-cases/pipeline-images';
 import { prepareDesignUpload } from './application/use-cases/prepare-design-upload';
+import {
+  addSourcePhoto,
+  listSourcePhotos,
+} from './application/use-cases/source-photos';
 import type {
   DesignPipelineDeps,
   DesignUseCaseDeps,
@@ -26,6 +30,10 @@ export function createDesignUseCases(deps: DesignUseCaseDeps) {
       prepareDesignUpload(deps, input),
     getImageDownloadUrl: (input: Input<typeof getImageDownloadUrl>) =>
       getImageDownloadUrl(deps, input),
+    listSourcePhotos: (input: Input<typeof listSourcePhotos>) =>
+      listSourcePhotos(deps, input),
+    addSourcePhoto: (input: Input<typeof addSourcePhoto>) =>
+      addSourcePhoto(deps, input),
   };
 }
 
@@ -38,6 +46,11 @@ export function createDesignPipelineUseCases(deps: DesignPipelineDeps) {
       findImageForPipeline(deps, imageId),
     addImage: (input: Input<typeof addImageForPipeline>) =>
       addImageForPipeline(deps, input),
+    findOwner: (
+      designId: Parameters<
+        DesignPipelineDeps['designRepository']['findOwner']
+      >[0]
+    ) => deps.designRepository.findOwner(designId),
   };
 }
 

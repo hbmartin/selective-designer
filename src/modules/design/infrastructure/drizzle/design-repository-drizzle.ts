@@ -294,6 +294,46 @@ export const createDesignRepository = ({
       }
     },
 
+    async findOwner(id) {
+      try {
+        const [row] = await db
+          .select({ ownerId: designTable.ownerId })
+          .from(designTable)
+          .where(eq(designTable.id, id))
+          .limit(1);
+        if (!row) return Result.Ok({ type: 'design_not_found' });
+        const ownerId = toUserId(row.ownerId);
+        if (ownerId.isError()) return Result.Error(rowError(id));
+        return Result.Ok({ type: 'design_owner', ownerId: ownerId.get() });
+      } catch (error) {
+        return Result.Error(dbError(error));
+      }
+    },
+
+    async listImages(input) {
+      try {
+        const rows = await db
+          .select()
+          .from(imageTable)
+          .where(
+            and(
+              eq(imageTable.designId, input.designId),
+              eq(imageTable.kind, input.kind)
+            )
+          )
+          .orderBy(imageTable.createdAt, imageTable.id);
+        const images: DesignImage[] = [];
+        for (const row of rows) {
+          const parsed = toDomainImage(row);
+          if (parsed.isError()) return Result.Error(parsed.getError());
+          images.push(parsed.get());
+        }
+        return Result.Ok({ type: 'images_listed', images });
+      } catch (error) {
+        return Result.Error(dbError(error));
+      }
+    },
+
     async findImage(imageId) {
       try {
         const [row] = await db

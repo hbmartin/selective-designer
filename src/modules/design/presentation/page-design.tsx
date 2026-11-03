@@ -1,5 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { ArchiveIcon, ArchiveRestoreIcon, DownloadIcon } from 'lucide-react';
+import type { ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
 import { toast } from 'sonner';
 
@@ -18,7 +19,11 @@ import type { DesignId } from '@/modules/kernel/domain/ids';
 
 import { designQueries } from './wired-queries';
 
-export const PageDesign = (props: { designId: DesignId }) => {
+export const PageDesign = (props: {
+  designId: DesignId;
+  /** Side panel composed by the route (e.g. the mood board). */
+  aside?: ReactNode;
+}) => {
   const { t } = useTranslation(['design']);
   const scopeKey = useCurrentScopeKey();
   const queryClient = useQueryClient();
@@ -96,28 +101,31 @@ export const PageDesign = (props: { designId: DesignId }) => {
         </PageLayoutTopBarTitle>
       </PageLayoutTopBar>
       <PageLayoutContent className="pb-20">
-        {design ? (
-          <div className="flex flex-col gap-3">
-            <div className="overflow-hidden rounded-md border bg-muted">
-              <img
-                src={design.baseImage.workingUrl}
-                alt={t('design:detail.baseImageAlt')}
-                className="w-full object-contain"
-                style={{
-                  aspectRatio: `${design.baseImage.working.width} / ${design.baseImage.working.height}`,
-                }}
-              />
+        <div className="grid gap-6 lg:grid-cols-[minmax(0,1fr)_320px]">
+          {design ? (
+            <div className="flex flex-col gap-3">
+              <div className="overflow-hidden rounded-md border bg-muted">
+                <img
+                  src={design.baseImage.workingUrl}
+                  alt={t('design:detail.baseImageAlt')}
+                  className="w-full object-contain"
+                  style={{
+                    aspectRatio: `${design.baseImage.working.width} / ${design.baseImage.working.height}`,
+                  }}
+                />
+              </div>
+              <p className="text-xs text-muted-foreground">
+                {t('design:detail.dimensions', {
+                  width: design.baseImage.original.width,
+                  height: design.baseImage.original.height,
+                })}
+              </p>
             </div>
-            <p className="text-xs text-muted-foreground">
-              {t('design:detail.dimensions', {
-                width: design.baseImage.original.width,
-                height: design.baseImage.original.height,
-              })}
-            </p>
-          </div>
-        ) : (
-          <Skeleton className="aspect-video w-full" />
-        )}
+          ) : (
+            <Skeleton className="aspect-video w-full" />
+          )}
+          {props.aside}
+        </div>
       </PageLayoutContent>
     </PageLayout>
   );

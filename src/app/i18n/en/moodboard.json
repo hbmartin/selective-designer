@@ -1,0 +1,55 @@
+{
+  "panel": {
+    "title": "Mood board",
+    "addButton": "Add item",
+    "empty": "Add product photos, swatches or extracts to place them in renders.",
+    "removingBackground": "Removing background…",
+    "cutoutFailed": "Background removal failed",
+    "retry": "Retry",
+    "edit": "Edit",
+    "remove": "Remove",
+    "correctCutout": "Correct cut-out",
+    "removed": "Item removed"
+  },
+  "kinds": {
+    "product": "Product",
+    "extract": "Extract",
+    "swatch": "Swatch"
+  },
+  "form": {
+    "createTitle": "Add to mood board",
+    "editTitle": "Edit item",
+    "description": "Products get their background removed automatically. Swatches are used for region-wide material changes.",
+    "dropzone": "Drop, paste or choose a photo",
+    "name": "Name",
+    "category": "Category",
+    "categorySuggestions": "Suggested categories",
+    "vendor": "Vendor (optional)",
+    "productUrl": "Product link (optional)",
+    "invalidUrl": "Use a full http(s) link.",
+    "createButton": "Add item",
+    "saveButton": "Save",
+    "missingPhoto": "Choose a photo first.",
+    "unsupportedType": "Use a PNG, JPEG or WebP image.",
+    "errorMessage": "The item could not be saved. Please try again."
+  },
+  "sourcePhotos": {
+    "title": "Source photos",
+    "description": "Room or product photos to extract items from.",
+    "upload": "Add source photo",
+    "extract": "Extract item",
+    "extractTitle": "Extract an item",
+    "extractHint": "Drag a box around the item, then name it.",
+    "extractButton": "Use selection",
+    "uploadError": "The photo could not be uploaded."
+  },
+  "cutout": {
+    "title": "Correct cut-out",
+    "erase": "Erase",
+    "restore": "Restore",
+    "brushSize": "Brush size",
+    "save": "Save new version",
+    "saved": "Cut-out saved as a new version",
+    "error": "The cut-out could not be saved."
+  }
+}

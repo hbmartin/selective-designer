@@ -68,6 +68,23 @@ export const createFakeDesignRepository = (now: () => Date) => {
       designs.set(updated.id, updated);
       return Result.Ok({ type: 'design_updated', design: updated });
     },
+    async findOwner(id) {
+      const design = designs.get(id);
+      return Result.Ok(
+        design
+          ? { type: 'design_owner', ownerId: design.ownerId }
+          : { type: 'design_not_found' }
+      );
+    },
+    async listImages(input) {
+      return Result.Ok({
+        type: 'images_listed',
+        images: [...images.values()].filter(
+          (image) =>
+            image.designId === input.designId && image.kind === input.kind
+        ),
+      });
+    },
     async findImage(imageId) {
       const image = images.get(imageId);
       const design = image ? designs.get(image.designId) : undefined;

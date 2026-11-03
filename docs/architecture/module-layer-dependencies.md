@@ -48,6 +48,15 @@ subgraph module_kernel["kernel"]
   node_kernel_transport["transport"]
 end
 
+subgraph module_moodboard["moodboard"]
+  node_moodboard_public["public"]
+  node_moodboard_application["application"]
+  node_moodboard_domain["domain"]
+  node_moodboard_infrastructure["infrastructure"]
+  node_moodboard_presentation["presentation"]
+  node_moodboard_transport["transport"]
+end
+
 subgraph module_user["user"]
   node_user_public["public"]
   node_user_application["application"]
@@ -130,11 +139,32 @@ node_kernel_infrastructure --> node_design_infrastructure
 node_kernel_infrastructure --> node_email_infrastructure
 node_kernel_infrastructure --> node_kernel_domain
 node_kernel_infrastructure --> node_kernel_transport
+node_kernel_infrastructure --> node_moodboard_infrastructure
 node_kernel_public --> node_kernel_application
 node_kernel_public --> node_kernel_domain
 node_kernel_public --> node_kernel_infrastructure
 node_kernel_public --> node_kernel_transport
 node_kernel_transport --> node_kernel_domain
+node_moodboard_application --> node_kernel_domain
+node_moodboard_application --> node_moodboard_domain
+node_moodboard_infrastructure --> node_design_infrastructure
+node_moodboard_infrastructure --> node_kernel_domain
+node_moodboard_infrastructure --> node_kernel_infrastructure
+node_moodboard_infrastructure --> node_moodboard_domain
+node_moodboard_presentation --> node_auth_public
+node_moodboard_presentation --> node_design_public
+node_moodboard_presentation --> node_kernel_domain
+node_moodboard_presentation --> node_moodboard_domain
+node_moodboard_presentation --> node_moodboard_public
+node_moodboard_public --> node_moodboard_application
+node_moodboard_public --> node_moodboard_domain
+node_moodboard_public --> node_moodboard_infrastructure
+node_moodboard_public --> node_moodboard_presentation
+node_moodboard_public --> node_moodboard_transport
+node_moodboard_transport --> node_auth_public
+node_moodboard_transport --> node_kernel_domain
+node_moodboard_transport --> node_kernel_transport
+node_moodboard_transport --> node_moodboard_domain
 node_user_application --> node_user_domain
 node_user_domain --> node_kernel_domain
 node_user_presentation --> node_auth_public
@@ -166,11 +196,16 @@ linkStyle 70 stroke-dasharray: 1 4
 linkStyle 71 stroke-dasharray: 1 4
 linkStyle 74 stroke-dasharray: 1 4
 linkStyle 75 stroke-dasharray: 1 4
-linkStyle 77 stroke-dasharray: 6 4
-linkStyle 87 stroke-dasharray: 1 4
-linkStyle 88 stroke-dasharray: 1 4
-linkStyle 89 stroke-dasharray: 1 4
-linkStyle 90 stroke-dasharray: 6 4
+linkStyle 76 stroke-dasharray: 1 4
+linkStyle 78 stroke-dasharray: 6 4
+linkStyle 92 stroke-dasharray: 1 4
+linkStyle 94 stroke-dasharray: 1 4
+linkStyle 95 stroke-dasharray: 1 4
+linkStyle 96 stroke-dasharray: 6 4
+linkStyle 108 stroke-dasharray: 1 4
+linkStyle 109 stroke-dasharray: 1 4
+linkStyle 110 stroke-dasharray: 1 4
+linkStyle 111 stroke-dasharray: 6 4
 ```
 
 ## Edge Styles

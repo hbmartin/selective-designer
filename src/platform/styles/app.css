@@ -337,3 +337,12 @@
     animation: float-in-space 8s ease-in-out infinite;
   }
 }
+
+/* Checkerboard behind images with transparency (cut-outs, masks). */
+@utility bg-transparency-grid {
+  background-image: repeating-conic-gradient(
+    var(--color-muted) 0% 25%,
+    var(--color-background) 0% 50%
+  );
+  background-size: 16px 16px;
+}

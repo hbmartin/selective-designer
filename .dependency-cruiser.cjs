@@ -20,7 +20,7 @@ module.exports = {
       comment:
         'Composition is the wiring root. Module internals receive dependencies through factories or public server barrels.',
       from: {
-        path: '^src/modules/[^/]+/(domain|application|infrastructure|transport/(?!server-functions)|presentation|factory)',
+        path: '^src/modules/[^/]+/(domain|application|infrastructure|transport/(?!server-functions|workflows)|presentation|factory)',
       },
       to: { path: '^src/composition' },
     },

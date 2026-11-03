@@ -12,8 +12,10 @@ import {
   type DesignHandlers,
   zDesignByIdInput,
   zDesignCreateInput,
+  zDesignIdInput,
   zDesignListInput,
   zDesignRenameInput,
+  zSourcePhotoAddInput,
 } from '../http/design-handlers';
 
 type ProtectedRunner = ServerFnContextRunner<ProtectedContext>;
@@ -111,7 +113,27 @@ export const designUnarchive = createServerFn({ method: 'POST' })
     )
   );
 
+export const designListSourcePhotos = createServerFn({ method: 'GET' })
+  .inputValidator(zDesignIdInput())
+  .handler(async ({ data }) =>
+    runProtected.withOperation('design.listSourcePhotos')(
+      data,
+      ({ handlers }, ctx, input) => handlers.listSourcePhotos(ctx, input)
+    )
+  );
+
+export const designAddSourcePhoto = createServerFn({ method: 'POST' })
+  .inputValidator(zSourcePhotoAddInput())
+  .handler(async ({ data }) =>
+    runMutation.withOperation('design.addSourcePhoto')(
+      data,
+      ({ handlers }, ctx, input) => handlers.addSourcePhoto(ctx, input)
+    )
+  );
+
 export type DesignServerFunctions = {
+  designListSourcePhotos: typeof designListSourcePhotos;
+  designAddSourcePhoto: typeof designAddSourcePhoto;
   designGetAll: typeof designGetAll;
   designGetById: typeof designGetById;
   designCreate: typeof designCreate;

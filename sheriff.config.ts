@@ -22,7 +22,7 @@ const isModuleInternalTargetPath = (toModulePath: string) =>
   !/\/src\/(?:app|composition)(?:\/|$)/.test(toModulePath);
 
 const isServerFunctionEntrypoint = (fromFilePath: string) =>
-  /\/src\/modules\/[^/]+\/transport\/server-functions(?:\/|$)/.test(
+  /\/src\/modules\/[^/]+\/transport\/(?:server-functions|workflows)(?:\/|$)/.test(
     fromFilePath
   );
 

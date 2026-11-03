@@ -8,13 +8,20 @@ import {
 } from '@/modules/kernel/transport/tanstack/result-mapper';
 
 import type { DesignCreateOutcome } from '../../application/use-cases/create-design';
-import type { DesignView } from '../../application/use-cases/design-view';
+import type {
+  DesignImageView,
+  DesignView,
+} from '../../application/use-cases/design-view';
 import type { DesignGetOutcome } from '../../application/use-cases/get-design';
 import type { ImageDownloadOutcome } from '../../application/use-cases/image-access';
 import type {
   DesignListOutcome,
   DesignViewPage,
 } from '../../application/use-cases/list-designs';
+import type {
+  SourcePhotoAddOutcome,
+  SourcePhotoListOutcome,
+} from '../../application/use-cases/source-photos';
 import type { DesignUpdateOutcome } from '../../application/use-cases/update-design';
 import { zDesignName } from '../../domain/design';
 import { MAX_IMAGE_EDGE } from '../../domain/image-policy';
@@ -55,6 +62,19 @@ export const zDesignRenameInput = () =>
 
 export const zImageByIdInput = () => z.object({ imageId: zImageId() });
 
+export const zDesignIdInput = () => z.object({ designId: zDesignId() });
+
+export const zSourcePhotoAddInput = () =>
+  z.object({
+    designId: zDesignId(),
+    photo: z.object({
+      originalKey: zObjectKey(),
+      original: zDimensions(),
+      workingKey: zObjectKey(),
+      working: zDimensions(),
+    }),
+  });
+
 const listConfig = {
   design_forbidden: 'FORBIDDEN',
   design_listed: (outcome) => outcome.page,
@@ -85,6 +105,32 @@ const updateConfig = {
   design_not_found: 'NOT_FOUND',
   design_updated: (outcome) => outcome.design,
 } as const satisfies OutcomeHandlerConfig<DesignUpdateOutcome, DesignView>;
+
+const sourcePhotoListConfig = {
+  design_forbidden: 'FORBIDDEN',
+  design_not_found: 'NOT_FOUND',
+  source_photos_listed: (outcome) => outcome.photos,
+} as const satisfies OutcomeHandlerConfig<
+  SourcePhotoListOutcome,
+  DesignImageView[]
+>;
+
+const sourcePhotoAddConfig = {
+  design_forbidden: 'FORBIDDEN',
+  design_not_found: 'NOT_FOUND',
+  design_upload_unowned: {
+    code: 'BAD_REQUEST',
+    message: 'The upload is no longer valid; please upload the photo again.',
+  },
+  design_image_invalid: {
+    code: 'BAD_REQUEST',
+    message: 'The uploaded photo is not valid.',
+  },
+  source_photo_added: (outcome) => outcome.photo,
+} as const satisfies OutcomeHandlerConfig<
+  SourcePhotoAddOutcome,
+  DesignImageView
+>;
 
 export const imageDownloadConfig = {
   design_forbidden: 'FORBIDDEN',
@@ -169,6 +215,29 @@ export const createDesignHandlers = ({ getUseCases }: DesignHandlerDeps) => ({
         change: { type: 'unarchive' },
       }),
       updateConfig
+    ),
+  listSourcePhotos: (
+    ctx: ProtectedContext,
+    data: z.output<ReturnType<typeof zDesignIdInput>>
+  ) =>
+    unwrapApplicationResult(
+      getUseCases(ctx).listSourcePhotos({
+        currentUserId: ctx.scope.userId,
+        designId: data.designId,
+      }),
+      sourcePhotoListConfig
+    ),
+  addSourcePhoto: (
+    ctx: ProtectedContext,
+    data: z.output<ReturnType<typeof zSourcePhotoAddInput>>
+  ) =>
+    unwrapApplicationResult(
+      getUseCases(ctx).addSourcePhoto({
+        currentUserId: ctx.scope.userId,
+        designId: data.designId,
+        photo: data.photo,
+      }),
+      sourcePhotoAddConfig
     ),
 });
 

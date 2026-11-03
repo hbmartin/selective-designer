@@ -10,6 +10,10 @@ export type {
   DesignViewPage,
 } from './application/use-cases/list-designs';
 export type {
+  SourcePhotoAddOutcome,
+  SourcePhotoListOutcome,
+} from './application/use-cases/source-photos';
+export type {
   DesignPipelineDeps,
   DesignUseCaseDeps,
 } from './application/use-cases/types';
