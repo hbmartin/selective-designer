@@ -84,7 +84,31 @@ describe('planRender', () => {
     expect(plan.models.filter((m) => m.decision === 'include')).toHaveLength(3);
   });
 
-  it('skips Krea above eight and FLUX above nine references', () => {
+  it('reserves one Krea input slot for the render source', () => {
+    const krea = enabledModels(['krea-3']);
+    expect(
+      planRender(
+        recipe(Array.from({ length: 7 }, (_, n) => placement(n))),
+        krea
+      ).models
+    ).toEqual([{ modelId: 'krea-3', decision: 'include' }]);
+    expect(
+      planRender(
+        recipe(Array.from({ length: 8 }, (_, n) => placement(n))),
+        krea
+      ).models
+    ).toEqual([
+      {
+        modelId: 'krea-3',
+        decision: 'skip',
+        reason: 'too_many_references',
+        limit: 7,
+        references: 8,
+      },
+    ]);
+  });
+
+  it('skips models that cannot take ten references', () => {
     const plan = planRender(
       recipe([...Array(10).keys()].map((n) => placement(n))),
       all

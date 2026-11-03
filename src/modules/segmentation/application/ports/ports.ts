@@ -28,9 +28,24 @@ export type NewRegion = {
 };
 
 export interface RegionRepository {
-  listByImage(
+  listByImage(imageId: ImageId): Promise<
+    ApplicationResult<{
+      type: 'regions_listed';
+      regions: Region[];
+      detectionExpiresAt: Date | null;
+    }>
+  >;
+  startDetection(input: {
+    imageId: ImageId;
+    expiresAt: Date;
+  }): Promise<
+    ApplicationResult<
+      { type: 'detection_started' } | { type: 'detection_already_started' }
+    >
+  >;
+  finishDetection(
     imageId: ImageId
-  ): Promise<ApplicationResult<{ type: 'regions_listed'; regions: Region[] }>>;
+  ): Promise<ApplicationResult<{ type: 'detection_finished' }>>;
   findById(
     regionId: RegionId
   ): Promise<

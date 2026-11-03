@@ -49,9 +49,16 @@ const fakeRegions = () => {
     createdAt: now,
   });
   const repository: RegionRepository = {
+    async startDetection() {
+      return Result.Ok({ type: 'detection_started' });
+    },
+    async finishDetection() {
+      return Result.Ok({ type: 'detection_finished' });
+    },
     async listByImage(imageId) {
       return Result.Ok({
         type: 'regions_listed',
+        detectionExpiresAt: null,
         regions: rows.filter((r) => r.imageId === imageId),
       });
     },

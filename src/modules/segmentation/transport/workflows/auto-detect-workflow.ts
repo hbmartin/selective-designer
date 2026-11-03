@@ -42,6 +42,13 @@ async function detectConceptStep(imageId: string, concept: string) {
   );
 }
 
+async function finishDetectionStep(imageId: string) {
+  'use step';
+  return unwrapStepResult(
+    await (await pipeline()).finishDetection(imageIdOrFail(imageId))
+  );
+}
+
 /**
  * Eager segmentation of a new image: carry the render source's user-made
  * regions over (results only), then detect every concept in parallel. One
@@ -52,18 +59,23 @@ export async function autoDetectWorkflow(input: {
   carryFromImageId: string | null;
 }) {
   'use workflow';
-  if (input.carryFromImageId) {
-    await carryOverStep(input.carryFromImageId, input.imageId);
+  try {
+    if (input.carryFromImageId) {
+      await carryOverStep(input.carryFromImageId, input.imageId);
+    }
+    const concepts = await conceptsStep(input.imageId);
+    if (concepts.type === 'image_missing') return { detected: 0 };
+    const results = await Promise.allSettled(
+      concepts.concepts.map((concept) =>
+        detectConceptStep(input.imageId, concept)
+      )
+    );
+    return {
+      detected: results.filter((result) => result.status === 'fulfilled')
+        .length,
+      failed: results.filter((result) => result.status === 'rejected').length,
+    };
+  } finally {
+    await finishDetectionStep(input.imageId);
   }
-  const concepts = await conceptsStep(input.imageId);
-  if (concepts.type === 'image_missing') return { detected: 0 };
-  const results = await Promise.allSettled(
-    concepts.concepts.map((concept) =>
-      detectConceptStep(input.imageId, concept)
-    )
-  );
-  return {
-    detected: results.filter((result) => result.status === 'fulfilled').length,
-    failed: results.filter((result) => result.status === 'rejected').length,
-  };
 }

@@ -8,11 +8,10 @@ import { DEFAULT_LANGUAGE_KEY } from '@/platform/lib/i18n/constants';
 import { sanitizeLogFields } from '@/platform/lib/redaction/sanitize-log-fields';
 
 import locales from '@/app/i18n';
-import { AUTH_SIGNUP_ENABLED } from '@/modules/auth/client';
+import { getSeedAccountPassword } from '@/modules/kernel/infrastructure/config/env-schema';
 import { FileRouteTypes } from '@/routeTree.gen';
 
 import { installConsoleErrorGuard } from './console-error-guard';
-import { type MaildevOtpPollEvent, readLatestOtp } from './maildev';
 
 type PostAuthRoute = '/app' | '/manager';
 
@@ -28,7 +27,7 @@ export interface PageUtils {
   /**
    * Utility used to authenticate a user on the app
    */
-  login: (input: { email: string; code?: string }) => Promise<void>;
+  login: (input: { email: string }) => Promise<void>;
 
   /**
    * Attach the auth diagnostics collected for the current test.
@@ -81,7 +80,7 @@ const SENSITIVE_DETAIL_KEYS = new Set([
   'id',
   'identifier',
   'name',
-  'otp',
+  'password',
   'phone',
   'user',
 ]);
@@ -356,95 +355,25 @@ export const pageWithUtils: CustomFixture<Page & PageUtils> = async (
   const diagnostics = createAuthDiagnostics(page, testInfo);
   const consoleGuard = installConsoleErrorGuard(page, testInfo);
 
-  page.login = async function login(input: { email: string; code?: string }) {
+  page.login = async function login(input: { email: string }) {
     const routeLogin = '/login' satisfies FileRouteTypes['to'];
-    const routeLoginVerify = '/login/verify' satisfies FileRouteTypes['to'];
-
     await diagnostics.waitForUrl(
       'login.wait_for_login',
       (url) => url.pathname === routeLogin,
-      {
-        route: routeLogin,
-      }
+      { route: routeLogin }
     );
-
-    await expect(
-      page.getByText(
-        locales[DEFAULT_LANGUAGE_KEY].auth[
-          AUTH_SIGNUP_ENABLED ? 'pageLoginWithSignUp' : 'pageLogin'
-        ].title,
-        {
-          exact: true,
-        }
-      )
-    ).toBeVisible();
     await expect(page.getByTestId('auth-login-form')).toHaveAttribute(
       'data-hydrated',
       'true'
     );
-    diagnostics.log('login.form.hydrated');
-
-    diagnostics.log('login.form.visible');
-
-    const emailInput = page.getByPlaceholder(
-      locales[DEFAULT_LANGUAGE_KEY].auth.common.email.label
-    );
-    await emailInput.fill(input.email);
-    await expect(emailInput).toHaveValue(input.email);
-    diagnostics.log('login.email.filled', {
-      emailInputMatches: (await emailInput.inputValue()) === input.email,
-    });
-
-    const submitButton = page.getByRole('button', {
-      name: locales[DEFAULT_LANGUAGE_KEY].auth[
-        AUTH_SIGNUP_ENABLED ? 'pageLoginWithSignUp' : 'pageLogin'
-      ].loginWithEmail,
-    });
-    const otpRequestedAfterMs = Date.now();
-
-    diagnostics.log('login.email.submit.ready', {
-      buttonEnabled: await submitButton.isEnabled(),
-      otpRequestedAfterMs,
-    });
-    await submitButton.click();
-    diagnostics.log('login.email.submitted');
-
-    await diagnostics.waitForUrl(
-      'login.wait_for_verify',
-      (url) => url.pathname === routeLoginVerify,
-      {
-        route: routeLoginVerify,
-      }
-    );
-    await expect(page.getByTestId('auth-login-verify-form')).toHaveAttribute(
-      'data-hydrated',
-      'true'
-    );
-    diagnostics.log('login.verify.form.hydrated');
-    const logMaildevPoll = ({ details, type }: MaildevOtpPollEvent) => {
-      diagnostics.log(`login.${type}`, details);
-    };
-    const code =
-      input.code ??
-      (await readLatestOtp(input.email, {
-        afterMs: otpRequestedAfterMs,
-        onPoll: logMaildevPoll,
-      }).catch(async (error) => {
-        diagnostics.log('login.maildev.otp.failed', {
-          message: error instanceof Error ? error.message : String(error),
-        });
-        await diagnostics.attach('login-maildev-otp-failed');
-        throw error;
-      }));
-    diagnostics.log('login.maildev.otp.received', {
-      codeLength: code.length,
-    });
+    const auth = locales[DEFAULT_LANGUAGE_KEY].auth;
+    await page.getByPlaceholder(auth.common.email.label).fill(input.email);
     await page
-      .getByText(locales[DEFAULT_LANGUAGE_KEY].auth.common.otp.label)
-      .fill(code);
-    diagnostics.log('login.otp.filled', {
-      codeLength: code.length,
-    });
+      .getByPlaceholder(auth.common.password.label)
+      .fill(getSeedAccountPassword());
+    await page
+      .getByRole('button', { name: auth.pageLogin.submit, exact: true })
+      .click();
   };
 
   page.attachAuthDiagnostics = diagnostics.attach;

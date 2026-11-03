@@ -2,9 +2,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const mocks = vi.hoisted(() => ({
   betterAuthBrowserClient: {
-    sendEmailOtp: vi.fn(),
-    signInEmailOtp: vi.fn(),
-    signInSocial: vi.fn(),
+    signInWithPassword: vi.fn(),
     signOut: vi.fn(),
   },
   fetch: vi.fn(),
@@ -25,7 +23,6 @@ import {
   createUseAuthSession,
   signOut,
   startSignIn,
-  verifyEmailOtp,
 } from '@/modules/auth/presentation/client';
 
 describe('auth client facade', () => {
@@ -35,72 +32,33 @@ describe('auth client facade', () => {
     mocks.useMatches.mockReturnValue(undefined);
   });
 
-  it('starts the email OTP flow without exposing Better Auth response shapes', async () => {
-    mocks.betterAuthBrowserClient.sendEmailOtp.mockResolvedValue({
-      data: null,
+  it('submits the credentials without exposing the provider session', async () => {
+    const credentials = {
+      email: 'user@example.com',
+      password: 'test-password',
+    };
+    mocks.betterAuthBrowserClient.signInWithPassword.mockResolvedValue({
+      data: { token: 'provider-token' },
       error: null,
     });
-
-    await expect(
-      startSignIn({
-        strategy: 'email-otp',
-        email: 'user@example.com',
-        redirectTo: '/app',
-      })
-    ).resolves.toEqual({
+    await expect(startSignIn(credentials)).resolves.toEqual({
       ok: true,
-      value: {
-        status: 'verification_required',
-        email: 'user@example.com',
-        redirectTo: '/app',
-      },
+      value: undefined,
     });
-    expect(mocks.betterAuthBrowserClient.sendEmailOtp).toHaveBeenCalledWith({
-      email: 'user@example.com',
-    });
+    expect(
+      mocks.betterAuthBrowserClient.signInWithPassword
+    ).toHaveBeenCalledWith(credentials);
   });
 
-  it('maps provider errors into neutral auth action results', async () => {
-    mocks.betterAuthBrowserClient.signInEmailOtp.mockResolvedValue({
-      data: null,
-      error: {
-        code: 'INVALID_OTP',
-        message: 'Invalid code',
-      },
+  it('maps rejected credentials into a neutral error result', async () => {
+    mocks.betterAuthBrowserClient.signInWithPassword.mockResolvedValue({
+      error: { code: 'INVALID_EMAIL_OR_PASSWORD' },
     });
-
     await expect(
-      verifyEmailOtp({ email: 'user@example.com', otp: '000000' })
+      startSignIn({ email: 'user@example.com', password: 'wrong-password' })
     ).resolves.toEqual({
       ok: false,
-      code: 'INVALID_OTP',
-      message: 'Invalid code',
-    });
-  });
-
-  it('starts social sign-in with neutral redirect input', async () => {
-    mocks.betterAuthBrowserClient.signInSocial.mockResolvedValue({
-      data: { url: 'https://auth.example.com' },
-      error: null,
-    });
-
-    await expect(
-      startSignIn({
-        strategy: 'social',
-        provider: 'github',
-        redirectTo: '/manager',
-      })
-    ).resolves.toEqual({
-      ok: true,
-      value: {
-        status: 'redirect',
-        url: 'https://auth.example.com',
-      },
-    });
-    expect(mocks.betterAuthBrowserClient.signInSocial).toHaveBeenCalledWith({
-      provider: 'github',
-      callbackURL: '/manager',
-      errorCallbackURL: '/login/error',
+      code: 'INVALID_EMAIL_OR_PASSWORD',
     });
   });
 

@@ -27,7 +27,11 @@ export const createSegmentationQueries = <
         input,
         queryFn: (data) => facade.regionsGet({ data }),
       }),
-      staleTime: 20 * 60 * 1000,
+      // Refetch on mount to pick up a run scheduled since the cached snapshot.
+      staleTime: 0,
+      refetchInterval: (query: {
+        state: { data: { detection: 'pending' | 'idle' } | undefined };
+      }) => (query.state.data?.detection === 'pending' ? 3000 : false),
     }),
     segment: () =>
       serverMutationOptions({

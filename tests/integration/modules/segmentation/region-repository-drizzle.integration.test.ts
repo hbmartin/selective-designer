@@ -72,6 +72,27 @@ describe('RegionRepositoryDrizzle', () => {
     carriedFromRegionId: null,
   });
 
+  it('returns pending detection on an empty image and clears it after the last regions commit', async () => {
+    const expiresAt = new Date('2027-01-01T00:00:00.000Z');
+    expect(
+      okValue(await repository.startDetection({ imageId, expiresAt }))
+    ).toEqual({ type: 'detection_started' });
+    expect(
+      okValue(await repository.startDetection({ imageId, expiresAt }))
+    ).toEqual({ type: 'detection_already_started' });
+    expect(okValue(await repository.listByImage(imageId))).toEqual({
+      type: 'regions_listed',
+      regions: [],
+      detectionExpiresAt: expiresAt,
+    });
+    await repository.insertMany([region('last-region', 'window')]);
+    await repository.finishDetection(imageId);
+    expect(okValue(await repository.listByImage(imageId))).toMatchObject({
+      detectionExpiresAt: null,
+      regions: [{ id: 'last-region' }],
+    });
+  });
+
   it('replaces detections per concept and keeps user regions', async () => {
     await repository.insertMany([region('u1', 'door', 'click')]);
     await repository.replaceDetections({

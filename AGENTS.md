@@ -43,7 +43,7 @@ Use a layered verification loop rather than relying on one broad command.
 - Run `pnpm build` for production build/runtime changes, and `pnpm verify` before merge-level handoff.
 - When tests fail, inspect Playwright traces, screenshots, videos, console output, network evidence, and auth diagnostics before changing code. Treat retries as a diagnostic signal, not proof of correctness.
 
-Local full-stack verification with seeded data, Maildev, MinIO, and the local database is the default realism level for agent work. Production smoke testing is out of scope unless read-only routes, credentials, and data safety rules are explicitly provided.
+Local full-stack verification with seeded password accounts, MinIO, and the local database is the default realism level for agent work. Production smoke testing is out of scope unless read-only routes, credentials, and data safety rules are explicitly provided.
 
 Task verification artifacts should be grouped under `test-results/task-verification/<timestamp>/` when using `pnpm verify:task`. Keep Playwright traces, screenshots, videos, and failure attachments in their default `test-results/` locations and link or summarize the relevant paths in the final handoff. Visual test baselines are reviewed repo artifacts; do not silently update them without saying why.
 
@@ -124,8 +124,9 @@ Auth is provider-neutral above infrastructure. Application code depends on focus
 
 - `SessionGateway`
 - `AuthorizationGateway`
-- `AuthEmailPort`
 - `UserAdminGateway`
+
+Sign-in uses email and password. Operators provision and recover accounts with `pnpm auth:password`.
 
 Better Auth is the current adapter under `src/modules/auth/infrastructure/better-auth`. A future provider should implement the same ports and be selected in `src/composition/auth.ts`.
 

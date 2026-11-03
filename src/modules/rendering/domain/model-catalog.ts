@@ -47,8 +47,9 @@ export const MODEL_CATALOG: Record<ModelId, ModelSpec> = {
     endpoint: 'krea/v3/edit',
     targeting: 'fractional_boxes',
     maskPolarity: null,
-    maxReferences: 8,
-    maxReferencesWithMask: 8,
+    // fal accepts eight input images total, including the render source.
+    maxReferences: 7,
+    maxReferencesWithMask: 7,
     minTargetPx: { width: 48, height: 48 },
     estimatedCostUsdMicros: 170_000,
   },

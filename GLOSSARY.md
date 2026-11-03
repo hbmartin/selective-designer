@@ -52,6 +52,9 @@ _Avoid_: Mask, selection, segment
 A region found automatically by segmentation.
 _Avoid_: Auto-region
 
+**Detection run**:
+The automatic pass over an image that finds regions for each detection concept.
+
 **Placement**:
 One instance of an item positioned on an image, with its own position, scale and rotation.
 _Avoid_: Layer

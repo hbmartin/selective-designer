@@ -36,7 +36,6 @@ subgraph module_email["email"]
   node_email_application["application"]
   node_email_domain["domain"]
   node_email_infrastructure["infrastructure"]
-  node_email_presentation["presentation"]
   node_email_transport["transport"]
 end
 
@@ -97,11 +96,9 @@ node_account_transport --> node_auth_public
 node_account_transport --> node_kernel_transport
 node_auth_domain --> node_kernel_domain
 node_auth_infrastructure --> node_auth_domain
-node_auth_infrastructure --> node_auth_public
 node_auth_infrastructure --> node_kernel_domain
 node_auth_infrastructure --> node_kernel_infrastructure
 node_auth_infrastructure --> node_kernel_public
-node_auth_infrastructure --> node_kernel_transport
 node_auth_infrastructure --> node_user_public
 node_auth_presentation --> node_account_public
 node_auth_presentation --> node_auth_domain
@@ -143,11 +140,9 @@ node_email_infrastructure --> node_email_public
 node_email_infrastructure --> node_kernel_domain
 node_email_infrastructure --> node_kernel_infrastructure
 node_email_infrastructure --> node_kernel_public
-node_email_presentation --> node_auth_public
 node_email_public --> node_email_application
 node_email_public --> node_email_domain
 node_email_public --> node_email_infrastructure
-node_email_public --> node_email_presentation
 node_email_public --> node_email_transport
 node_email_public --> node_kernel_public
 node_email_transport --> node_email_public
@@ -240,37 +235,36 @@ linkStyle 6 stroke-dasharray: 1 4
 linkStyle 7 stroke-dasharray: 1 4
 linkStyle 8 stroke-dasharray: 1 4
 linkStyle 10 stroke-dasharray: 6 4
-linkStyle 26 stroke-dasharray: 1 4
+linkStyle 24 stroke-dasharray: 1 4
+linkStyle 43 stroke-dasharray: 1 4
 linkStyle 45 stroke-dasharray: 1 4
-linkStyle 47 stroke-dasharray: 1 4
-linkStyle 48 stroke-dasharray: 1 4
-linkStyle 49 stroke-dasharray: 6 4
-linkStyle 62 stroke-dasharray: 1 4
-linkStyle 64 stroke-dasharray: 1 4
+linkStyle 46 stroke-dasharray: 1 4
+linkStyle 47 stroke-dasharray: 6 4
+linkStyle 59 stroke-dasharray: 1 4
+linkStyle 66 stroke-dasharray: 1 4
+linkStyle 67 stroke-dasharray: 1 4
 linkStyle 70 stroke-dasharray: 1 4
 linkStyle 71 stroke-dasharray: 1 4
+linkStyle 72 stroke-dasharray: 1 4
+linkStyle 73 stroke-dasharray: 1 4
 linkStyle 74 stroke-dasharray: 1 4
-linkStyle 75 stroke-dasharray: 1 4
-linkStyle 76 stroke-dasharray: 1 4
-linkStyle 77 stroke-dasharray: 1 4
-linkStyle 78 stroke-dasharray: 1 4
-linkStyle 80 stroke-dasharray: 6 4
-linkStyle 94 stroke-dasharray: 1 4
-linkStyle 96 stroke-dasharray: 1 4
-linkStyle 97 stroke-dasharray: 1 4
-linkStyle 98 stroke-dasharray: 6 4
-linkStyle 112 stroke-dasharray: 1 4
-linkStyle 114 stroke-dasharray: 1 4
-linkStyle 115 stroke-dasharray: 1 4
-linkStyle 116 stroke-dasharray: 6 4
-linkStyle 129 stroke-dasharray: 1 4
-linkStyle 131 stroke-dasharray: 1 4
-linkStyle 132 stroke-dasharray: 1 4
-linkStyle 133 stroke-dasharray: 6 4
-linkStyle 145 stroke-dasharray: 1 4
-linkStyle 146 stroke-dasharray: 1 4
-linkStyle 147 stroke-dasharray: 1 4
-linkStyle 148 stroke-dasharray: 6 4
+linkStyle 76 stroke-dasharray: 6 4
+linkStyle 90 stroke-dasharray: 1 4
+linkStyle 92 stroke-dasharray: 1 4
+linkStyle 93 stroke-dasharray: 1 4
+linkStyle 94 stroke-dasharray: 6 4
+linkStyle 108 stroke-dasharray: 1 4
+linkStyle 110 stroke-dasharray: 1 4
+linkStyle 111 stroke-dasharray: 1 4
+linkStyle 112 stroke-dasharray: 6 4
+linkStyle 125 stroke-dasharray: 1 4
+linkStyle 127 stroke-dasharray: 1 4
+linkStyle 128 stroke-dasharray: 1 4
+linkStyle 129 stroke-dasharray: 6 4
+linkStyle 141 stroke-dasharray: 1 4
+linkStyle 142 stroke-dasharray: 1 4
+linkStyle 143 stroke-dasharray: 1 4
+linkStyle 144 stroke-dasharray: 6 4
 ```
 
 ## Edge Styles

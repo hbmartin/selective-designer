@@ -151,17 +151,19 @@ const toRender = (
 
 const byCreation = [asc(resultTable.createdAt), asc(resultTable.id)];
 
-/** Results are shown in catalog order (rows share one transaction time). */
-const catalogIndex = (modelId: string) => {
-  const index = (modelIds as readonly string[]).indexOf(modelId);
-  return index === -1 ? modelIds.length : index;
-};
-
 export const createRenderRepository = ({
   db,
+  modelOrder = modelIds,
 }: {
   db: DbLike;
+  modelOrder?: readonly string[];
 }): RenderRepository => {
+  // Disabled models can still have historical results. Keep them in catalog order.
+  const orderedModels = [...new Set([...modelOrder, ...modelIds])];
+  const modelRank = (modelId: string) => {
+    const index = orderedModels.indexOf(modelId);
+    return index === -1 ? orderedModels.length : index;
+  };
   const loadRenders = async (rows: RenderRow[]) => {
     if (rows.length === 0) return Result.Ok<Render[], AppError>([]);
     const resultRows = await db
@@ -180,7 +182,7 @@ export const createRenderRepository = ({
         row,
         resultRows
           .filter((r) => r.renderId === row.id)
-          .toSorted((a, b) => catalogIndex(a.modelId) - catalogIndex(b.modelId))
+          .toSorted((a, b) => modelRank(a.modelId) - modelRank(b.modelId))
       );
       if (parsed.isError())
         return Result.Error<Render[], AppError>(parsed.getError());
@@ -366,7 +368,7 @@ export const createRenderRepository = ({
         return Result.Ok({
           type: 'scorecard',
           rows: rows.toSorted(
-            (a, b) => catalogIndex(a.modelId) - catalogIndex(b.modelId)
+            (a, b) => modelRank(a.modelId) - modelRank(b.modelId)
           ),
         });
       } catch (error) {

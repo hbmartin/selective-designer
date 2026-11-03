@@ -68,3 +68,8 @@ export const withFreshProtectedMutation =
 export const withProtectedContext = serverContextTools.withProtectedContext;
 export const withProtectedMutation = serverContextTools.withProtectedMutation;
 export const withPublicContext = serverContextTools.withPublicContext;
+export {
+  addSeedCredentials,
+  operatorPasswordSchema,
+  writeOperatorPassword,
+} from './infrastructure/better-auth/password-credentials';

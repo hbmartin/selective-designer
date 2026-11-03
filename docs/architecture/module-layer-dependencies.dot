@@ -46,7 +46,6 @@ digraph ModuleLayerDependencies {
     "email/application" [label="application", fillcolor="#dbeafe"];
     "email/domain" [label="domain", fillcolor="#dcfce7"];
     "email/infrastructure" [label="infrastructure", fillcolor="#ffedd5"];
-    "email/presentation" [label="presentation", fillcolor="#fef9c3"];
     "email/transport" [label="transport", fillcolor="#ede9fe"];
   }
 
@@ -122,11 +121,9 @@ digraph ModuleLayerDependencies {
   "account/transport" -> "kernel/transport" [style="solid"];
   "auth/domain" -> "kernel/domain" [style="solid"];
   "auth/infrastructure" -> "auth/domain" [style="solid"];
-  "auth/infrastructure" -> "auth/public" [style="solid"];
   "auth/infrastructure" -> "kernel/domain" [style="solid"];
   "auth/infrastructure" -> "kernel/infrastructure" [style="solid"];
   "auth/infrastructure" -> "kernel/public" [style="solid"];
-  "auth/infrastructure" -> "kernel/transport" [style="solid"];
   "auth/infrastructure" -> "user/public" [style="solid"];
   "auth/presentation" -> "account/public" [style="solid"];
   "auth/presentation" -> "auth/domain" [style="solid"];
@@ -168,11 +165,9 @@ digraph ModuleLayerDependencies {
   "email/infrastructure" -> "kernel/domain" [style="solid"];
   "email/infrastructure" -> "kernel/infrastructure" [style="solid"];
   "email/infrastructure" -> "kernel/public" [style="solid"];
-  "email/presentation" -> "auth/public" [style="solid"];
   "email/public" -> "email/application" [style="solid"];
   "email/public" -> "email/domain" [style="dotted"];
   "email/public" -> "email/infrastructure" [style="solid"];
-  "email/public" -> "email/presentation" [style="dotted"];
   "email/public" -> "email/transport" [style="solid"];
   "email/public" -> "kernel/public" [style="solid"];
   "email/transport" -> "email/public" [style="solid"];

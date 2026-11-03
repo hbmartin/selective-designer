@@ -1,6 +1,7 @@
 import { type Result as BoxedResult, Result } from '@bloodyowl/boxed';
 import { and, asc, eq } from 'drizzle-orm';
 
+import { image } from '@/modules/design/infrastructure/drizzle/schema';
 import { AppError } from '@/modules/kernel/domain/errors/app-error';
 import {
   toDesignId,
@@ -20,7 +21,11 @@ import {
   regionSources,
 } from '@/modules/segmentation/domain/region';
 
-import { region as regionTable, type RegionRow } from './schema';
+import {
+  activeDetection,
+  region as regionTable,
+  type RegionRow,
+} from './schema';
 
 const rowError = (cause: unknown) =>
   new AppError({
@@ -107,13 +112,50 @@ export const createRegionRepository = ({
     async listByImage(imageId) {
       try {
         const rows = await db
-          .select()
-          .from(regionTable)
-          .where(eq(regionTable.imageId, imageId))
+          .select({
+            region: regionTable,
+            detectionExpiresAt: activeDetection.expiresAt,
+          })
+          .from(image)
+          .leftJoin(regionTable, eq(regionTable.imageId, image.id))
+          .leftJoin(activeDetection, eq(activeDetection.imageId, image.id))
+          .where(eq(image.id, imageId))
           .orderBy(asc(regionTable.createdAt), asc(regionTable.id));
-        const parsed = parseAll(rows);
+        const parsed = parseAll(
+          rows.flatMap((row) => (row.region ? [row.region] : []))
+        );
         if (parsed.isError()) return Result.Error(parsed.getError());
-        return Result.Ok({ type: 'regions_listed', regions: parsed.get() });
+        return Result.Ok({
+          type: 'regions_listed',
+          regions: parsed.get(),
+          detectionExpiresAt: rows[0]?.detectionExpiresAt ?? null,
+        });
+      } catch (error) {
+        return Result.Error(dbError(error));
+      }
+    },
+    async startDetection(input) {
+      try {
+        const [started] = await db
+          .insert(activeDetection)
+          .values(input)
+          .onConflictDoNothing()
+          .returning({ imageId: activeDetection.imageId });
+        return Result.Ok(
+          started
+            ? { type: 'detection_started' }
+            : { type: 'detection_already_started' }
+        );
+      } catch (error) {
+        return Result.Error(dbError(error));
+      }
+    },
+    async finishDetection(imageId) {
+      try {
+        await db
+          .delete(activeDetection)
+          .where(eq(activeDetection.imageId, imageId));
+        return Result.Ok({ type: 'detection_finished' });
       } catch (error) {
         return Result.Error(dbError(error));
       }

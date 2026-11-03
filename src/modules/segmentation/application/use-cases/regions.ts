@@ -88,9 +88,14 @@ const toViews = async (
 };
 
 export type ListRegionsOutcome =
-  | { type: 'regions_listed'; regions: RegionView[] }
+  | ({ type: 'regions_listed' } & RegionListView)
   | Forbidden
   | ImageNotFound;
+
+export type RegionListView = {
+  regions: RegionView[];
+  detection: 'pending' | 'idle';
+};
 
 export async function listRegions(
   deps: SegmentationUseCaseDeps,
@@ -102,9 +107,17 @@ export async function listRegions(
   if (ownedOutcome.type !== 'ok') return Result.Ok(ownedOutcome);
   const listed = await deps.regionRepository.listByImage(input.imageId);
   if (listed.isError()) return Result.Error(listed.getError());
-  const views = await toViews(deps, listed.get().regions);
+  const { regions, detectionExpiresAt } = listed.get();
+  const views = await toViews(deps, regions);
   if (views.isError()) return Result.Error(views.getError());
-  return Result.Ok({ type: 'regions_listed', regions: views.get() });
+  return Result.Ok({
+    type: 'regions_listed',
+    regions: views.get(),
+    detection:
+      detectionExpiresAt && detectionExpiresAt > deps.clock.now()
+        ? 'pending'
+        : 'idle',
+  });
 }
 
 export type SegmentByPromptOutcome =

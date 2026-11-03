@@ -134,23 +134,6 @@ Set `RESEND_WEBHOOK_SECRET` to the Resend/Svix signing secret for
 Use `EMAIL_DELIVERY_DISABLED=true` when a workflow should skip delivery, such
 as automated end-to-end test runs.
 
-#### Preview emails
-
-Emails templates are built with `react-email` components in the `src/modules/email/presentation` folder.
-
-You can preview an email template at `http://localhost:3000/api/dev/email/{template}` where `{template}` is the name of the template file in the `src/modules/email/presentation/templates` folder.
-
-Example: [Login Code](http://localhost:3000/api/dev/email/login-code)
-
-##### Email translation preview
-
-Add the language in the preview url like `http://localhost:3000/api/dev/email/{template}?language={language}` where `{language}` is the language key (`en`, `fr`, ...)
-
-#### Email props preview
-
-You can add search params to the preview url to pass as props to the template.
-`http://localhost:3000/api/dev/email/{template}/?{propsName}={propsValue}`
-
 ### OpenAPI Documentation for the API
 
 You can access the API documentation via the OpenAPI interface at:
@@ -200,15 +183,34 @@ pnpm build
 pnpm start
 ```
 
+## Manual model smoke
+
+Run `pnpm smoke:model <model-id>` to write a synthetic source, reference, provider mask when applicable, and request preview under `test-results/smoke-model-*`. Model IDs are `krea-3`, `flux-3-image`, `ideogram-4-5`, and `gpt-image-2`.
+
+To submit one paid request, configure `PROVIDER_MODE=live`, provider keys, and private HTTPS object storage, then add `--live`. The script uploads only synthetic images under the bucket's `smoke-model/` prefix and gives the provider short-lived signed URLs. Set a lifecycle policy on this prefix or clean it up after testing. Review the source and output side by side for target placement, framing, and changes outside the target. The script saves the result, elapsed time, and available cost data locally.
+
 ## Deploy
 
 This app is a TanStack Start app with Nitro already enabled in `vite.config.ts`. `pnpm build` creates the production `.output` directory, and `pnpm start` runs `.output/server/index.mjs`.
 
+Sign-in uses email and password. The local seed creates a development admin and user with the same password. Set `SEED_ACCOUNT_PASSWORD` for both the seed and browser tests if you override the local default, `local-development-only-password`.
+
+Use the operator command to create accounts and recover access. Point the command at the intended database and supply the password on standard input so it stays out of command history and arguments. In Bash or Zsh:
+
+```sh
+read -rs account_password
+printf '%s\n' "$account_password" | pnpm auth:password create person@example.com "Person" user
+unset account_password
+```
+
+Use `admin` to provision an operator account. For recovery, run `pnpm auth:password reset person@example.com` with the new password on standard input. Use a unique password of 12–128 characters. The reset revokes sessions through the configured Better Auth store. Configure shared Upstash storage on Vercel so the operator process and application use the same session and rate-limit state. Restart a local process using in-memory storage after recovery to clear its sessions.
+
 Before deploying anywhere:
 
 * Use Node.js 24 or newer to match the current `package.json` engine.
-* Set production values for the required variables in `.env.example`, especially `DATABASE_URL`, `AUTH_SECRET`, `VITE_BASE_URL`, S3 storage, email, OAuth, and any public `VITE_*` values.
+* Set production values for the required variables in `.env.example`, especially `DATABASE_URL`, `AUTH_SECRET`, `VITE_BASE_URL`, S3 storage, email configuration, `FAL_KEY`, `BFL_API_KEY`, and any public `VITE_*` values.
 * Point `VITE_BASE_URL` at the deployed HTTPS URL. For preview domains, also configure `AUTH_ALLOWED_HOSTS` as needed.
+* Production builds require both model keys. The GitHub Actions compilation job uses placeholders that Vercel rejects.
 * Run your versioned migration command against the production database before serving production traffic. Do not use `pnpm db:push` for production deployments because it bypasses migration history.
 
 <details>
@@ -253,7 +255,7 @@ Deploy from Git:
 3. Set Node.js Version to `24.x`.
 4. Set Build Command to `pnpm build`.
 5. Leave Output Directory empty/default.
-6. Add the production environment variables from `.env.example`.
+6. Add the environment variables from `.env.example`. Use a pooled Neon URL, a private R2 bucket with CORS for the app origin, and Upstash for shared auth state.
 7. Deploy.
 
 Deploy from the CLI:

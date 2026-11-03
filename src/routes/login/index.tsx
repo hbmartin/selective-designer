@@ -11,6 +11,5 @@ export const Route = createFileRoute('/login/')({
 });
 
 function RouteComponent() {
-  const search = Route.useSearch();
-  return <PageLogin emailHint={<LoginEmailHint />} search={search} />;
+  return <PageLogin emailHint={<LoginEmailHint />} />;
 }

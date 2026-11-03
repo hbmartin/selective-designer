@@ -172,6 +172,15 @@ describe('RenderRepositoryDrizzle', () => {
       attempt: 1,
       settings: {},
     });
+
+    const configured = createRenderRepository({
+      db: database.db,
+      modelOrder: ['gpt-image-2', 'krea-3'],
+    });
+    const history = okValue(await configured.listRenders(designId));
+    expect(history.renders[0]?.results.map((result) => result.modelId)).toEqual(
+      ['gpt-image-2', 'krea-3', 'ideogram-4-5']
+    );
   });
 
   it('updates results, preferred result and scheme names', async () => {

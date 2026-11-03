@@ -43,6 +43,13 @@
       "when": 1793667862771,
       "tag": "0005_renders",
       "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "7",
+      "when": 1793742698540,
+      "tag": "0006_active_detection",
+      "breakpoints": true
     }
   ]
 }
