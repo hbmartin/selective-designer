@@ -9,6 +9,7 @@ import type {
 } from '@/modules/kernel';
 
 import type { DesignRepository } from '../ports/design-repository';
+import type { ImageArrivedListener } from '../ports/image-arrived-listener';
 
 export type DesignUseCaseDeps = {
   designRepository: DesignRepository;
@@ -18,6 +19,7 @@ export type DesignUseCaseDeps = {
   idGenerator: IdGenerator;
   clock: Clock;
   logger: Logger;
+  imageArrivedListener: ImageArrivedListener;
 };
 
 /** Pipeline use cases run inside workflow steps: no request, no permission. */

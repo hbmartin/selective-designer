@@ -4,6 +4,7 @@ import { designQueries } from '@/modules/design/client';
 import { PageDesign } from '@/modules/design/presentation';
 import { moodboardQueries } from '@/modules/moodboard/client';
 import { MoodboardPanel } from '@/modules/moodboard/presentation';
+import { RegionsView } from '@/modules/segmentation/presentation';
 import { observedLoader } from '@/platform/router/route-observability';
 import { parseRouteDesignId, parseRouteScopeKey } from '@/routes/-route-params';
 
@@ -25,5 +26,18 @@ export const Route = createFileRoute('/app/designs/$designId/')({
 function RouteComponent() {
   const { designId } = Route.useParams();
   const id = parseRouteDesignId(designId);
-  return <PageDesign designId={id} aside={<MoodboardPanel designId={id} />} />;
+  return (
+    <PageDesign
+      designId={id}
+      aside={<MoodboardPanel designId={id} />}
+      renderBaseImage={(image) => (
+        <RegionsView
+          imageId={image.id}
+          imageUrl={image.workingUrl}
+          width={image.working.width}
+          height={image.working.height}
+        />
+      )}
+    />
+  );
 }

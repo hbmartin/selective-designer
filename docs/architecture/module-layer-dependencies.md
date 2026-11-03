@@ -57,6 +57,15 @@ subgraph module_moodboard["moodboard"]
   node_moodboard_transport["transport"]
 end
 
+subgraph module_segmentation["segmentation"]
+  node_segmentation_public["public"]
+  node_segmentation_application["application"]
+  node_segmentation_domain["domain"]
+  node_segmentation_infrastructure["infrastructure"]
+  node_segmentation_presentation["presentation"]
+  node_segmentation_transport["transport"]
+end
+
 subgraph module_user["user"]
   node_user_public["public"]
   node_user_application["application"]
@@ -140,6 +149,7 @@ node_kernel_infrastructure --> node_email_infrastructure
 node_kernel_infrastructure --> node_kernel_domain
 node_kernel_infrastructure --> node_kernel_transport
 node_kernel_infrastructure --> node_moodboard_infrastructure
+node_kernel_infrastructure --> node_segmentation_infrastructure
 node_kernel_public --> node_kernel_application
 node_kernel_public --> node_kernel_domain
 node_kernel_public --> node_kernel_infrastructure
@@ -165,6 +175,23 @@ node_moodboard_transport --> node_auth_public
 node_moodboard_transport --> node_kernel_domain
 node_moodboard_transport --> node_kernel_transport
 node_moodboard_transport --> node_moodboard_domain
+node_segmentation_application --> node_kernel_domain
+node_segmentation_application --> node_segmentation_domain
+node_segmentation_infrastructure --> node_design_infrastructure
+node_segmentation_infrastructure --> node_kernel_domain
+node_segmentation_infrastructure --> node_kernel_infrastructure
+node_segmentation_infrastructure --> node_segmentation_domain
+node_segmentation_presentation --> node_auth_public
+node_segmentation_presentation --> node_segmentation_public
+node_segmentation_public --> node_segmentation_application
+node_segmentation_public --> node_segmentation_domain
+node_segmentation_public --> node_segmentation_infrastructure
+node_segmentation_public --> node_segmentation_presentation
+node_segmentation_public --> node_segmentation_transport
+node_segmentation_transport --> node_auth_public
+node_segmentation_transport --> node_kernel_domain
+node_segmentation_transport --> node_kernel_transport
+node_segmentation_transport --> node_segmentation_domain
 node_user_application --> node_user_domain
 node_user_domain --> node_kernel_domain
 node_user_presentation --> node_auth_public
@@ -197,15 +224,20 @@ linkStyle 71 stroke-dasharray: 1 4
 linkStyle 74 stroke-dasharray: 1 4
 linkStyle 75 stroke-dasharray: 1 4
 linkStyle 76 stroke-dasharray: 1 4
-linkStyle 78 stroke-dasharray: 6 4
-linkStyle 92 stroke-dasharray: 1 4
-linkStyle 94 stroke-dasharray: 1 4
+linkStyle 77 stroke-dasharray: 1 4
+linkStyle 79 stroke-dasharray: 6 4
+linkStyle 93 stroke-dasharray: 1 4
 linkStyle 95 stroke-dasharray: 1 4
-linkStyle 96 stroke-dasharray: 6 4
-linkStyle 108 stroke-dasharray: 1 4
-linkStyle 109 stroke-dasharray: 1 4
+linkStyle 96 stroke-dasharray: 1 4
+linkStyle 97 stroke-dasharray: 6 4
 linkStyle 110 stroke-dasharray: 1 4
-linkStyle 111 stroke-dasharray: 6 4
+linkStyle 112 stroke-dasharray: 1 4
+linkStyle 113 stroke-dasharray: 1 4
+linkStyle 114 stroke-dasharray: 6 4
+linkStyle 126 stroke-dasharray: 1 4
+linkStyle 127 stroke-dasharray: 1 4
+linkStyle 128 stroke-dasharray: 1 4
+linkStyle 129 stroke-dasharray: 6 4
 ```
 
 ## Edge Styles

@@ -29,6 +29,13 @@
       "when": 1793664930291,
       "tag": "0003_moodboard_items",
       "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "7",
+      "when": 1793666216589,
+      "tag": "0004_regions",
+      "breakpoints": true
     }
   ]
 }

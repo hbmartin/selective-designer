@@ -16,6 +16,7 @@ export const zDesignIdSchema = zBrandedNonEmptyString<'DesignId'>();
 export const zImageIdSchema = zBrandedNonEmptyString<'ImageId'>();
 export const zItemIdSchema = zBrandedNonEmptyString<'ItemId'>();
 export const zItemVersionIdSchema = zBrandedNonEmptyString<'ItemVersionId'>();
+export const zRegionIdSchema = zBrandedNonEmptyString<'RegionId'>();
 export const zObjectKeySchema = zBrandedNonEmptyString<'ObjectKey'>();
 export const zProviderCallIdSchema = zBrandedNonEmptyString<'ProviderCallId'>();
 export const zScopeKeySchema = zBrandedNonEmptyString<'ScopeKey'>();
@@ -42,6 +43,7 @@ export type DesignId = z.infer<typeof zDesignIdSchema>;
 export type ImageId = z.infer<typeof zImageIdSchema>;
 export type ItemId = z.infer<typeof zItemIdSchema>;
 export type ItemVersionId = z.infer<typeof zItemVersionIdSchema>;
+export type RegionId = z.infer<typeof zRegionIdSchema>;
 export type ObjectKey = z.infer<typeof zObjectKeySchema>;
 export type ProviderCallId = z.infer<typeof zProviderCallIdSchema>;
 export type AuthSessionId = SessionId;
@@ -100,6 +102,8 @@ export const toItemId = (value: string): ParseResult<ItemId> =>
   parseBrandedString(zItemIdSchema, value, 'ItemId');
 export const toItemVersionId = (value: string): ParseResult<ItemVersionId> =>
   parseBrandedString(zItemVersionIdSchema, value, 'ItemVersionId');
+export const toRegionId = (value: string): ParseResult<RegionId> =>
+  parseBrandedString(zRegionIdSchema, value, 'RegionId');
 export const toObjectKey = (value: string): ParseResult<ObjectKey> =>
   parseBrandedString(zObjectKeySchema, value, 'ObjectKey');
 export const toProviderCallId = (value: string): ParseResult<ProviderCallId> =>
@@ -171,6 +175,7 @@ export const zDesignId = () => zDesignIdSchema;
 export const zImageId = () => zImageIdSchema;
 export const zItemId = () => zItemIdSchema;
 export const zItemVersionId = () => zItemVersionIdSchema;
+export const zRegionId = () => zRegionIdSchema;
 export const zObjectKey = () => zObjectKeySchema;
 export const zProviderCallId = () => zProviderCallIdSchema;
 export const zScopeKey = () => zScopeKeySchema;

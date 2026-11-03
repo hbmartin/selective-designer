@@ -18,11 +18,14 @@ import { useCurrentScopeKey } from '@/modules/auth/client';
 import type { DesignId } from '@/modules/kernel/domain/ids';
 
 import { designQueries } from './wired-queries';
+import type { DesignImageView } from '../application/use-cases/design-view';
 
 export const PageDesign = (props: {
   designId: DesignId;
   /** Side panel composed by the route (e.g. the mood board). */
   aside?: ReactNode;
+  /** Replaces the plain base image (e.g. with region tools). */
+  renderBaseImage?: (image: DesignImageView) => ReactNode;
 }) => {
   const { t } = useTranslation(['design']);
   const scopeKey = useCurrentScopeKey();
@@ -104,16 +107,20 @@ export const PageDesign = (props: {
         <div className="grid gap-6 lg:grid-cols-[minmax(0,1fr)_320px]">
           {design ? (
             <div className="flex flex-col gap-3">
-              <div className="overflow-hidden rounded-md border bg-muted">
-                <img
-                  src={design.baseImage.workingUrl}
-                  alt={t('design:detail.baseImageAlt')}
-                  className="w-full object-contain"
-                  style={{
-                    aspectRatio: `${design.baseImage.working.width} / ${design.baseImage.working.height}`,
-                  }}
-                />
-              </div>
+              {props.renderBaseImage ? (
+                props.renderBaseImage(design.baseImage)
+              ) : (
+                <div className="overflow-hidden rounded-md border bg-muted">
+                  <img
+                    src={design.baseImage.workingUrl}
+                    alt={t('design:detail.baseImageAlt')}
+                    className="w-full object-contain"
+                    style={{
+                      aspectRatio: `${design.baseImage.working.width} / ${design.baseImage.working.height}`,
+                    }}
+                  />
+                </div>
+              )}
               <p className="text-xs text-muted-foreground">
                 {t('design:detail.dimensions', {
                   width: design.baseImage.original.width,

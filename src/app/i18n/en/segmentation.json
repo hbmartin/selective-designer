@@ -1,0 +1,24 @@
+{
+  "tools": {
+    "clickSelect": "Click to select",
+    "findPlaceholder": "Find… (e.g. front door)",
+    "find": "Find",
+    "showAll": "Show all"
+  },
+  "list": {
+    "title": "Regions",
+    "confirm": "Keep suggested region",
+    "remove": "Remove region"
+  },
+  "sources": {
+    "detection": "Auto",
+    "click": "Click",
+    "box": "Box",
+    "text": "Text",
+    "brush": "Brush",
+    "lasso": "Lasso"
+  },
+  "errors": {
+    "segmentFailed": "Selection failed. Try another point or description."
+  }
+}

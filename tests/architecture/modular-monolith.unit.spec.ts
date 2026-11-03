@@ -434,7 +434,13 @@ describe('strict modular monolith layout', () => {
   });
 
   it('keeps core business modules in vertical hexagonal slices', () => {
-    for (const moduleName of ['account', 'design', 'moodboard', 'user']) {
+    for (const moduleName of [
+      'account',
+      'design',
+      'moodboard',
+      'segmentation',
+      'user',
+    ]) {
       const moduleRoot = path.join(root, 'src/modules', moduleName);
 
       for (const expectedPath of [
@@ -449,7 +455,13 @@ describe('strict modular monolith layout', () => {
       }
     }
 
-    for (const moduleName of ['auth', 'design', 'email', 'moodboard']) {
+    for (const moduleName of [
+      'auth',
+      'design',
+      'email',
+      'moodboard',
+      'segmentation',
+    ]) {
       expect(
         fs.existsSync(
           path.join(

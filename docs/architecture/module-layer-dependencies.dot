@@ -73,6 +73,18 @@ digraph ModuleLayerDependencies {
     "moodboard/transport" [label="transport", fillcolor="#ede9fe"];
   }
 
+  subgraph cluster_segmentation {
+    label="segmentation";
+    color="#d1d5db";
+    style="rounded";
+    "segmentation/public" [label="public", fillcolor="#f3f4f6"];
+    "segmentation/application" [label="application", fillcolor="#dbeafe"];
+    "segmentation/domain" [label="domain", fillcolor="#dcfce7"];
+    "segmentation/infrastructure" [label="infrastructure", fillcolor="#ffedd5"];
+    "segmentation/presentation" [label="presentation", fillcolor="#fef9c3"];
+    "segmentation/transport" [label="transport", fillcolor="#ede9fe"];
+  }
+
   subgraph cluster_user {
     label="user";
     color="#d1d5db";
@@ -159,6 +171,7 @@ digraph ModuleLayerDependencies {
   "kernel/infrastructure" -> "kernel/domain" [style="solid"];
   "kernel/infrastructure" -> "kernel/transport" [style="solid"];
   "kernel/infrastructure" -> "moodboard/infrastructure" [style="dotted"];
+  "kernel/infrastructure" -> "segmentation/infrastructure" [style="dotted"];
   "kernel/public" -> "kernel/application" [style="dotted"];
   "kernel/public" -> "kernel/domain" [style="dotted"];
   "kernel/public" -> "kernel/infrastructure" [style="solid"];
@@ -184,6 +197,23 @@ digraph ModuleLayerDependencies {
   "moodboard/transport" -> "kernel/domain" [style="solid"];
   "moodboard/transport" -> "kernel/transport" [style="solid"];
   "moodboard/transport" -> "moodboard/domain" [style="solid"];
+  "segmentation/application" -> "kernel/domain" [style="solid"];
+  "segmentation/application" -> "segmentation/domain" [style="solid"];
+  "segmentation/infrastructure" -> "design/infrastructure" [style="solid"];
+  "segmentation/infrastructure" -> "kernel/domain" [style="solid"];
+  "segmentation/infrastructure" -> "kernel/infrastructure" [style="solid"];
+  "segmentation/infrastructure" -> "segmentation/domain" [style="solid"];
+  "segmentation/presentation" -> "auth/public" [style="solid"];
+  "segmentation/presentation" -> "segmentation/public" [style="solid"];
+  "segmentation/public" -> "segmentation/application" [style="solid"];
+  "segmentation/public" -> "segmentation/domain" [style="dotted"];
+  "segmentation/public" -> "segmentation/infrastructure" [style="solid"];
+  "segmentation/public" -> "segmentation/presentation" [style="dotted"];
+  "segmentation/public" -> "segmentation/transport" [style="dotted"];
+  "segmentation/transport" -> "auth/public" [style="dashed"];
+  "segmentation/transport" -> "kernel/domain" [style="solid"];
+  "segmentation/transport" -> "kernel/transport" [style="solid"];
+  "segmentation/transport" -> "segmentation/domain" [style="solid"];
   "user/application" -> "user/domain" [style="solid"];
   "user/domain" -> "kernel/domain" [style="solid"];
   "user/presentation" -> "auth/public" [style="solid"];

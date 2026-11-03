@@ -145,8 +145,23 @@ export async function createDesign(
     },
   });
   if (created.isError()) return Result.Error(created.getError());
+  const design = created.get().design;
 
-  const view = await toDesignView(deps, created.get().design);
+  // Eager segmentation; a scheduling failure must not fail the creation.
+  const announced = await deps.imageArrivedListener.imageArrived({
+    designId: design.id,
+    imageId: design.baseImage.id,
+    kind: 'base',
+    carryFromImageId: null,
+  });
+  if (announced.isError()) {
+    deps.logger.warn({
+      event: 'design.image_arrival.failed',
+      details: { designId: design.id },
+    });
+  }
+
+  const view = await toDesignView(deps, design);
   if (view.isError()) return Result.Error(view.getError());
   return Result.Ok({ type: 'design_created', design: view.get() });
 }

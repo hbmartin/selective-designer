@@ -7,6 +7,7 @@ import design from './design.json' with { type: 'json' };
 import emails from './emails.json' with { type: 'json' };
 import layout from './layout.json' with { type: 'json' };
 import moodboard from './moodboard.json' with { type: 'json' };
+import segmentation from './segmentation.json' with { type: 'json' };
 import user from './user.json' with { type: 'json' };
 
 export default {
@@ -19,5 +20,6 @@ export default {
   emails,
   layout,
   moodboard,
+  segmentation,
   user,
 } as const;

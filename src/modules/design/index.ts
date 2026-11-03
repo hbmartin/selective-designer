@@ -1,4 +1,5 @@
 export type * from './application/ports/design-repository';
+export type * from './application/ports/image-arrived-listener';
 export type { DesignCreateOutcome } from './application/use-cases/create-design';
 export type {
   DesignImageView,

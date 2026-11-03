@@ -5,7 +5,7 @@ import {
   createFakeUploadIntentStore,
 } from '@tests/support/fake-kernel-ports';
 import { okValue } from '@tests/support/result';
-import { beforeEach, describe, expect, it } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { createDesignUseCases, toDesignName } from '@/modules/design';
 import {
@@ -35,6 +35,9 @@ const setup = (options?: { permission?: 'granted' | 'denied' }) => {
   const repo = createFakeDesignRepository(() => now);
   const intents = createFakeUploadIntentStore();
   const storage = createFakeObjectStorage();
+  const arrived = vi.fn(async () =>
+    Result.Ok({ type: 'image_arrival_handled' as const })
+  );
   const useCases = createDesignUseCases({
     designRepository: repo.repository,
     uploadIntentStore: intents.store,
@@ -61,8 +64,9 @@ const setup = (options?: { permission?: 'granted' | 'denied' }) => {
       warn: () => {},
       error: () => {},
     },
+    imageArrivedListener: { imageArrived: arrived },
   });
-  return { useCases, repo, intents, storage };
+  return { useCases, repo, intents, storage, arrived };
 };
 
 const rememberBaseUploads = async (
@@ -144,6 +148,13 @@ describe('design use cases', () => {
         originalContentType: 'image/png',
         workingUrl: expect.stringContaining('working-images/work1.png'),
       },
+    });
+
+    expect(fresh.arrived).toHaveBeenCalledWith({
+      designId: created.design.id,
+      imageId: created.design.baseImage.id,
+      kind: 'base',
+      carryFromImageId: null,
     });
 
     // Intents are single-use.
