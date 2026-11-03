@@ -4,6 +4,7 @@ import { designQueries } from '@/modules/design/client';
 import { PageDesign } from '@/modules/design/presentation';
 import { moodboardQueries } from '@/modules/moodboard/client';
 import { MoodboardPanel } from '@/modules/moodboard/presentation';
+import { RenderHistory } from '@/modules/rendering/presentation';
 import { RegionsView } from '@/modules/segmentation/presentation';
 import { observedLoader } from '@/platform/router/route-observability';
 import { parseRouteDesignId, parseRouteScopeKey } from '@/routes/-route-params';
@@ -31,12 +32,15 @@ function RouteComponent() {
       designId={id}
       aside={<MoodboardPanel designId={id} />}
       renderBaseImage={(image) => (
-        <RegionsView
-          imageId={image.id}
-          imageUrl={image.workingUrl}
-          width={image.working.width}
-          height={image.working.height}
-        />
+        <>
+          <RegionsView
+            imageId={image.id}
+            imageUrl={image.workingUrl}
+            width={image.working.width}
+            height={image.working.height}
+          />
+          <RenderHistory baseImageId={image.id} />
+        </>
       )}
     />
   );

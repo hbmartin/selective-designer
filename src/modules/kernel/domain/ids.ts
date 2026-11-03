@@ -17,6 +17,11 @@ export const zImageIdSchema = zBrandedNonEmptyString<'ImageId'>();
 export const zItemIdSchema = zBrandedNonEmptyString<'ItemId'>();
 export const zItemVersionIdSchema = zBrandedNonEmptyString<'ItemVersionId'>();
 export const zRegionIdSchema = zBrandedNonEmptyString<'RegionId'>();
+export const zRenderIdSchema = zBrandedNonEmptyString<'RenderId'>();
+export const zRenderResultIdSchema = zBrandedNonEmptyString<'RenderResultId'>();
+export const zBatchIdSchema = zBrandedNonEmptyString<'BatchId'>();
+export const zSchemeIdSchema = zBrandedNonEmptyString<'SchemeId'>();
+export const zDraftIdSchema = zBrandedNonEmptyString<'DraftId'>();
 export const zObjectKeySchema = zBrandedNonEmptyString<'ObjectKey'>();
 export const zProviderCallIdSchema = zBrandedNonEmptyString<'ProviderCallId'>();
 export const zScopeKeySchema = zBrandedNonEmptyString<'ScopeKey'>();
@@ -44,6 +49,11 @@ export type ImageId = z.infer<typeof zImageIdSchema>;
 export type ItemId = z.infer<typeof zItemIdSchema>;
 export type ItemVersionId = z.infer<typeof zItemVersionIdSchema>;
 export type RegionId = z.infer<typeof zRegionIdSchema>;
+export type RenderId = z.infer<typeof zRenderIdSchema>;
+export type RenderResultId = z.infer<typeof zRenderResultIdSchema>;
+export type BatchId = z.infer<typeof zBatchIdSchema>;
+export type SchemeId = z.infer<typeof zSchemeIdSchema>;
+export type DraftId = z.infer<typeof zDraftIdSchema>;
 export type ObjectKey = z.infer<typeof zObjectKeySchema>;
 export type ProviderCallId = z.infer<typeof zProviderCallIdSchema>;
 export type AuthSessionId = SessionId;
@@ -104,6 +114,16 @@ export const toItemVersionId = (value: string): ParseResult<ItemVersionId> =>
   parseBrandedString(zItemVersionIdSchema, value, 'ItemVersionId');
 export const toRegionId = (value: string): ParseResult<RegionId> =>
   parseBrandedString(zRegionIdSchema, value, 'RegionId');
+export const toRenderId = (value: string): ParseResult<RenderId> =>
+  parseBrandedString(zRenderIdSchema, value, 'RenderId');
+export const toRenderResultId = (value: string): ParseResult<RenderResultId> =>
+  parseBrandedString(zRenderResultIdSchema, value, 'RenderResultId');
+export const toBatchId = (value: string): ParseResult<BatchId> =>
+  parseBrandedString(zBatchIdSchema, value, 'BatchId');
+export const toSchemeId = (value: string): ParseResult<SchemeId> =>
+  parseBrandedString(zSchemeIdSchema, value, 'SchemeId');
+export const toDraftId = (value: string): ParseResult<DraftId> =>
+  parseBrandedString(zDraftIdSchema, value, 'DraftId');
 export const toObjectKey = (value: string): ParseResult<ObjectKey> =>
   parseBrandedString(zObjectKeySchema, value, 'ObjectKey');
 export const toProviderCallId = (value: string): ParseResult<ProviderCallId> =>
@@ -176,6 +196,11 @@ export const zImageId = () => zImageIdSchema;
 export const zItemId = () => zItemIdSchema;
 export const zItemVersionId = () => zItemVersionIdSchema;
 export const zRegionId = () => zRegionIdSchema;
+export const zRenderId = () => zRenderIdSchema;
+export const zRenderResultId = () => zRenderResultIdSchema;
+export const zBatchId = () => zBatchIdSchema;
+export const zSchemeId = () => zSchemeIdSchema;
+export const zDraftId = () => zDraftIdSchema;
 export const zObjectKey = () => zObjectKeySchema;
 export const zProviderCallId = () => zProviderCallIdSchema;
 export const zScopeKey = () => zScopeKeySchema;

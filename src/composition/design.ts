@@ -9,7 +9,7 @@ import {
 import { createDesignRepository } from '@/modules/design/backend';
 
 import { getKernel, type Kernel } from './kernel';
-import { workflowAutoDetectionScheduler } from './segmentation';
+import { workflowAutoDetectionScheduler } from './segmentation-scheduler';
 import { createCachedFactory } from './shared/singleton';
 
 export type DesignOverrides = {

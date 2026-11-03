@@ -48,7 +48,7 @@ export const createFalBackgroundRemover = (config: {
       } catch (error) {
         const status =
           typeof error === 'object' && error !== null && 'status' in error
-            ? Number((error as { status: unknown }).status)
+            ? Number(error.status)
             : undefined;
         if (
           status !== undefined &&

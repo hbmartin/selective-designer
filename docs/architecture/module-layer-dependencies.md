@@ -57,6 +57,15 @@ subgraph module_moodboard["moodboard"]
   node_moodboard_transport["transport"]
 end
 
+subgraph module_rendering["rendering"]
+  node_rendering_public["public"]
+  node_rendering_application["application"]
+  node_rendering_domain["domain"]
+  node_rendering_infrastructure["infrastructure"]
+  node_rendering_presentation["presentation"]
+  node_rendering_transport["transport"]
+end
+
 subgraph module_segmentation["segmentation"]
   node_segmentation_public["public"]
   node_segmentation_application["application"]
@@ -149,6 +158,7 @@ node_kernel_infrastructure --> node_email_infrastructure
 node_kernel_infrastructure --> node_kernel_domain
 node_kernel_infrastructure --> node_kernel_transport
 node_kernel_infrastructure --> node_moodboard_infrastructure
+node_kernel_infrastructure --> node_rendering_infrastructure
 node_kernel_infrastructure --> node_segmentation_infrastructure
 node_kernel_public --> node_kernel_application
 node_kernel_public --> node_kernel_domain
@@ -175,6 +185,24 @@ node_moodboard_transport --> node_auth_public
 node_moodboard_transport --> node_kernel_domain
 node_moodboard_transport --> node_kernel_transport
 node_moodboard_transport --> node_moodboard_domain
+node_rendering_application --> node_kernel_domain
+node_rendering_application --> node_rendering_domain
+node_rendering_infrastructure --> node_design_infrastructure
+node_rendering_infrastructure --> node_kernel_domain
+node_rendering_infrastructure --> node_kernel_infrastructure
+node_rendering_infrastructure --> node_rendering_domain
+node_rendering_presentation --> node_auth_public
+node_rendering_presentation --> node_rendering_domain
+node_rendering_presentation --> node_rendering_public
+node_rendering_public --> node_rendering_application
+node_rendering_public --> node_rendering_domain
+node_rendering_public --> node_rendering_infrastructure
+node_rendering_public --> node_rendering_presentation
+node_rendering_public --> node_rendering_transport
+node_rendering_transport --> node_auth_public
+node_rendering_transport --> node_kernel_domain
+node_rendering_transport --> node_kernel_transport
+node_rendering_transport --> node_rendering_domain
 node_segmentation_application --> node_kernel_domain
 node_segmentation_application --> node_segmentation_domain
 node_segmentation_infrastructure --> node_design_infrastructure
@@ -225,19 +253,24 @@ linkStyle 74 stroke-dasharray: 1 4
 linkStyle 75 stroke-dasharray: 1 4
 linkStyle 76 stroke-dasharray: 1 4
 linkStyle 77 stroke-dasharray: 1 4
-linkStyle 79 stroke-dasharray: 6 4
-linkStyle 93 stroke-dasharray: 1 4
-linkStyle 95 stroke-dasharray: 1 4
+linkStyle 78 stroke-dasharray: 1 4
+linkStyle 80 stroke-dasharray: 6 4
+linkStyle 94 stroke-dasharray: 1 4
 linkStyle 96 stroke-dasharray: 1 4
-linkStyle 97 stroke-dasharray: 6 4
-linkStyle 110 stroke-dasharray: 1 4
+linkStyle 97 stroke-dasharray: 1 4
+linkStyle 98 stroke-dasharray: 6 4
 linkStyle 112 stroke-dasharray: 1 4
-linkStyle 113 stroke-dasharray: 1 4
-linkStyle 114 stroke-dasharray: 6 4
-linkStyle 126 stroke-dasharray: 1 4
-linkStyle 127 stroke-dasharray: 1 4
-linkStyle 128 stroke-dasharray: 1 4
-linkStyle 129 stroke-dasharray: 6 4
+linkStyle 114 stroke-dasharray: 1 4
+linkStyle 115 stroke-dasharray: 1 4
+linkStyle 116 stroke-dasharray: 6 4
+linkStyle 129 stroke-dasharray: 1 4
+linkStyle 131 stroke-dasharray: 1 4
+linkStyle 132 stroke-dasharray: 1 4
+linkStyle 133 stroke-dasharray: 6 4
+linkStyle 145 stroke-dasharray: 1 4
+linkStyle 146 stroke-dasharray: 1 4
+linkStyle 147 stroke-dasharray: 1 4
+linkStyle 148 stroke-dasharray: 6 4
 ```
 
 ## Edge Styles

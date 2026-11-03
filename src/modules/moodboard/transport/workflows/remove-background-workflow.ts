@@ -23,5 +23,5 @@ export async function removeBackgroundWorkflow(input: {
   itemVersionId: string;
 }) {
   'use workflow';
-  return await removeBackgroundStep(input.itemVersionId);
+  return removeBackgroundStep(input.itemVersionId);
 }

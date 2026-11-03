@@ -1,16 +1,9 @@
-import { Result } from '@bloodyowl/boxed';
-import { start } from 'workflow/api';
-
-import { AppError } from '@/modules/kernel';
 import {
-  type AutoDetectionScheduler,
   createSegmentationUseCases,
   type RegionRepository,
   type Segmenter,
 } from '@/modules/segmentation';
 import { createRegionRepository } from '@/modules/segmentation/backend';
-// Direct import (not via backend.ts) to avoid a cycle with the pipeline wiring.
-import { autoDetectWorkflow } from '@/modules/segmentation/transport/workflows/auto-detect-workflow';
 
 import { getKernel, type Kernel } from './kernel';
 import { createImageAccess, createSegmenter } from './segmentation-pipeline';
@@ -20,28 +13,6 @@ export type SegmentationOverrides = {
   kernel?: Kernel;
   regionRepository?: RegionRepository;
   segmenter?: Segmenter;
-};
-
-/** Starts eager detection (and carry-over) for a newly stored image. */
-export const workflowAutoDetectionScheduler: AutoDetectionScheduler = {
-  async schedule(input) {
-    try {
-      await start(autoDetectWorkflow, [
-        { imageId: input.imageId, carryFromImageId: input.carryFromImageId },
-      ]);
-      return Result.Ok({ type: 'auto_detection_scheduled' });
-    } catch (error) {
-      return Result.Error(
-        new AppError({
-          code: 'WORKFLOW_START_FAILED',
-          category: 'system',
-          status: 503,
-          message: 'Could not start automatic detection',
-          cause: error,
-        })
-      );
-    }
-  },
 };
 
 const build = (overrides?: SegmentationOverrides) => {

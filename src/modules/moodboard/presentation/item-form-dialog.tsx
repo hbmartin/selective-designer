@@ -5,6 +5,7 @@ import {
   type ReactElement,
   useEffect,
   useId,
+  useMemo,
   useState,
 } from 'react';
 import { useTranslation } from 'react-i18next';
@@ -71,7 +72,6 @@ export const ItemFormDialog = (props: Props) => {
     props.item?.kind ?? props.initialKind ?? 'product'
   );
   const [file, setFile] = useState<File | null>(props.initialFile ?? null);
-  const [previewUrl, setPreviewUrl] = useState<string | null>(null);
 
   const categories = useQuery({
     ...moodboardQueries.categories({ scopeKey }),
@@ -138,15 +138,16 @@ export const ItemFormDialog = (props: Props) => {
     },
   });
 
-  useEffect(() => {
-    if (!file) {
-      setPreviewUrl(null);
-      return;
-    }
-    const url = URL.createObjectURL(file);
-    setPreviewUrl(url);
-    return () => URL.revokeObjectURL(url);
-  }, [file]);
+  const previewUrl = useMemo(
+    () => (file ? URL.createObjectURL(file) : null),
+    [file]
+  );
+  useEffect(
+    () => () => {
+      if (previewUrl) URL.revokeObjectURL(previewUrl);
+    },
+    [previewUrl]
+  );
 
   const selectFile = (next: File | undefined) => {
     if (!next) return;

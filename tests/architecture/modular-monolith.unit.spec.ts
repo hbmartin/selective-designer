@@ -420,6 +420,8 @@ describe('strict modular monolith layout', () => {
       'auth',
       'design',
       'moodboard',
+      'rendering',
+      'segmentation',
       'user',
     ]) {
       const moduleRoot = path.join(root, 'src/modules', moduleName);
@@ -438,6 +440,7 @@ describe('strict modular monolith layout', () => {
       'account',
       'design',
       'moodboard',
+      'rendering',
       'segmentation',
       'user',
     ]) {
@@ -460,6 +463,7 @@ describe('strict modular monolith layout', () => {
       'design',
       'email',
       'moodboard',
+      'rendering',
       'segmentation',
     ]) {
       expect(

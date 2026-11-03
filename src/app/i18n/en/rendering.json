@@ -1,0 +1,30 @@
+{
+  "history": {
+    "title": "Renders",
+    "empty": "No renders yet.",
+    "batch": "Batch",
+    "fromSource": "From an earlier result",
+    "preferred": "Preferred",
+    "retry": "Retry",
+    "outputAlt": "{{model}} result"
+  },
+  "models": {
+    "krea-3": "Krea 3",
+    "flux-3-image": "FLUX 3",
+    "ideogram-4-5": "Ideogram 4.5",
+    "gpt-image-2": "GPT Image 2"
+  },
+  "status": {
+    "pending": "Queued",
+    "submitted": "Rendering",
+    "succeeded": "Done",
+    "failed": "Failed",
+    "skipped": "Skipped"
+  },
+  "skipReasons": {
+    "too_many_references": "Too many reference images for this model ({{references}} of {{limit}})"
+  },
+  "errors": {
+    "retryFailed": "Could not retry this model."
+  }
+}
