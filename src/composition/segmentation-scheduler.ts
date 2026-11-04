@@ -49,9 +49,11 @@ export const createAutoDetectionScheduler = (
     queue: {
       async enqueue(input) {
         let publicationAttempted = false;
+        let stage: 'resolve_world' | 'start_workflow' = 'resolve_world';
         try {
           // The SDK can reject run creation after independently publishing the message.
           const world = await getWorld();
+          stage = 'start_workflow';
           const dispatchWorld = new Proxy(world, {
             get(target, property) {
               if (property === 'queue') {
@@ -72,7 +74,16 @@ export const createAutoDetectionScheduler = (
           if (!publicationAttempted) {
             kernel.logger.warn({
               event: 'segmentation.detection.queue_rejected',
-              details: input,
+              details: {
+                ...input,
+                stage,
+                errorKind:
+                  cause instanceof TypeError
+                    ? 'type_error'
+                    : cause instanceof Error
+                      ? 'error'
+                      : 'unknown',
+              },
             });
             return Result.Ok({ type: 'detection_not_enqueued' });
           }

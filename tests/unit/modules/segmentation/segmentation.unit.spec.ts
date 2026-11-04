@@ -341,6 +341,29 @@ describe('interactive segmentation', () => {
 });
 
 describe('segmentation pipeline', () => {
+  it('rejects a worker without a run ID before looking up or segmenting an image', async () => {
+    const segment = vi.fn(createFakeSegmenter().segment);
+    const ctx = setup({ segment });
+    const findDetection = vi.spyOn(ctx.regions.repository, 'findDetection');
+    const replaceDetections = vi.spyOn(
+      ctx.regions.repository,
+      'replaceDetections'
+    );
+    const partial = {
+      imageId: baseImageId,
+      concept: 'window',
+      workerId: 'worker',
+    };
+    // @ts-expect-error Simulate malformed input crossing the typed boundary.
+    const outcome = await ctx.pipeline.detectConcept(partial);
+    expect(outcome.isError() && outcome.getError().code).toBe(
+      'DETECTION_IDENTITY_INVALID'
+    );
+    expect(findDetection).not.toHaveBeenCalled();
+    expect(segment).not.toHaveBeenCalled();
+    expect(replaceDetections).not.toHaveBeenCalled();
+  });
+
   it('avoids paid calls for superseded and completed concepts', async () => {
     const segment = vi.fn(createFakeSegmenter().segment);
     const ctx = setup({ segment });

@@ -165,7 +165,7 @@ export async function createDesign(
     }
   }
 
-  // Snapshot detection concepts after the copy has populated the mood board.
+  // Dispatch after the copy attempt. The worker snapshots the saved categories.
   const announced = await deps.imageArrivedListener.imageArrived({
     designId: design.id,
     imageId: design.baseImage.id,

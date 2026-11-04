@@ -1,6 +1,9 @@
 import { Result } from '@bloodyowl/boxed';
 
-import type { DetectionRun } from './application/ports/ports';
+import type {
+  ClaimedDetectionRun,
+  DetectionRun,
+} from './application/ports/ports';
 import {
   carryOverRegions,
   detectConcept,
@@ -44,7 +47,7 @@ export function createSegmentationPipelineUseCases(
   deps: SegmentationPipelineDeps
 ) {
   return {
-    claimDetection(run: Required<Omit<DetectionRun, 'now'>>) {
+    claimDetection(run: ClaimedDetectionRun) {
       const now = deps.clock.now();
       return deps.regionRepository.claimDetection({
         ...run,

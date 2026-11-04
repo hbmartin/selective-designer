@@ -4,7 +4,7 @@ Persist the detection intent with the image. An interrupted request can leave an
 
 Record progress with the resulting regions so a retry runs only unfinished work. Restarting the whole detection would spend more provider calls and could replace regions already used in the editor. A replacement attempt owns future writes while completed regions and manual regions keep their identities.
 
-For a revised design, attempt the mood board copy before taking the concept snapshot. A reported copy failure releases detection using the categories saved so far. If the copy never reports back, the owner can retry after two minutes and freeze the categories saved at that point. A late copy cannot change that run's snapshot.
+For a revised design, attempt the mood board copy before dispatch. A reported copy failure also releases detection. The first worker snapshots the categories when it prepares the run, so edits saved between dispatch and preparation are included. If the copy never reports back, the owner can retry after two minutes and freeze the categories saved at that point. A late copy cannot change that run's snapshot.
 
 A concept is complete when all returned masks are saved, including when the provider returns zero masks. A definitive prompt rejection or invalid mask leaves a visible omission. Temporary failures remain retryable. Cleanup is limited to fresh uploads that definitively never published because a database error can arrive after commit.
 
