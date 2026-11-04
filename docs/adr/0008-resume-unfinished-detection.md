@@ -3,3 +3,7 @@
 The queue can accept a run even when the application gets an error back. Keep the run active until the worker reports an outcome or its lease expires so accepted work can still publish. After failure or expiry, the image owner can retry without creating a new design or render result.
 
 Record progress with the resulting regions so a retry runs only unfinished work. Restarting the whole detection would spend more provider calls and could replace regions already used in the editor. A replacement attempt owns future writes while completed regions and manual regions keep their identities.
+
+For a revised design, attempt the mood board copy before taking the concept snapshot. If the copy fails, detect using the categories saved so far. A concept is complete when all returned masks are saved, including when the provider returns zero masks. Cleanup is limited to fresh uploads that definitively never published because a database error can arrive after commit.
+
+Older runs have no checkpoints. Their automatic region labels are the available evidence of completion, so retry may repeat a concept that returned no masks or whose regions were renamed.

@@ -17,7 +17,10 @@ export const BETTER_AUTH_CREATE_USER_PATH = '/admin/create-user';
 export type AuthHttpExposureFlags = {
   /** Better Auth base path. Defaults to `/api/auth`. */
   basePath?: string;
-  /** Expose Better Auth's `/admin/*` HTTP endpoints. */
+  /**
+   * Expose Better Auth admin endpoints. Account creation stays CLI-only
+   * (`pnpm auth:password create`), including when this flag is enabled.
+   */
   adminEndpointsEnabled: boolean;
   /** Expose `/open-api/generate-schema` and the `/reference` page. */
   openApiEnabled: boolean;

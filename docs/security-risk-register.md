@@ -36,6 +36,10 @@ periodic re-review even though `pnpm audit` reports no advisory for these.
 - `qs 6.14.x/6.15.x` via `react-cosmos` and Stryker tooling is no longer
   reported by the current audit after the lockfile override to `qs: 6.15.2`.
 
+## Accepted local tooling behavior
+
+The opt-in model smoke command saves the original provider image so operators can inspect the exact result. CodeQL flags this deliberate network-to-file flow in [alert #61](https://github.com/hbmartin/selective-designer/security/code-scanning/61). Downloads require approved HTTPS hosts, disallow redirects and cap the bytes. The script checks the image header against a format allowlist and writes to a fixed, exclusive filename in a fresh local directory. Treat the resulting artifact as external image data. Revisit this decision if the command accepts user-supplied URLs or writes to a shared or deployed location.
+
 ## Implemented Controls
 
 - Global TanStack Start middleware now sets report-only CSP, clickjacking, referrer, content-type, permissions-policy, and production HSTS headers.

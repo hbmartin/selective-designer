@@ -5,8 +5,9 @@ import {
   createFakeUploadIntentStore,
 } from '@tests/support/fake-kernel-ports';
 import { okValue } from '@tests/support/result';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 
+import { AppError } from '@/modules/kernel';
 import {
   type DesignId,
   type ImageId,
@@ -254,6 +255,125 @@ describe('segmentation pipeline', () => {
       1
     );
   });
+
+  it.each([
+    'detection_superseded',
+    'detection_concept_already_completed',
+  ] as const)(
+    'discards only its fresh mask when publish reports %s',
+    async (type) => {
+      const ctx = setup();
+      const input = { imageId: baseImageId, concept: 'window', runId: 'run-1' };
+      await ctx.pipeline.detectConcept(input);
+      const [winner] = ctx.regions.rows;
+      vi.spyOn(
+        ctx.regions.repository,
+        'replaceDetections'
+      ).mockResolvedValueOnce(Result.Ok({ type }));
+      expect(okValue(await ctx.pipeline.detectConcept(input))).toEqual({
+        type,
+      });
+      expect(ctx.regions.rows).toEqual([winner]);
+      expect([...ctx.storage.objects.keys()]).toEqual([winner?.maskKey]);
+    }
+  );
+
+  it('keeps the uploaded mask when the publish commit is uncertain', async () => {
+    const ctx = setup();
+    const error = new AppError({
+      code: 'DB_ERROR',
+      category: 'system',
+      status: 500,
+    });
+    vi.spyOn(ctx.regions.repository, 'replaceDetections').mockResolvedValueOnce(
+      Result.Error(error)
+    );
+    const outcome = await ctx.pipeline.detectConcept({
+      imageId: baseImageId,
+      concept: 'window',
+      runId: 'run-1',
+    });
+    expect(outcome.isError()).toBe(true);
+    expect(ctx.storage.objects.size).toBe(1);
+  });
+
+  it.each(['zero masks', 'missing source', 'lost upload response'] as const)(
+    'checks completion and cleanup for %s',
+    async (scenario) => {
+      const bytes = { kind: 'bytes' as const, bytes: Uint8Array.of(1) };
+      const missing = {
+        kind: 'url' as const,
+        url: 'https://provider.test/mask.png',
+      };
+      const box: [number, number, number, number] = [0, 0, 10, 10];
+      const masks =
+        scenario === 'zero masks'
+          ? []
+          : [
+              { mask: bytes, box, score: 1 },
+              {
+                mask: scenario === 'missing source' ? missing : bytes,
+                box,
+                score: 1,
+              },
+            ];
+      const ctx = setup({
+        async segment() {
+          return Result.Ok({
+            type: 'segmented',
+            provider: 'fake',
+            endpoint: 'fake/segmentation',
+            providerRequestId: undefined,
+            costUsdMicros: 0,
+            costSource: 'price_table',
+            masks,
+          });
+        },
+      });
+      const publish = vi.spyOn(ctx.regions.repository, 'replaceDetections');
+      if (scenario === 'lost upload response') {
+        const original = ctx.storage.storage.putObject;
+        const upload = vi.spyOn(ctx.storage.storage, 'putObject');
+        upload
+          .mockImplementationOnce(original)
+          .mockImplementationOnce(async (input) => {
+            await original(input);
+            return Result.Error(
+              new AppError({
+                code: 'UPLOAD_FAILED',
+                category: 'system',
+                status: 500,
+              })
+            );
+          });
+      }
+      const outcome = await ctx.pipeline.detectConcept({
+        imageId: baseImageId,
+        concept: 'window',
+        runId: 'run-1',
+      });
+      expect(ctx.storage.objects.size).toBe(0);
+      if (scenario === 'zero masks') {
+        expect(okValue(outcome)).toEqual({
+          type: 'concept_detected',
+          count: 0,
+        });
+        expect(publish).toHaveBeenCalledWith(
+          expect.objectContaining({ regions: [] })
+        );
+      } else {
+        expect(publish).not.toHaveBeenCalled();
+        if (scenario === 'missing source') {
+          expect(okValue(outcome)).toEqual({
+            type: 'concept_failed',
+            reason: 'mask_unavailable',
+          });
+        } else {
+          expect(outcome.isError()).toBe(true);
+        }
+      }
+    }
+  );
 
   it('carries user-made regions over as suggestions, once', async () => {
     const ctx = setup();

@@ -23,6 +23,7 @@ export {
   createTransactionRunner,
   getDefaultDbClient,
 } from './infrastructure/db/client';
+export { getDatabaseErrorCode } from './infrastructure/db/db-error-details';
 export { createProviderCallLog } from './infrastructure/db/provider-call-log-drizzle';
 export { user } from './infrastructure/db/schema';
 export { isRootDatabase } from './infrastructure/db/types';

@@ -71,7 +71,7 @@ export function createSegmentationPipelineUseCases(
       });
       if (outcome.isError()) {
         deps.logger.warn({
-          event: 'segmentation.detection.cleanup_failed',
+          event: 'segmentation.detection.finalize_failed',
           details: run,
           exception: outcome.getError(),
         });

@@ -1,4 +1,5 @@
 import { createServerFn } from '@tanstack/react-start';
+import { createServerFunctionInvoker } from '@/platform/lib/tanstack-start/server-function-handler';
 
 export const unsafeMutation = createServerFn({ method: 'POST' }).handler(
   async ({ data }) => data
@@ -19,4 +20,38 @@ export const wrapperOnlyMutation = createServerFn({ method: 'POST' }).handler(
 
 export const currentSession = createServerFn({ method: 'GET' }).handler(
   async () => null
+);
+
+declare const getDeps: () => {
+  withProtectedMutation: (fn: () => unknown) => unknown;
+  withPublicContext: (fn: () => unknown) => unknown;
+};
+
+const protectedMutation = createServerFunctionInvoker({
+  getDeps,
+  selectRunner: (deps) => deps.withProtectedMutation,
+});
+
+const publicMutation = createServerFunctionInvoker({
+  getDeps,
+  selectRunner: (deps) => deps.withPublicContext,
+});
+
+export const safeInstrumentedMutation = createServerFn({
+  method: 'POST',
+}).handler(async ({ data }) =>
+  protectedMutation.withOperation('test')(data, () => data)
+);
+
+export const unusedOperation = createServerFn({ method: 'POST' }).handler(
+  async () => {
+    const invoke = protectedMutation.withOperation('unused');
+    return invoke;
+  }
+);
+
+export const unsafeInstrumentedMutation = createServerFn({
+  method: 'POST',
+}).handler(async ({ data }) =>
+  publicMutation.withOperation('test')(data, () => data)
 );

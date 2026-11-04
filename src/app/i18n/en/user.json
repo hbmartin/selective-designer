@@ -60,7 +60,7 @@
       "emailAlreadyExist": "Email already used"
     },
     "new": {
-      "instructions": "Run this command in a terminal configured for the intended database.",
+      "instructions": "Run this example in a terminal configured for the intended database. Replace the email and name, and use either user or admin as the role.",
       "handoffInstructions": "The command displays the generated password once. Share it privately with the invited user.",
       "title": "Provision a user"
     },

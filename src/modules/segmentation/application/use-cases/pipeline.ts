@@ -2,7 +2,11 @@ import { Result } from '@bloodyowl/boxed';
 
 import { type ImageId, toRegionId } from '@/modules/kernel/domain/ids';
 
-import { providerCallIdFor, storeSegmentedMasks } from './store-masks';
+import {
+  discardUnpublishedMasks,
+  providerCallIdFor,
+  storeSegmentedMasks,
+} from './store-masks';
 import {
   type SegmentationPipelineDeps,
   type SegmentationResultOf,
@@ -44,6 +48,7 @@ export async function detectConcept(
   SegmentationResultOf<
     | { type: 'concept_detected'; count: number }
     | { type: 'concept_failed'; reason: string }
+    | { type: 'detection_concept_already_completed' }
     | { type: 'detection_superseded' }
     | { type: 'image_missing' }
   >
@@ -109,17 +114,28 @@ export async function detectConcept(
     label: input.concept,
   });
   if (regions.isError()) return Result.Error(regions.getError());
+  const stored = regions.get();
+  if (stored.type === 'detection_mask_unavailable') {
+    return Result.Ok({ type: 'concept_failed', reason: 'mask_unavailable' });
+  }
   const saved = await deps.regionRepository.replaceDetections({
     imageId: image.imageId,
     concept: input.concept,
-    regions: regions.get(),
+    regions: stored.regions,
     runId: input.runId,
     now: deps.clock.now(),
   });
+  // A persistence error may have arrived after the commit.
   if (saved.isError()) return Result.Error(saved.getError());
-  if (saved.get().type === 'detection_superseded')
-    return Result.Ok({ type: 'detection_superseded' });
-  return Result.Ok({ type: 'concept_detected', count: regions.get().length });
+  const published = saved.get();
+  if (published.type !== 'regions_saved') {
+    await discardUnpublishedMasks(
+      deps,
+      stored.regions.map((region) => region.maskKey)
+    );
+    return Result.Ok(published);
+  }
+  return Result.Ok({ type: 'concept_detected', count: stored.regions.length });
 }
 
 /**

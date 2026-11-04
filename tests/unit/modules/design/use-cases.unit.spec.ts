@@ -7,7 +7,12 @@ import {
 import { okValue } from '@tests/support/result';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { createDesignUseCases, toDesignName } from '@/modules/design';
+import {
+  createDesignUseCases,
+  type DesignCopiedListener,
+  toDesignName,
+} from '@/modules/design';
+import { AppError } from '@/modules/kernel';
 import {
   toDesignId,
   toGeneratedId,
@@ -38,7 +43,7 @@ const setup = (options?: { permission?: 'granted' | 'denied' }) => {
   const arrived = vi.fn(async () =>
     Result.Ok({ type: 'image_arrival_handled' as const })
   );
-  const copied = vi.fn(async () =>
+  const copied = vi.fn<DesignCopiedListener['designCopied']>(async () =>
     Result.Ok({ type: 'design_copy_handled' as const })
   );
   const useCases = createDesignUseCases({
@@ -295,46 +300,71 @@ describe('design use cases', () => {
     ).toBe('design_not_found');
   });
 
-  it('copies the mood board and placements into a revised design', async () => {
-    await rememberBaseUploads(ctx.intents);
-    const first = okValue(
-      await ctx.useCases.create({ currentUserId: ownerId, name, baseImage })
-    );
-    if (first.type !== 'design_created') throw new Error('not created');
-    const revisedKeys = {
-      ...baseImage,
-      originalKey: unwrapParseResult(toObjectKey('base-images/revised.png')),
-      workingKey: unwrapParseResult(toObjectKey('working-images/revised.png')),
-    };
-    await ctx.intents.store.remember({
-      objectKey: revisedKeys.originalKey,
-      userId: ownerId,
-      purpose: 'base_image',
-      contentType: 'image/png',
-      expiresAt: new Date(now.getTime() + 60_000),
-    });
-    await ctx.intents.store.remember({
-      objectKey: revisedKeys.workingKey,
-      userId: ownerId,
-      purpose: 'working_image',
-      contentType: 'image/png',
-      expiresAt: new Date(now.getTime() + 60_000),
-    });
-    const revised = okValue(
-      await ctx.useCases.create({
-        currentUserId: ownerId,
-        name,
-        baseImage: revisedKeys,
-        copiedFromDesignId: first.design.id,
-      })
-    );
-    if (revised.type !== 'design_created') throw new Error('not created');
-    expect(ctx.copied).toHaveBeenCalledWith({
-      fromDesignId: first.design.id,
-      toDesignId: revised.design.id,
-      toBaseImageId: revised.design.baseImage.id,
-    });
-  });
+  it.each([false, true])(
+    'copies before scheduling detection even when the copy fails (%s)',
+    async (copyFails) => {
+      if (copyFails) {
+        ctx.copied.mockResolvedValueOnce(
+          Result.Error(
+            new AppError({
+              code: 'COPY_FAILED',
+              category: 'system',
+              status: 500,
+            })
+          )
+        );
+      }
+      await rememberBaseUploads(ctx.intents);
+      const first = okValue(
+        await ctx.useCases.create({ currentUserId: ownerId, name, baseImage })
+      );
+      if (first.type !== 'design_created') throw new Error('not created');
+      const revisedKeys = {
+        ...baseImage,
+        originalKey: unwrapParseResult(toObjectKey('base-images/revised.png')),
+        workingKey: unwrapParseResult(
+          toObjectKey('working-images/revised.png')
+        ),
+      };
+      await ctx.intents.store.remember({
+        objectKey: revisedKeys.originalKey,
+        userId: ownerId,
+        purpose: 'base_image',
+        contentType: 'image/png',
+        expiresAt: new Date(now.getTime() + 60_000),
+      });
+      await ctx.intents.store.remember({
+        objectKey: revisedKeys.workingKey,
+        userId: ownerId,
+        purpose: 'working_image',
+        contentType: 'image/png',
+        expiresAt: new Date(now.getTime() + 60_000),
+      });
+      const revised = okValue(
+        await ctx.useCases.create({
+          currentUserId: ownerId,
+          name,
+          baseImage: revisedKeys,
+          copiedFromDesignId: first.design.id,
+        })
+      );
+      if (revised.type !== 'design_created') throw new Error('not created');
+      expect(ctx.copied).toHaveBeenCalledWith({
+        fromDesignId: first.design.id,
+        toDesignId: revised.design.id,
+        toBaseImageId: revised.design.baseImage.id,
+      });
+      expect(ctx.arrived).toHaveBeenLastCalledWith({
+        designId: revised.design.id,
+        imageId: revised.design.baseImage.id,
+        kind: 'base',
+        carryFromImageId: null,
+      });
+      expect(ctx.copied.mock.invocationCallOrder[0]).toBeLessThan(
+        ctx.arrived.mock.invocationCallOrder[1] ?? 0
+      );
+    }
+  );
 
   it('requires a revised design to copy from a design the caller owns', async () => {
     await rememberBaseUploads(ctx.intents);

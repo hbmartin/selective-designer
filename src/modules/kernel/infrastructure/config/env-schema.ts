@@ -57,6 +57,7 @@ export const isProdRuntimeEnvironment = (source?: RuntimeEnv) => {
   return isTruthy(env.PROD);
 };
 
+/** The platform's production marker vetoes seeding even in a development shell. */
 export const isProductionSeedRuntime = (source: RuntimeEnv = runtimeEnv()) =>
   isProdRuntimeEnvironment(source) || source.VERCEL_ENV === 'production';
 
