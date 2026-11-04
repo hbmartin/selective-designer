@@ -30,5 +30,9 @@ export { isRootDatabase } from './infrastructure/db/types';
 export { createUploadIntentStore } from './infrastructure/db/upload-intent-store-drizzle';
 export { createTelemetryLogger } from './infrastructure/logger/telemetry';
 export { BetterUploadObjectStorage } from './infrastructure/storage/better-upload';
-export { readLimitedBody } from './infrastructure/storage/limited-response-body';
+export {
+  discardResponseBody,
+  hasOversizedResponseBody,
+  readLimitedBody,
+} from './infrastructure/storage/limited-response-body';
 export { appErrorToResponse } from './transport/http/error-mapper';

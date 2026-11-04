@@ -84,15 +84,16 @@ const buildDesignUseCases = (overrides?: DesignOverrides) => {
   const kernel = overrides?.kernel ?? getKernel();
   const repository = createDesignRepository({ db: kernel.db });
   return createDesignUseCases({
-    designRepository: overrides?.designRepository ?? {
-      ...repository,
-      create: (input) =>
-        writeImageWithDetection(kernel, {
-          waitingForCopy: input.copiedFromDesignId !== null,
-          carryFromImageId: null,
-          save: (design) => design.create(input),
-          imageId: (saved) => saved.design.baseImage.id,
-        }),
+    designRepository: overrides?.designRepository ?? repository,
+    writeDesignWithBaseImage: (input) => {
+      if (overrides?.designRepository)
+        return overrides.designRepository.create(input);
+      return writeImageWithDetection(kernel, {
+        waitingForCopy: input.copiedFromDesignId !== null,
+        carryFromImageId: null,
+        save: (design) => design.create(input),
+        imageId: (saved) => saved.design.baseImage.id,
+      });
     },
     uploadIntentStore: kernel.uploadIntentStore,
     objectStorage: kernel.objectStorage,

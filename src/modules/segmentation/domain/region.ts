@@ -112,3 +112,17 @@ export type SegmentationPrompt =
   | { type: 'click'; points: { x: number; y: number; positive: boolean }[] }
   | { type: 'box'; box: FractionalBox }
   | { type: 'text'; text: string };
+
+export const isDetectionConceptSettled = (
+  progress:
+    | {
+        completedConcepts: readonly string[];
+        omissions?: readonly { concept: string }[];
+      }
+    | null
+    | undefined,
+  concept: string
+) =>
+  progress?.completedConcepts.includes(concept) === true ||
+  progress?.omissions?.some((omission) => omission.concept === concept) ===
+    true;

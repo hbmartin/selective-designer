@@ -129,7 +129,7 @@ export async function createDesign(
   if (ids.isError()) return Result.Error(ids.getError());
 
   deps.logger.info({ event: 'design.create' });
-  const created = await deps.designRepository.create({
+  const created = await deps.writeDesignWithBaseImage({
     id: ids.get().designId,
     ownerId: input.currentUserId,
     name: input.name,

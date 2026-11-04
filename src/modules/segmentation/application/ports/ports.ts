@@ -97,8 +97,8 @@ export interface RegionRepository {
     runId: string;
     now: Date;
     expiresAtMs: number;
-    legacyProgress?: DetectionProgress;
-    dispatch?: { previousPhase: DetectionPhase | null; initial: boolean };
+    progress?: DetectionProgress;
+    dispatch: { previousPhase: DetectionPhase | null; initial: boolean };
   }): Promise<ApplicationResult<DetectionClaim>>;
   findDetection(
     imageId: ImageId

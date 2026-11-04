@@ -9,6 +9,7 @@ import {
   toRegionId,
 } from '@/modules/kernel/domain/ids';
 import { createTransactionRunner } from '@/modules/kernel/infrastructure/db/client';
+import { getDatabaseErrorCode } from '@/modules/kernel/infrastructure/db/db-error-details';
 import { observeRepository } from '@/modules/kernel/infrastructure/db/observability';
 import {
   type DbLike,
@@ -18,12 +19,12 @@ import {
 import { detectionRunFor } from '@/modules/segmentation/application/detection-run';
 import type {
   DetectionOmission,
-  DetectionProgress,
   DetectionRun,
   NewRegion,
   RegionRepository,
 } from '@/modules/segmentation/application/ports/ports';
 import {
+  isDetectionConceptSettled,
   type Region,
   type RegionSource,
   regionSources,
@@ -117,14 +118,6 @@ const runPhase = (run: DetectionRun) =>
     ? isNull(activeDetection.phase)
     : eq(activeDetection.phase, 'running');
 
-const conceptSettled = (
-  progress: DetectionProgress | null | undefined,
-  concept: string
-) =>
-  progress?.completedConcepts.includes(concept) ||
-  progress?.omissions?.some((omission) => omission.concept === concept);
-
-/** Lock the lease row in the same transaction as publishing region changes. */
 const lockDetection = async (db: DbLike, run: DetectionRun) => {
   const [row] = await db
     .select({ progress: activeDetection.progress })
@@ -266,20 +259,17 @@ export const createRegionRepository = ({
             runId: input.runId,
             failed: false,
             expiresAt: new Date(input.expiresAtMs),
-            ...(input.dispatch
-              ? { phase: 'queued' as const, workerId: null }
-              : {}),
-            ...(input.legacyProgress ? { progress: input.legacyProgress } : {}),
+            phase: 'queued',
+            workerId: null,
+            ...(input.progress ? { progress: input.progress } : {}),
           })
           .where(
             and(
               ownedDetection(input.previous),
-              input.dispatch
-                ? input.dispatch.previousPhase === null
-                  ? isNull(activeDetection.phase)
-                  : eq(activeDetection.phase, input.dispatch.previousPhase)
-                : isNull(activeDetection.phase),
-              input.dispatch?.initial
+              input.dispatch.previousPhase === null
+                ? isNull(activeDetection.phase)
+                : eq(activeDetection.phase, input.dispatch.previousPhase),
+              input.dispatch.initial
                 ? undefined
                 : or(
                     eq(activeDetection.failed, true),
@@ -346,7 +336,7 @@ export const createRegionRepository = ({
           const owned = await lockDetection(tx, run);
           if (!owned?.progress)
             return Result.Ok({ type: 'detection_superseded' } as const);
-          if (conceptSettled(owned.progress, concept))
+          if (isDetectionConceptSettled(owned.progress, concept))
             return Result.Ok({
               type: 'detection_concept_already_completed',
             } as const);
@@ -403,7 +393,7 @@ export const createRegionRepository = ({
           if (
             carryOverCompleted &&
             concepts?.every((concept) =>
-              conceptSettled(owned.progress, concept)
+              isDetectionConceptSettled(owned.progress, concept)
             )
           ) {
             if (omissions?.length)
@@ -483,6 +473,24 @@ export const createRegionRepository = ({
           await db.insert(regionTable).values(regions.map(toValues));
         return Result.Ok({ type: 'regions_saved' });
       } catch (error) {
+        // PostgreSQL rejected the single unfenced INSERT. Transport errors can
+        // arrive after it commits and do not prove the fresh masks are unused.
+        if (
+          !run &&
+          ['23502', '23503', '23505', '23514'].includes(
+            getDatabaseErrorCode(error) ?? ''
+          )
+        ) {
+          return Result.Error(
+            new AppError({
+              code: 'REGION_INSERT_REJECTED',
+              category: 'system',
+              status: 500,
+              message: 'Region persistence failed',
+              cause: error,
+            })
+          );
+        }
         return Result.Error(dbError(error));
       }
     },
@@ -497,7 +505,7 @@ export const createRegionRepository = ({
             : undefined;
           if (run && !owned)
             return Result.Ok({ type: 'detection_superseded' } as const);
-          if (conceptSettled(owned?.progress, input.concept))
+          if (isDetectionConceptSettled(owned?.progress, input.concept))
             return Result.Ok({
               type: 'detection_concept_already_completed',
             } as const);

@@ -12,9 +12,13 @@ import {
   type SegmentationResultOf,
   SIGNED_MASK_URL_SECONDS,
 } from './types';
-import { detectionRunFor } from '../detection-run';
+import { detectionRunFor, ownsDetectionLease } from '../detection-run';
 import type { DetectionIdentity } from '../ports/ports';
-import { detectionConcepts, isUserMadeSource } from '../../domain/region';
+import {
+  detectionConcepts,
+  isDetectionConceptSettled,
+  isUserMadeSource,
+} from '../../domain/region';
 
 /** Concepts automatic detection looks for in this image's design. */
 export async function detectionConceptsFor(
@@ -63,22 +67,9 @@ export async function detectConcept(
     const found = await deps.regionRepository.findDetection(run.imageId);
     if (found.isError()) return Result.Error(found.getError());
     const lease = found.get();
-    if (
-      lease.type !== 'detection_lease' ||
-      lease.phase !== (run.workerId === undefined ? null : 'running') ||
-      lease.runId !== run.runId ||
-      lease.workerId !== (run.workerId ?? null) ||
-      lease.failed ||
-      lease.expiresAt <= deps.clock.now()
-    ) {
+    if (!ownsDetectionLease(lease, run, deps.clock.now()))
       return Result.Ok({ type: 'detection_superseded' });
-    }
-    if (
-      lease.progress?.completedConcepts.includes(input.concept) ||
-      lease.progress?.omissions?.some(
-        ({ concept }) => concept === input.concept
-      )
-    ) {
+    if (isDetectionConceptSettled(lease.progress, input.concept)) {
       return Result.Ok({ type: 'detection_concept_already_completed' });
     }
   }

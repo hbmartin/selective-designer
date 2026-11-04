@@ -14,6 +14,7 @@ import type { ImageArrivedListener } from '../ports/image-arrived-listener';
 
 export type DesignUseCaseDeps = {
   designRepository: DesignRepository;
+  writeDesignWithBaseImage: DesignRepository['create'];
   uploadIntentStore: UploadIntentStore;
   objectStorage: ObjectStoragePort;
   permissionChecker: PermissionChecker;

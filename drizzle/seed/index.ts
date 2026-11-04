@@ -1,11 +1,16 @@
 import { faker } from '@faker-js/faker';
 
-import { PASSWORD_MAX_LENGTH, PASSWORD_MIN_LENGTH } from '@/modules/auth';
+import {
+  operatorPasswordSchema,
+  PASSWORD_MAX_LENGTH,
+  PASSWORD_MIN_LENGTH,
+} from '@/modules/auth';
 import { ConfigurationError } from '@/modules/kernel';
 import {
   assertLocalSeedTarget,
   getDatabaseErrorCode,
   getDefaultDbClient,
+  getSeedAccountEmails,
   getSeedAccountPassword,
 } from '@/modules/kernel/backend';
 
@@ -23,11 +28,9 @@ function reportFailure(message: string, error: unknown) {
 
 async function main() {
   assertLocalSeedTarget();
-  const password = getSeedAccountPassword();
-  if (
-    password.length < PASSWORD_MIN_LENGTH ||
-    password.length > PASSWORD_MAX_LENGTH
-  ) {
+  const emails = getSeedAccountEmails();
+  const password = operatorPasswordSchema.safeParse(getSeedAccountPassword());
+  if (!password.success) {
     throw new ConfigurationError(
       `SEED_ACCOUNT_PASSWORD must be ${PASSWORD_MIN_LENGTH}–${PASSWORD_MAX_LENGTH} characters long.`
     );
@@ -36,7 +39,7 @@ async function main() {
   try {
     const { createUsers } = await import('./user');
     faker.seed(0x5eed);
-    await createUsers(password);
+    await createUsers(db, { ...emails, password: password.data });
   } catch (error) {
     reportFailure('Database seed failed.', error);
   } finally {

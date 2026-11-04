@@ -3,7 +3,11 @@ import { type Result as BoxedResult, Result } from '@bloodyowl/boxed';
 import { AppError } from '@/modules/kernel/domain/errors/app-error';
 import type { ImageId } from '@/modules/kernel/domain/ids';
 
-import type { DetectionIdentity, DetectionRun } from './ports/ports';
+import type {
+  DetectionIdentity,
+  DetectionLease,
+  DetectionRun,
+} from './ports/ports';
 
 export const detectionRunFor = (
   imageId: ImageId,
@@ -28,3 +32,15 @@ export const detectionRunFor = (
   }
   return Result.Ok(runId === undefined ? undefined : { imageId, runId });
 };
+
+export const ownsDetectionLease = (
+  lease: DetectionLease | { type: 'no_detection' },
+  run: DetectionRun,
+  now: Date
+): lease is DetectionLease =>
+  lease.type === 'detection_lease' &&
+  lease.phase === (run.workerId === undefined ? null : 'running') &&
+  lease.runId === run.runId &&
+  lease.workerId === (run.workerId ?? null) &&
+  !lease.failed &&
+  lease.expiresAt > now;

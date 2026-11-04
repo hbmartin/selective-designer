@@ -48,6 +48,7 @@ const setup = (options?: { permission?: 'granted' | 'denied' }) => {
   );
   const useCases = createDesignUseCases({
     designRepository: repo.repository,
+    writeDesignWithBaseImage: repo.repository.create,
     uploadIntentStore: intents.store,
     objectStorage: storage.storage,
     permissionChecker: {

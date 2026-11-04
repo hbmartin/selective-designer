@@ -90,7 +90,7 @@ export const createDetectionScheduler = (deps: {
       runId,
       now,
       expiresAtMs: now.getTime() + DETECTION_START_WINDOW_MS,
-      legacyProgress: progress,
+      progress,
       dispatch: { previousPhase: lease.phase, initial },
     });
     if (claimed.isError()) return Result.Error(claimed.getError());
@@ -136,9 +136,11 @@ export const createDetectionScheduler = (deps: {
 
       let progress: DetectionProgress | undefined;
       if (!lease.progress) {
-        const source = await deps.findCarrySource(imageId);
+        const [source, labels] = await Promise.all([
+          deps.findCarrySource(imageId),
+          deps.regionRepository.detectionLabels(imageId),
+        ]);
         if (source.isError()) return Result.Error(source.getError());
-        const labels = await deps.regionRepository.detectionLabels(imageId);
         if (labels.isError()) return Result.Error(labels.getError());
         const carry = source.get();
         progress = {

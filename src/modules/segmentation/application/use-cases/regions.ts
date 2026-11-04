@@ -9,7 +9,11 @@ import {
 } from '@/modules/kernel/domain/ids';
 import { objectKeyMatchesPurpose } from '@/modules/kernel/domain/upload-policy';
 
-import { providerCallIdFor, storeSegmentedMasks } from './store-masks';
+import {
+  discardUnpublishedMasks,
+  providerCallIdFor,
+  storeSegmentedMasks,
+} from './store-masks';
 import {
   type SegmentationResultOf,
   type SegmentationUseCaseDeps,
@@ -253,7 +257,16 @@ export async function segmentByPrompt(
     });
   }
   const saved = await deps.regionRepository.insertMany(stored.regions);
-  if (saved.isError()) return Result.Error(saved.getError());
+  if (saved.isError()) {
+    const error = saved.getError();
+    if (error.code === 'REGION_INSERT_REJECTED') {
+      await discardUnpublishedMasks(
+        deps,
+        stored.regions.map(({ maskKey }) => maskKey)
+      );
+    }
+    return Result.Error(error);
+  }
   const views = await toViews(
     deps,
     stored.regions.map((region) => ({ ...region, createdAt: deps.clock.now() }))

@@ -88,11 +88,13 @@ rules:
         - drizzle/seed/**/*.ts
 
   - id: seed-validates-before-loading-worker
-    message: Load the seed worker and auth backend only after the seed entry point validates the target and password.
+    message: Load the seed worker and credential backends only after validating seed configuration.
     severity: ERROR
     languages:
       - typescript
-    pattern-regex: '(?m)^[\t ]*import\s*(?:[^(''";]+?\bfrom\s*)?[''"](?:\./user|@/modules/auth/backend)(?:\.ts)?[''"]'
+    pattern-either:
+      - pattern-regex: '(?m)^[\t ]*(?:import|export)\b(?!\s*type\b)\s*(?:[^(''";]+?\bfrom\s*)?[''"](?:\./user|@/modules/auth/(?:backend|server)|@/composition/auth|better-auth/crypto)(?:\.[cm]?[jt]s)?[''"]'
+      - pattern-regex: '\brequire\(\s*[''"](?:\./user|@/modules/auth/(?:backend|server)|@/composition/auth|better-auth/crypto)(?:\.[cm]?[jt]s)?[''"]\s*\)'
     paths:
       include:
         - drizzle/seed/index.ts

@@ -709,3 +709,32 @@ it.each([
     expect(ctx.regions.rows).toHaveLength(0);
   }
 );
+
+it.each([
+  { code: 'REGION_INSERT_REJECTED', keys: ['region-masks/previous.png'] },
+  {
+    code: 'REGION_REPOSITORY_ERROR',
+    keys: ['region-masks/previous.png', 'region-masks/r1.png'],
+  },
+])(
+  'cleans interactive masks only when the database reports $code',
+  async ({ code, keys }) => {
+    const ctx = setup();
+    ctx.storage.objects.set('region-masks/previous.png', {
+      bytes: Uint8Array.of(1),
+      contentType: 'image/png',
+    });
+    const error = new AppError({ code, category: 'system', status: 500 });
+    vi.spyOn(ctx.regions.repository, 'insertMany').mockResolvedValue(
+      Result.Error(error)
+    );
+    const result = await ctx.useCases.segment({
+      currentUserId: ownerId,
+      imageId: baseImageId,
+      prompt: { type: 'click', points: [{ x: 0.5, y: 0.5, positive: true }] },
+      label: 'Chair',
+    });
+    expect(result.isError() && result.getError()).toBe(error);
+    expect([...ctx.storage.objects.keys()]).toEqual(keys);
+  }
+);

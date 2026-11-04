@@ -1,5 +1,6 @@
 import { Result } from '@bloodyowl/boxed';
 
+import { ownsDetectionLease } from './application/detection-run';
 import type {
   ClaimedDetectionRun,
   DetectionRun,
@@ -59,14 +60,7 @@ export function createSegmentationPipelineUseCases(
       const listed = await deps.regionRepository.findDetection(run.imageId);
       if (listed.isError()) return Result.Error(listed.getError());
       const state = listed.get();
-      if (
-        state.type !== 'detection_lease' ||
-        !state.progress ||
-        state.runId !== run.runId ||
-        state.workerId !== (run.workerId ?? null) ||
-        state.failed ||
-        state.expiresAt <= deps.clock.now()
-      )
+      if (!ownsDetectionLease(state, run, deps.clock.now()) || !state.progress)
         return Result.Ok({ type: 'detection_superseded' } as const);
       let concepts = state.progress.concepts;
       if (concepts === null) {
