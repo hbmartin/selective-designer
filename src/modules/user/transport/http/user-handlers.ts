@@ -13,7 +13,6 @@ import {
 import type { UserUseCases } from '@/modules/user';
 
 import type {
-  UserCreateOutcome,
   UserDeleteOutcome,
   UserGetOutcome,
   UserListOutcome,
@@ -46,13 +45,6 @@ export const zGetByIdInput = () => z.object({ id: zUserId() });
 export const zUpdateByIdInput = () =>
   z.object({
     id: zUserId(),
-    name: zUserDisplayName().nullish(),
-    email: zLoginEmail(),
-    role: zRole().nullish(),
-  });
-
-export const zCreateInput = () =>
-  z.object({
     name: zUserDisplayName().nullish(),
     email: zLoginEmail(),
     role: zRole().nullish(),
@@ -102,12 +94,6 @@ const userGetConfig = {
   user_found: (outcome) => outcome.user,
   user_not_found: 'NOT_FOUND',
 } as const satisfies OutcomeHandlerConfig<UserGetOutcome, User>;
-
-const userCreateConfig = {
-  user_created: (outcome) => outcome.user,
-  user_forbidden: 'FORBIDDEN',
-  ...userDuplicateConfig,
-} as const satisfies OutcomeHandlerConfig<UserCreateOutcome, User>;
 
 const userUpdateConfig = {
   user_forbidden: 'FORBIDDEN',
@@ -193,23 +179,6 @@ export const createUserHandlers = ({ getUseCases }: UserHandlerDeps) => {
     );
   };
 
-  const create = async (
-    ctx: ProtectedContext,
-    data: z.infer<ReturnType<typeof zCreateInput>>
-  ) => {
-    return unwrapApplicationResult(
-      getUseCases(ctx).create({
-        currentUserId: ctx.scope.userId,
-        user: {
-          name: data.name,
-          email: data.email,
-          role: data.role,
-        },
-      }),
-      userCreateConfig
-    );
-  };
-
   const deleteById = async (
     ctx: ProtectedContext,
     data: z.infer<ReturnType<typeof zDeleteByIdInput>>
@@ -274,7 +243,6 @@ export const createUserHandlers = ({ getUseCases }: UserHandlerDeps) => {
     getAll,
     getById,
     updateById,
-    create,
     deleteById,
     getUserSessions,
     revokeUserSessions,

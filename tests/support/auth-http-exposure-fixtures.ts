@@ -23,9 +23,7 @@ export const SENSITIVE_AUTH_HTTP_PATHS = [
 ] as const;
 
 export const CORE_AUTH_HTTP_PATHS = [
-  '/api/auth/sign-in/email-otp',
-  '/api/auth/email-otp/send-verification-otp',
+  '/api/auth/sign-in/email',
   '/api/auth/get-session',
   '/api/auth/sign-out',
-  '/api/auth/callback/github',
 ] as const;

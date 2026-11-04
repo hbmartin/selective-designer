@@ -65,6 +65,15 @@ export const regionsGet = createServerFn({ method: 'GET' })
     )
   );
 
+export const regionsRetryDetection = createServerFn({ method: 'POST' })
+  .validator(zRegionsInput())
+  .handler(async ({ data }) =>
+    runMutation.withOperation('segmentation.retryDetection')(
+      data,
+      ({ handlers }, ctx, input) => handlers.retryDetection(ctx, input)
+    )
+  );
+
 export const regionsSegment = createServerFn({ method: 'POST' })
   .validator(zSegmentInput())
   .handler(async ({ data }) =>
@@ -103,6 +112,7 @@ export const regionsRemove = createServerFn({ method: 'POST' })
 
 export type SegmentationServerFunctions = {
   regionsGet: typeof regionsGet;
+  regionsRetryDetection: typeof regionsRetryDetection;
   regionsSegment: typeof regionsSegment;
   regionsCreateManual: typeof regionsCreateManual;
   regionsUpdate: typeof regionsUpdate;

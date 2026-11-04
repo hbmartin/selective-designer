@@ -33,7 +33,6 @@ describe('user query keys', () => {
   });
 
   it('versions mutation keys', () => {
-    expect(userQueries.create().mutationKey).toEqual(['user', 'v1', 'create']);
     expect(userQueries.updateById().mutationKey).toEqual([
       'user',
       'v1',
@@ -58,7 +57,6 @@ describe('user query keys', () => {
 
   it('calls injected facade functions with server function data payloads', async () => {
     const facade = {
-      userCreate: vi.fn(async () => ({ type: 'created' })),
       userDeleteById: vi.fn(async () => ({ type: 'deleted' })),
       userGetAll: vi.fn(async () => ({ items: [], total: 0 })),
       userGetById: vi.fn(async () => ({ id: 'user-1' })),

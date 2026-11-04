@@ -6,12 +6,12 @@ export {
   getAuthProviderConfig,
   getBetterAuthConfig,
 } from './infrastructure/config/auth';
+export { assertLocalSeedTarget } from './infrastructure/config/database';
 export { getEmailConfig } from './infrastructure/config/email';
 export {
   getSeedAccountEmails,
   getSeedAccountPassword,
   isProdRuntimeEnvironment,
-  isProductionSeedAllowed,
 } from './infrastructure/config/env-schema';
 export { getHttpConfig } from './infrastructure/config/http';
 export { getRedisConfig } from './infrastructure/config/redis';

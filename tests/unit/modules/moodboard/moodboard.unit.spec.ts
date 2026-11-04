@@ -435,6 +435,63 @@ describe('background removal pipeline', () => {
     expect(ctx.calls.calls.size).toBe(2);
   });
 
+  it('deletes only the abandoned object when a worker loses its attempt during upload', async () => {
+    const ctx = setup();
+    const item = await createProduct(ctx);
+    const versionId = item.currentVersion.id;
+    const attemptId = latestAttempt(ctx);
+    const staleKey = `item-cutouts/${versionId}/${attemptId}.png`;
+    const put = ctx.storage.storage.putObject;
+    const deleteObject = vi.spyOn(ctx.storage.storage, 'deleteObject');
+    vi.spyOn(ctx.storage.storage, 'putObject').mockImplementationOnce(
+      async (input) => {
+        const stored = await put(input);
+        await ctx.items.repository.finishCutoutAttempt({
+          versionId,
+          attemptId,
+          cutoutStatus: 'failed',
+          cutoutKey: null,
+        });
+        okValue(
+          await ctx.useCases.retryCutout({
+            currentUserId: ownerId,
+            itemId: item.id,
+          })
+        );
+        return stored;
+      }
+    );
+
+    const outcome = okValue(
+      await ctx
+        .pipeline({
+          removeBackground: async () =>
+            Result.Ok({
+              type: 'background_removed',
+              result: {
+                kind: 'bytes',
+                bytes: new Uint8Array([1]),
+                contentType: 'image/png',
+              },
+              provider: 'fake',
+              endpoint: 'test',
+              providerRequestId: undefined,
+              costUsdMicros: 5,
+              costSource: 'price_table',
+            }),
+        })
+        .removeBackground({ versionId, attemptId })
+    );
+
+    expect(outcome.type).toBe('cutout_skipped');
+    expect(deleteObject).toHaveBeenCalledExactlyOnceWith(staleKey);
+    expect(ctx.storage.objects.has(staleKey)).toBe(false);
+    expect(ctx.items.versions.get(versionId)?.cutoutStatus).toBe('pending');
+    expect([...ctx.calls.calls.values()]).toEqual([
+      expect.objectContaining({ costUsdMicros: 5 }),
+    ]);
+  });
+
   it('marks the version failed when the provider rejects the photo', async () => {
     const ctx = setup();
     const item = await createProduct(ctx);

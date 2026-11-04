@@ -10,7 +10,6 @@ import type { ProtectedContext } from '@/modules/auth/backend';
 import {
   createUserHandlers,
   type UserHandlers,
-  zCreateInput,
   zDeleteByIdInput,
   zGetAllInput,
   zGetByIdInput,
@@ -91,19 +90,6 @@ export const userUpdateById = createServerFn({ method: 'POST' })
     )
   );
 
-// Creating a user is privilege-granting (it can mint an admin when the actor
-// holds `user:set-role`), so it requires a fresh session for parity with the
-// other destructive admin mutations — otherwise a stale/hijacked admin session
-// could provision a durable backdoor account. (CWE-287 / CWE-269.)
-export const userCreate = createServerFn({ method: 'POST' })
-  .validator(zCreateInput())
-  .handler(async ({ data }) =>
-    runFreshMutation.withOperation('user.create')(
-      data,
-      ({ handlers }, ctx, input) => handlers.create(ctx, input)
-    )
-  );
-
 export const userDeleteById = createServerFn({ method: 'POST' })
   .validator(zDeleteByIdInput())
   .handler(async ({ data }) =>
@@ -144,7 +130,6 @@ export type UserServerFunctions = {
   userGetAll: typeof userGetAll;
   userGetById: typeof userGetById;
   userUpdateById: typeof userUpdateById;
-  userCreate: typeof userCreate;
   userDeleteById: typeof userDeleteById;
   userGetUserSessions: typeof userGetUserSessions;
   userRevokeUserSessions: typeof userRevokeUserSessions;

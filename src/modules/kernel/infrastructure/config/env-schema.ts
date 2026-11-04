@@ -57,6 +57,9 @@ export const isProdRuntimeEnvironment = (source?: RuntimeEnv) => {
   return isTruthy(env.PROD);
 };
 
+export const isProductionSeedRuntime = (source: RuntimeEnv = runtimeEnv()) =>
+  isProdRuntimeEnvironment(source) || source.VERCEL_ENV === 'production';
+
 export const isDevRuntimeEnvironment = (source?: RuntimeEnv) => {
   const env = source ?? runtimeEnv();
   return env.NODE_ENV ? env.NODE_ENV === 'development' : isTruthy(env.DEV);
@@ -66,14 +69,6 @@ export const shouldSkipEnvValidation = (source?: RuntimeEnv) => {
   const env = source ?? runtimeEnv();
   return isTruthy(env.SKIP_ENV_VALIDATION) && !isProdRuntimeEnvironment(env);
 };
-
-/**
- * Explicit opt-in (ALLOW_PROD_SEED=true) required to run the database seed
- * against a production environment. Used by the seed entrypoint to avoid
- * planting demo accounts in production.
- */
-export const isProductionSeedAllowed = (source?: RuntimeEnv) =>
-  isTruthy((source ?? runtimeEnv()).ALLOW_PROD_SEED);
 
 /**
  * Optional explicit seed-account emails (SEED_ADMIN_EMAIL / SEED_USER_EMAIL).

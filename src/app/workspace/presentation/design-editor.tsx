@@ -44,8 +44,19 @@ export const DesignEditor = (props: {
   const items = useQuery(
     moodboardQueries.byDesign({ scopeKey, designId: props.designId })
   );
-  const regions = useQuery({
-    ...segmentationQueries.regions({ scopeKey, imageId: props.sourceImageId }),
+  const regionsOptions = segmentationQueries.regions({
+    scopeKey,
+    imageId: props.sourceImageId,
+  });
+  const regions = useQuery(regionsOptions);
+  const retryDetection = useMutation({
+    ...segmentationQueries.retryDetection(),
+    onSettled: () =>
+      queryClient.invalidateQueries({
+        queryKey: regionsOptions.queryKey,
+        exact: true,
+      }),
+    onError: () => toast.error(t('segmentation:errors.retryDetectionFailed')),
   });
   const invalidateRegions = () =>
     queryClient.invalidateQueries({ queryKey: segmentationQueries.all() });
@@ -114,11 +125,26 @@ export const DesignEditor = (props: {
           items={editorItems}
           regions={editorRegions}
           header={
-            design.data && !isBaseImage ? (
-              <p className="text-xs text-muted-foreground">
-                {t('rendering:editor.fromResult')}
-              </p>
-            ) : null
+            <>
+              {design.data && !isBaseImage && (
+                <p className="text-xs text-muted-foreground">
+                  {t('rendering:editor.fromResult')}
+                </p>
+              )}
+              {(regions.data?.detection === 'retryable' ||
+                retryDetection.isPending) && (
+                <Button
+                  size="sm"
+                  variant="secondary"
+                  loading={retryDetection.isPending}
+                  onClick={() =>
+                    retryDetection.mutate({ imageId: props.sourceImageId })
+                  }
+                >
+                  {t('segmentation:list.retryDetection')}
+                </Button>
+              )}
+            </>
           }
           onSegmentAt={async (point) => {
             try {

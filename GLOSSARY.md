@@ -59,7 +59,7 @@ A region found automatically by segmentation.
 _Avoid_: Auto-region
 
 **Detection run**:
-The automatic pass over an image that finds regions for each detection concept.
+The automatic pass over an image that finds regions for each detection concept. A retry resumes unfinished work and preserves regions from completed concepts.
 
 **Placement**:
 One instance of an item positioned on an image, with its own position, scale and rotation.

@@ -27,29 +27,12 @@ test.describe('User management as manager', () => {
     await page.to('/manager/users');
   });
 
-  test('Create a user', async ({ page }) => {
-    await page.to('/manager/users/new');
-
-    const randomId = randomString(8);
-    const uniqueEmail = `new-user-${randomId}@user.com`;
-
-    // Fill the form
-    await expect(page).toHaveURL(/\/manager\/users\/new\/?$/);
-    await expect(page.getByTestId('manager-user-new-form')).toHaveAttribute(
-      'data-hydrated',
-      'true'
-    );
-    await page.getByLabel(t.user.common.name.label).fill('New user');
-    await page.getByLabel(t.user.common.email.label).fill(uniqueEmail);
+  test('Shows operator provisioning instructions', async ({ page }) => {
     await page
-      .getByRole('button', { name: t.user.manager.new.createButton.label })
+      .getByRole('link', { name: t.user.manager.list.newButton })
       .click();
-
-    await expect(page).toHaveURL(/\/manager\/users$/);
-    await page
-      .getByPlaceholder(t.components.searchInput.placeholder)
-      .fill(`new-user-${randomId}`);
-    await expect(page.getByText(uniqueEmail)).toBeVisible();
+    await expect(page.getByText(t.user.manager.new.instructions)).toBeVisible();
+    await expect(page.locator('main form')).toHaveCount(0);
   });
 
   test('Edit a user', async ({ page }) => {

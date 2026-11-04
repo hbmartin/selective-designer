@@ -29,6 +29,15 @@ describe('isBlockedBetterAuthHttpPath', () => {
     }
   });
 
+  it('blocks HTTP provisioning even when other admin endpoints are enabled', () => {
+    expect(
+      isBlockedBetterAuthHttpPath(
+        '/api/auth/admin/create-user',
+        AUTH_HTTP_ALL_ENABLED_FLAGS
+      )
+    ).toBe(true);
+  });
+
   it('allows admin endpoints when explicitly enabled', () => {
     expect(
       isBlockedBetterAuthHttpPath('/api/auth/admin/set-role', {

@@ -11,6 +11,7 @@ import type {
 
 import type {
   ConceptSource,
+  DetectionRetry,
   ImageAccess,
   RegionRepository,
   Segmenter,
@@ -32,6 +33,7 @@ export type SegmentationUseCaseDeps = Omit<
   SegmentationPipelineDeps,
   'conceptSource'
 > & {
+  detectionRetry: DetectionRetry;
   uploadIntentStore: UploadIntentStore;
   permissionChecker: PermissionChecker;
 };

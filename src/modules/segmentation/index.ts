@@ -1,4 +1,5 @@
 export type * from './application/ports/ports';
+export { createDetectionScheduler } from './application/use-cases/detection-scheduler';
 export type { RegionView } from './application/use-cases/regions';
 export type {
   SegmentationPipelineDeps,

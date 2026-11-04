@@ -51,16 +51,17 @@ test.describe('Manager users visual regression', () => {
       await screenshot(page, 'manager-users-empty-search.png');
     });
 
-    test('manager user create screen remains visually stable', async ({
+    test('manager user provisioning screen remains visually stable', async ({
       page,
     }) => {
       await page.to('/manager/users');
-      await page.getByRole('link', { name: /new user/i }).click();
+      await page.getByRole('link', { name: /provision user/i }).click();
       await expect(page).toHaveURL(/\/manager\/users\/new$/);
-      await expect(page.getByTestId('manager-user-new-form')).toHaveAttribute(
-        'data-hydrated',
-        'true'
-      );
+      await expect(
+        page.getByText('pnpm auth:password create EMAIL NAME [user|admin]', {
+          exact: true,
+        })
+      ).toBeVisible();
       await screenshot(page, 'manager-user-create.png');
     });
 

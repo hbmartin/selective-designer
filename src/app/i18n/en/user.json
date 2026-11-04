@@ -24,7 +24,7 @@
   "manager": {
     "list": {
       "title": "Users",
-      "newButton": "New User",
+      "newButton": "Provision user",
       "loadMore": "Load more",
       "showing": "Showing {{count}} of {{total}}",
       "searchResults": "{{total}} results for \"{{searchTerm}}\""
@@ -60,11 +60,9 @@
       "emailAlreadyExist": "Email already used"
     },
     "new": {
-      "title": "New User",
-      "createButton": {
-        "label": "Create"
-      },
-      "createError": "Failed to create a user"
+      "instructions": "Run this command in a terminal configured for the intended database.",
+      "handoffInstructions": "The command displays the generated password once. Share it privately with the invited user.",
+      "title": "Provision a user"
     },
     "update": {
       "title": "Update User",

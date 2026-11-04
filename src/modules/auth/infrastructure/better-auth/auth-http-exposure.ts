@@ -12,6 +12,7 @@
  */
 
 export const DEFAULT_BETTER_AUTH_BASE_PATH = '/api/auth';
+export const BETTER_AUTH_CREATE_USER_PATH = '/admin/create-user';
 
 export type AuthHttpExposureFlags = {
   /** Better Auth base path. Defaults to `/api/auth`. */
@@ -57,6 +58,13 @@ export const isBlockedBetterAuthHttpPath = (
   const basePath = trimTrailingSlash(
     flags.basePath ?? DEFAULT_BETTER_AUTH_BASE_PATH
   );
+  if (
+    isUnderPrefix(
+      normalizedPathname,
+      `${basePath}${BETTER_AUTH_CREATE_USER_PATH}`
+    )
+  )
+    return true;
   if (
     !flags.adminEndpointsEnabled &&
     isUnderPrefix(normalizedPathname, `${basePath}/admin`)

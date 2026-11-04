@@ -141,6 +141,54 @@ describe('ItemRepositoryDrizzle', () => {
     ]);
   });
 
+  it('protects shared cutouts held by a historical item version', async () => {
+    const attempt = {
+      id: 'old',
+      startedAt: new Date('2027-01-01T00:00:00.000Z'),
+    };
+    const { item: original } = okValue(
+      await create('original', 'Chairs', attempt)
+    );
+    const { item: copy } = okValue(await create('copy', 'Chairs', attempt));
+    const objectKey = key('item-cutouts/original-v1/old.png');
+    const lookup = {
+      versionId: original.currentVersion.id,
+      attemptId: attempt.id,
+      cutoutKey: objectKey,
+    };
+    expect(okValue(await repository.checkAbandonedCutout(lookup)).type).toBe(
+      'cutout_object_in_use'
+    );
+    await repository.finishCutoutAttempt({
+      versionId: original.currentVersion.id,
+      attemptId: attempt.id,
+      cutoutStatus: 'failed',
+      cutoutKey: null,
+    });
+    expect(okValue(await repository.checkAbandonedCutout(lookup)).type).toBe(
+      'cutout_object_abandoned'
+    );
+    await repository.finishCutoutAttempt({
+      versionId: copy.currentVersion.id,
+      attemptId: attempt.id,
+      cutoutStatus: 'ready',
+      cutoutKey: objectKey,
+    });
+    await repository.addVersion({
+      itemId: copy.id,
+      version: {
+        id: versionId('copy-v2'),
+        photo: copy.currentVersion.photo,
+        cutoutStatus: 'ready',
+        cutoutKey: key('item-cutouts/copy-v2/other.png'),
+        maskKey: null,
+      },
+    });
+    expect(okValue(await repository.checkAbandonedCutout(lookup)).type).toBe(
+      'cutout_object_in_use'
+    );
+  });
+
   it.each(['failed', 'expired', 'legacy'] as const)(
     'claims one %s retry and only lets the current attempt publish',
     async (scenario) => {

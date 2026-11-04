@@ -58,13 +58,17 @@ export async function removeBackgroundWorkflow(input: {
       error instanceof Error
         ? /^([A-Z][A-Z0-9_]{2,63}):/u.exec(error.message)?.[1]
         : undefined;
-    const failed = await markCutoutFailedStep(
-      input.itemVersionId,
-      input.attemptId ?? null,
-      failureCode ?? 'WORKFLOW_STEP_FAILED'
-    );
-    return failed.type === 'cutout_marked_failed'
-      ? { type: 'cutout_failed' as const, reason: 'workflow_step_failed' }
-      : failed;
+    const code = failureCode ?? 'WORKFLOW_STEP_FAILED';
+    try {
+      const failed = await markCutoutFailedStep(
+        input.itemVersionId,
+        input.attemptId ?? null,
+        code
+      );
+      if (failed.type === 'cutout_skipped') return failed;
+    } catch {
+      // Preserve the original diagnostic if the failure state could not be saved.
+    }
+    throw new FatalError(`${code}: Background removal workflow failed`);
   }
 }

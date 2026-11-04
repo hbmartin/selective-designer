@@ -1,7 +1,7 @@
 import { z } from 'zod';
 
-import { baseEnvSchema, parseEnv } from './env-schema';
-import { assertDatabaseUrlTls } from './url-security';
+import { baseEnvSchema, isProductionSeedRuntime, parseEnv } from './env-schema';
+import { assertDatabaseUrlTls, isLocalhostUrl } from './url-security';
 import { ConfigurationError } from '../../domain/errors/configuration-error';
 
 export const DATABASE_DRIVERS = [
@@ -108,4 +108,28 @@ export function getMigrationDatabaseConfig(): MigrationDatabaseConfig {
     driver,
   };
   return cachedMigrationDatabaseConfig;
+}
+
+const localSeedConnectionOptions = new Set([
+  'sslmode',
+  'application_name',
+  'connect_timeout',
+]);
+
+export function assertLocalSeedTarget() {
+  const { databaseUrl, driver } = getDatabaseConfig();
+  const url = new URL(databaseUrl);
+  if (
+    isProductionSeedRuntime() ||
+    driver !== 'node-pg' ||
+    !['postgres:', 'postgresql:'].includes(url.protocol) ||
+    !isLocalhostUrl(databaseUrl) ||
+    [...url.searchParams.keys()].some(
+      (key) => !localSeedConnectionOptions.has(key)
+    )
+  ) {
+    throw new ConfigurationError(
+      'Demo seeding requires a direct local PostgreSQL connection in a non-production runtime.'
+    );
+  }
 }

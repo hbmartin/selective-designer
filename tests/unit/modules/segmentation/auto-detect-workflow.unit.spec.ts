@@ -2,10 +2,15 @@ import { Result } from '@bloodyowl/boxed';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { AppError } from '@/modules/kernel';
-import { autoDetectWorkflow } from '@/modules/segmentation/testing';
+import {
+  autoDetectWorkflow,
+  recoverableAutoDetectWorkflow,
+} from '@/modules/segmentation/testing';
 
 const pipeline = vi.hoisted(() => ({
   carryOver: vi.fn(),
+  prepareDetection: vi.fn(),
+  finalizeDetection: vi.fn(),
   concepts: vi.fn(),
   detectConcept: vi.fn(),
   finishDetection: vi.fn(),
@@ -86,5 +91,35 @@ describe('automatic detection workflow cleanup', () => {
     pipeline.finishDetection.mockResolvedValue(failure('CLEANUP_FAILED'));
     expect(await autoDetectWorkflow(run)).toEqual({ detected: 0, failed: 0 });
     expect(pipeline.finishDetection).toHaveBeenCalledOnce();
+  });
+  it('retries only unfinished concepts and leaves finished carry-over alone', async () => {
+    pipeline.prepareDetection.mockResolvedValue(
+      Result.Ok({
+        type: 'detection_prepared',
+        progress: {
+          carryFromImageId: 'parent',
+          carryOverCompleted: true,
+          concepts: ['chair', 'window', 'lamp'],
+          completedConcepts: ['chair', 'window'],
+        },
+      })
+    );
+    pipeline.detectConcept.mockResolvedValue(
+      Result.Ok({ type: 'concept_failed', reason: 'provider_busy' })
+    );
+    pipeline.finalizeDetection.mockResolvedValue(
+      Result.Ok({ type: 'detection_failed' })
+    );
+    await recoverableAutoDetectWorkflow(run);
+    expect(pipeline.carryOver).not.toHaveBeenCalled();
+    expect(pipeline.detectConcept).toHaveBeenCalledExactlyOnceWith({
+      imageId: run.imageId,
+      runId: run.runId,
+      concept: 'lamp',
+    });
+    expect(pipeline.finalizeDetection).toHaveBeenCalledExactlyOnceWith({
+      imageId: run.imageId,
+      runId: run.runId,
+    });
   });
 });

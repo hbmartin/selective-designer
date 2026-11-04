@@ -96,7 +96,7 @@ export type ListRegionsOutcome =
 
 export type RegionListView = {
   regions: RegionView[];
-  detection: 'pending' | 'idle';
+  detection: 'pending' | 'idle' | 'retryable';
   detectionRemainingMs: number;
 };
 
@@ -110,7 +110,7 @@ export async function listRegions(
   if (ownedOutcome.type !== 'ok') return Result.Ok(ownedOutcome);
   const listed = await deps.regionRepository.listByImage(input.imageId);
   if (listed.isError()) return Result.Error(listed.getError());
-  const { regions, detectionExpiresAt } = listed.get();
+  const { regions, detectionExpiresAt, detectionState } = listed.get();
   const detectionRemainingMs = detectionExpiresAt
     ? Math.max(0, detectionExpiresAt.getTime() - deps.clock.now().getTime())
     : 0;
@@ -119,9 +119,33 @@ export async function listRegions(
   return Result.Ok({
     type: 'regions_listed',
     regions: views.get(),
-    detection: detectionRemainingMs > 0 ? 'pending' : 'idle',
+    detection:
+      detectionState?.failed || (detectionState && detectionRemainingMs === 0)
+        ? 'retryable'
+        : detectionRemainingMs > 0
+          ? 'pending'
+          : 'idle',
     detectionRemainingMs,
   });
+}
+
+type RetryDetectionOutcome =
+  | Forbidden
+  | ImageNotFound
+  | { type: 'auto_detection_scheduled' }
+  | { type: 'detection_not_retryable' };
+
+export async function retryDetection(
+  deps: SegmentationUseCaseDeps,
+  input: { currentUserId: UserId; imageId: ImageId }
+): Promise<SegmentationResultOf<RetryDetectionOutcome>> {
+  const owned = await loadOwnedImage(deps, { ...input, action: 'update' });
+  if (owned.isError()) return Result.Error(owned.getError());
+  const outcome = owned.get();
+  if (outcome.type !== 'ok') return Result.Ok(outcome);
+  const scheduled = await deps.detectionRetry.retry(input.imageId);
+  if (scheduled.isError()) return Result.Error(scheduled.getError());
+  return Result.Ok(scheduled.get());
 }
 
 export type SegmentByPromptOutcome =

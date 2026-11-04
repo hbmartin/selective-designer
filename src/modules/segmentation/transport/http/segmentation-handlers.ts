@@ -95,6 +95,21 @@ export const createSegmentationHandlers = ({
         }),
       }
     ),
+  retryDetection: (
+    ctx: ProtectedContext,
+    data: z.output<ReturnType<typeof zRegionsInput>>
+  ) =>
+    unwrapApplicationResult(
+      getUseCases(ctx).retryDetection({
+        currentUserId: ctx.scope.userId,
+        imageId: data.imageId,
+      }),
+      {
+        ...common,
+        auto_detection_scheduled: () => undefined,
+        detection_not_retryable: () => undefined,
+      }
+    ),
   segment: (
     ctx: ProtectedContext,
     data: z.output<ReturnType<typeof zSegmentInput>>

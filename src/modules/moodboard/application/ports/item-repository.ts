@@ -102,6 +102,15 @@ export interface ItemRepository {
       { type: 'cutout_result_saved' } | { type: 'cutout_attempt_skipped' }
     >
   >;
+  checkAbandonedCutout(input: {
+    versionId: ItemVersionId;
+    attemptId: string | null;
+    cutoutKey: ObjectKey;
+  }): Promise<
+    ApplicationResult<
+      { type: 'cutout_object_abandoned' } | { type: 'cutout_object_in_use' }
+    >
+  >;
   /** How often the owner used each category across their designs. */
   categoryUsage(ownerId: UserId): Promise<
     ApplicationResult<{

@@ -56,8 +56,7 @@ export const createSegmentationQueries = <
         input,
         queryFn: (data) => facade.regionsGet({ data }),
       }),
-      // Refetch on mount to pick up a run scheduled since the cached snapshot.
-      staleTime: 0,
+      staleTime: 5000,
       structuralSharing: (previous: unknown, next: unknown) =>
         shareRegionMasks(previous, next as RegionListView),
       refetchInterval: (query: {
@@ -70,6 +69,11 @@ export const createSegmentationQueries = <
           : 15_000;
       },
     }),
+    retryDetection: () =>
+      serverMutationOptions({
+        mutationKey: [...all(), 'retryDetection'],
+        mutationFn: facade.regionsRetryDetection,
+      }),
     segment: () =>
       serverMutationOptions({
         mutationKey: [...all(), 'segment'],

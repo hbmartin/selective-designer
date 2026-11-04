@@ -63,7 +63,7 @@ export const createImageAccess = (kernel: ImageKernel): ImageAccess => ({
 });
 
 /** Mood-board categories become detection concepts. */
-const createConceptSource = (
+export const createConceptSource = (
   kernel: Pick<PipelineKernel, 'db'>
 ): ConceptSource => ({
   async categoriesOf(designId) {

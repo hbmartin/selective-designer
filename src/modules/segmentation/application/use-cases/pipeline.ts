@@ -12,7 +12,7 @@ import { detectionConcepts, isUserMadeSource } from '../../domain/region';
 
 /** Concepts automatic detection looks for in this image's design. */
 export async function detectionConceptsFor(
-  deps: SegmentationPipelineDeps,
+  deps: Pick<SegmentationPipelineDeps, 'imageAccess' | 'conceptSource'>,
   imageId: ImageId
 ): Promise<
   SegmentationResultOf<
@@ -114,6 +114,7 @@ export async function detectConcept(
     concept: input.concept,
     regions: regions.get(),
     runId: input.runId,
+    now: deps.clock.now(),
   });
   if (saved.isError()) return Result.Error(saved.getError());
   if (saved.get().type === 'detection_superseded')
@@ -175,12 +176,16 @@ export async function carryOverRegions(
       carriedFromRegionId: region.id,
     });
   }
-  if (copies.length > 0) {
+  if (copies.length > 0 || input.runId !== undefined) {
     const saved = await deps.regionRepository.insertMany(
       copies,
       input.runId === undefined
         ? undefined
-        : { imageId: input.toImageId, runId: input.runId }
+        : {
+            imageId: input.toImageId,
+            runId: input.runId,
+            now: deps.clock.now(),
+          }
     );
     if (saved.isError()) return Result.Error(saved.getError());
     if (saved.get().type === 'detection_superseded')

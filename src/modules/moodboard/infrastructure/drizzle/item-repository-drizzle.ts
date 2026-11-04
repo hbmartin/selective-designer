@@ -422,6 +422,34 @@ export const createItemRepository = ({
       }
     },
 
+    async checkAbandonedCutout(input) {
+      try {
+        const [inUse] = await db
+          .select({ id: versionTable.id })
+          .from(versionTable)
+          .where(
+            or(
+              eq(versionTable.cutoutKey, input.cutoutKey),
+              eq(versionTable.photoKey, input.cutoutKey),
+              eq(versionTable.maskKey, input.cutoutKey),
+              and(
+                eq(versionTable.id, input.versionId),
+                eq(versionTable.cutoutStatus, 'pending'),
+                input.attemptId === null
+                  ? isNull(versionTable.cutoutAttemptId)
+                  : eq(versionTable.cutoutAttemptId, input.attemptId)
+              )
+            )
+          )
+          .limit(1);
+        return Result.Ok({
+          type: inUse ? 'cutout_object_in_use' : 'cutout_object_abandoned',
+        });
+      } catch (error) {
+        return Result.Error(dbError(error));
+      }
+    },
+
     async categoryUsage(ownerId) {
       try {
         const rows = await db

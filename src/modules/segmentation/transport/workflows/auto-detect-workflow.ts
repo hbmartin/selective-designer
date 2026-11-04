@@ -110,3 +110,57 @@ export async function autoDetectWorkflow(input: {
     }
   }
 }
+
+async function prepareDetectionStep(imageId: string, runId: string) {
+  'use step';
+  return unwrapStepResult(
+    await (
+      await pipeline()
+    ).prepareDetection({ imageId: imageIdOrFail(imageId), runId })
+  );
+}
+
+async function finalizeDetectionStep(imageId: string, runId: string) {
+  'use step';
+  return unwrapStepResult(
+    await (
+      await pipeline()
+    ).finalizeDetection({ imageId: imageIdOrFail(imageId), runId })
+  );
+}
+
+/** Separate entry point so previously queued jobs keep their original steps. */
+export async function recoverableAutoDetectWorkflow(input: {
+  imageId: string;
+  runId: string;
+}) {
+  'use workflow';
+  const { imageId, runId } = input;
+  try {
+    const prepared = await prepareDetectionStep(imageId, runId);
+    if (prepared.type === 'detection_superseded') return;
+    const progress = prepared.progress;
+    if (!progress.carryOverCompleted && progress.carryFromImageId) {
+      const carried = await carryOverStep(
+        progress.carryFromImageId,
+        imageId,
+        runId
+      );
+      if (carried.type !== 'regions_carried_over') return;
+    }
+    const remaining = (progress.concepts ?? []).filter(
+      (concept) => !progress.completedConcepts.includes(concept)
+    );
+    await Promise.allSettled(
+      remaining.map((concept) => detectConceptStep(imageId, concept, runId))
+    );
+  } finally {
+    // A terminal worker outcome is retryable if any durable checkpoint is missing.
+    // If even that write fails, the lease can still be reclaimed on expiry.
+    try {
+      await finalizeDetectionStep(imageId, runId);
+    } catch {
+      // The step logs persistence errors and preserves the primary outcome.
+    }
+  }
+}

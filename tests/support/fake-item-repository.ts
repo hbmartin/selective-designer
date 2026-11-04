@@ -135,6 +135,20 @@ export const createFakeItemRepository = (now: () => Date) => {
       version.cutoutKey = input.cutoutKey;
       return Result.Ok({ type: 'cutout_result_saved' });
     },
+    async checkAbandonedCutout(input) {
+      const inUse = [...versions.values()].some(
+        (version) =>
+          version.cutoutKey === input.cutoutKey ||
+          version.photo.key === input.cutoutKey ||
+          version.maskKey === input.cutoutKey ||
+          (version.id === input.versionId &&
+            version.cutoutStatus === 'pending' &&
+            (attempts.get(version.id) ?? null) === input.attemptId)
+      );
+      return Result.Ok({
+        type: inUse ? 'cutout_object_in_use' : 'cutout_object_abandoned',
+      });
+    },
     async categoryUsage() {
       const counts = new Map<string, number>();
       for (const item of items.values()) {

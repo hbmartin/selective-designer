@@ -27,7 +27,25 @@ export type NewRegion = {
   carriedFromRegionId: RegionId | null;
 };
 
-export type DetectionRun = { imageId: ImageId; runId: string | null };
+export type DetectionRun = {
+  imageId: ImageId;
+  runId: string | null;
+  now?: Date;
+};
+export type DetectionProgress = {
+  concepts: string[] | null;
+  completedConcepts: string[];
+  carryFromImageId: string | null;
+  carryOverCompleted: boolean;
+};
+export type DetectionState = {
+  runId: string | null;
+  failed: boolean;
+  progress: DetectionProgress | null;
+};
+type DetectionClaim =
+  | { type: 'detection_started' }
+  | { type: 'detection_already_started' };
 type WriteRegionsOutcome =
   | { type: 'regions_saved' }
   | { type: 'detection_superseded' };
@@ -38,17 +56,34 @@ export interface RegionRepository {
       type: 'regions_listed';
       regions: Region[];
       detectionExpiresAt: Date | null;
+      detectionState?: DetectionState;
     }>
   >;
   startDetection(input: {
     imageId: ImageId;
     runId: string;
+    expiresAtMs: number;
+    progress?: DetectionProgress;
+  }): Promise<ApplicationResult<DetectionClaim>>;
+  resumeDetection(input: {
+    previous: DetectionRun;
+    runId: string;
     now: Date;
-    expiresAt: Date;
-  }): Promise<
+    expiresAtMs: number;
+    legacyProgress?: DetectionProgress;
+  }): Promise<ApplicationResult<DetectionClaim>>;
+  prepareDetection(
+    input: DetectionRun & { concepts: string[] }
+  ): Promise<
     ApplicationResult<
-      { type: 'detection_started' } | { type: 'detection_already_started' }
+      | { type: 'detection_prepared'; progress: DetectionProgress }
+      | { type: 'detection_superseded' }
     >
+  >;
+  finalizeDetection(run: DetectionRun): Promise<
+    ApplicationResult<{
+      type: 'detection_finished' | 'detection_failed' | 'detection_superseded';
+    }>
   >;
   finishDetection(
     run: DetectionRun
@@ -70,6 +105,7 @@ export interface RegionRepository {
     concept: string;
     regions: NewRegion[];
     runId?: string | null;
+    now?: Date;
   }): Promise<ApplicationResult<WriteRegionsOutcome>>;
   update(input: {
     regionId: RegionId;
@@ -152,4 +188,21 @@ export interface AutoDetectionScheduler {
     imageId: ImageId;
     carryFromImageId: ImageId | null;
   }): Promise<ApplicationResult<{ type: 'auto_detection_scheduled' }>>;
+}
+
+export interface DetectionRetry {
+  retry(
+    imageId: ImageId
+  ): Promise<
+    ApplicationResult<
+      { type: 'auto_detection_scheduled' } | { type: 'detection_not_retryable' }
+    >
+  >;
+}
+
+export interface DetectionQueue {
+  enqueue(input: {
+    imageId: ImageId;
+    runId: string;
+  }): Promise<ApplicationResult<{ type: 'detection_enqueued' }>>;
 }
