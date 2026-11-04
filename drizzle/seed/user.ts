@@ -5,7 +5,6 @@ import { addSeedCredentials } from '@/modules/auth/backend';
 import {
   getDefaultDbClient,
   getSeedAccountEmails,
-  getSeedAccountPassword,
   isProdRuntimeEnvironment,
   user,
 } from '@/modules/kernel/backend';
@@ -20,7 +19,7 @@ const { adminEmail, userEmail } = getSeedAccountEmails();
 
 const seedOnboardedAt = new Date('2024-01-01T00:00:00.000Z');
 
-export async function createUsers() {
+export async function createUsers(password: string) {
   console.log(`⏳ Seeding users`);
   const db = getDefaultDbClient();
 
@@ -93,7 +92,7 @@ export async function createUsers() {
     await addSeedCredentials(
       db,
       seeded.map(({ id }) => id),
-      getSeedAccountPassword()
+      password
     );
     console.log(`👉 Admin connect with: ${emphasis(adminEmail)}`);
     console.log(`👉 User connect with: ${emphasis(userEmail)}`);

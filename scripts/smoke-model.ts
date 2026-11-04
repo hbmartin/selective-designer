@@ -7,7 +7,6 @@ import { toObjectKey } from '@/modules/kernel';
 import {
   BetterUploadObjectStorage,
   getAiProvidersConfig,
-  readLimitedBody,
 } from '@/modules/kernel/backend';
 import {
   buildPrompt,
@@ -26,7 +25,7 @@ import {
   kreaInput,
 } from '@/modules/rendering/backend';
 
-import { MAX_OUTPUT_BYTES, writeSmokeOutput } from './smoke-model-output';
+import { downloadSmokeOutput, writeSmokeOutput } from './smoke-model-output';
 
 const size = { width: 768, height: 512 };
 const target = { x: 0.6, y: 0.44, width: 0.24, height: 0.34 };
@@ -49,30 +48,6 @@ const png = (
     }
   }
   return encode({ width, height, channels, data, depth: 8 });
-};
-
-const downloadOutput = async (value: string, modelId: ModelId) => {
-  const url = new URL(value);
-  const domain = modelId === 'flux-3-image' ? 'bfl.ai' : 'fal.media';
-  if (
-    url.protocol !== 'https:' ||
-    url.port ||
-    url.username ||
-    url.password ||
-    (url.hostname !== domain && !url.hostname.endsWith(`.${domain}`))
-  )
-    throw new Error('The provider returned an unexpected download URL.');
-  const response = await fetch(url, {
-    redirect: 'error',
-    signal: AbortSignal.timeout(30_000),
-  });
-  if (!response.ok)
-    throw new Error(`Could not download the result (HTTP ${response.status}).`);
-  if (Number(response.headers.get('content-length')) > MAX_OUTPUT_BYTES) {
-    await response.body?.cancel();
-    throw new Error('The result exceeds the smoke download limit.');
-  }
-  return readLimitedBody(response, MAX_OUTPUT_BYTES);
 };
 
 const sourceName = 'source.png';
@@ -267,12 +242,12 @@ async function main() {
       await delay(4000);
       continue;
     }
-    const bytes =
-      result.outputBytes?.bytes ??
-      (result.outputUrl
-        ? await downloadOutput(result.outputUrl, selected)
-        : undefined);
-    const output = await writeSmokeOutput(directory, bytes, {
+    const image = result.outputBytes
+      ? ({ type: 'image', bytes: result.outputBytes.bytes } as const)
+      : result.outputUrl
+        ? await downloadSmokeOutput(result.outputUrl, selected)
+        : ({ type: 'no_image' } as const);
+    const output = await writeSmokeOutput(directory, image, {
       elapsedMs: Date.now() - startedAt,
       modelVersion: result.modelVersion,
       settings: submitted.settings,

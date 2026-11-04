@@ -74,16 +74,12 @@ export async function storeSegmentedMasks(
 > {
   const regions: NewRegion[] = [];
   const attemptedKeys: ObjectKey[] = [];
-  const discardIfDetection = () =>
-    input.source === 'detection'
-      ? discardUnpublishedMasks(deps, attemptedKeys)
-      : Promise.resolve();
 
   for (const mask of input.result.masks) {
     const identity = newRegionMask(deps.idGenerator);
     if (identity.isError()) {
       // oxlint-disable-next-line no-await-in-loop -- stop and clean this batch.
-      await discardIfDetection();
+      await discardUnpublishedMasks(deps, attemptedKeys);
       return Result.Error(identity.getError());
     }
 
@@ -109,7 +105,7 @@ export async function storeSegmentedMasks(
     if (stored.isError()) {
       // A failed upload may have written the destination before losing its response.
       // oxlint-disable-next-line no-await-in-loop -- stop and clean this batch.
-      await discardIfDetection();
+      await discardUnpublishedMasks(deps, attemptedKeys);
       return Result.Error(stored.getError());
     }
     const outcome = stored.get();
@@ -124,7 +120,7 @@ export async function storeSegmentedMasks(
       });
       if (input.source === 'detection') {
         // oxlint-disable-next-line no-await-in-loop -- stop and clean this batch.
-        await discardIfDetection();
+        await discardUnpublishedMasks(deps, attemptedKeys);
         return Result.Ok({ type: 'detection_mask_unavailable' });
       }
       continue;

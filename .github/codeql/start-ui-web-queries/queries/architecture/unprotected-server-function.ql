@@ -30,10 +30,14 @@ private predicate isCreateServerFnChain(Expr expr) {
   )
 }
 
-private predicate isProtectedRunnerName(string name) {
+private predicate isProtectedRunnerProperty(string name) {
   name = "withProtectedContext" or
   name = "withProtectedMutation" or
-  name = "withFreshProtectedMutation" or
+  name = "withFreshProtectedMutation"
+}
+
+private predicate isProtectedRunnerName(string name) {
+  isProtectedRunnerProperty(name) or
   name = "runProtected" or
   name = "runMutation"
 }
@@ -49,11 +53,10 @@ private predicate invokesInstrumentedProtectedRunner(CallExpr call) {
     factory.getArgument(0).(ObjectExpr).getAProperty() = selection and
     selection.getName() = "selectRunner" and
     selection.getInit() = selectRunner and
-    selectRunner.getAReturnedExpr() = protectedRunner and
+    selectRunner.getBody() = protectedRunner and
     protectedRunner.getBase().(VarRef).getVariable() =
       selectRunner.getParameter(0).getABindingVarRef().getVariable() and
-    protectedRunner.getPropertyName() = ["withProtectedContext", "withProtectedMutation",
-      "withFreshProtectedMutation"]
+    isProtectedRunnerProperty(protectedRunner.getPropertyName())
   )
 }
 

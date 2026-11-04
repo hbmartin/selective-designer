@@ -14,12 +14,9 @@ vi.mock('@/modules/kernel/backend', async (importOriginal) => ({
   getDefaultDbClient: mocks.connect,
 }));
 
-vi.mock('../../../drizzle/seed/user', () => ({
-  createUsers: mocks.createUsers,
-}));
-
 describe('demo seed command', () => {
   let exitCode: typeof process.exitCode;
+  const loadWorker = vi.fn(() => ({ createUsers: mocks.createUsers }));
   beforeEach(async () => {
     exitCode = process.exitCode;
     vi.resetModules();
@@ -28,6 +25,8 @@ describe('demo seed command', () => {
     vi.stubEnv('VERCEL_ENV', undefined);
     vi.stubEnv('DATABASE_DRIVER', 'node-pg');
     vi.stubEnv('DATABASE_URL', makeTestDatabaseUrl());
+    vi.stubEnv('SEED_ACCOUNT_PASSWORD', undefined);
+    vi.doMock('../../../drizzle/seed/user', loadWorker);
     const { assertLocalSeedTarget } =
       await import('@/modules/kernel/infrastructure/config/database');
     mocks.assertTarget.mockImplementation(assertLocalSeedTarget);
@@ -39,6 +38,7 @@ describe('demo seed command', () => {
     process.exitCode = exitCode;
     vi.unstubAllEnvs();
     vi.restoreAllMocks();
+    vi.doUnmock('../../../drizzle/seed/user');
   });
 
   it.each([
@@ -61,9 +61,36 @@ describe('demo seed command', () => {
       await import('../../../drizzle/seed/index');
       expect(process.exitCode).toBe(1);
       expect(mocks.connect).not.toHaveBeenCalled();
+      expect(loadWorker).not.toHaveBeenCalled();
       expect(mocks.createUsers).not.toHaveBeenCalled();
     }
   );
+
+  it.each([11, 129])(
+    'rejects a %i character override before connecting or loading the worker',
+    async (length) => {
+      vi.stubEnv('SEED_ACCOUNT_PASSWORD', 'x'.repeat(length));
+      await import('../../../drizzle/seed/index');
+      expect(process.exitCode).toBe(1);
+      expect(mocks.connect).not.toHaveBeenCalled();
+      expect(loadWorker).not.toHaveBeenCalled();
+      expect(console.error).toHaveBeenCalledExactlyOnceWith(
+        'SEED_ACCOUNT_PASSWORD must be 12–128 characters long.'
+      );
+    }
+  );
+
+  it('reports worker initialization failures and closes the client', async () => {
+    loadWorker.mockImplementationOnce(() => {
+      throw new Error('private initialization details');
+    });
+    await import('../../../drizzle/seed/index');
+    expect(mocks.close).toHaveBeenCalledOnce();
+    expect(process.exitCode).toBe(1);
+    expect(console.error).toHaveBeenCalledExactlyOnceWith(
+      'Database seed failed.'
+    );
+  });
 
   it.each(['localhost', '127.0.0.1', '[::1]'])(
     'accepts direct %s PostgreSQL',

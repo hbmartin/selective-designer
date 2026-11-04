@@ -55,3 +55,29 @@ export const unsafeInstrumentedMutation = createServerFn({
 }).handler(async ({ data }) =>
   publicMutation.withOperation('test')(data, () => data)
 );
+
+declare const chooseProtected: boolean;
+
+const mixedBlock = createServerFunctionInvoker({
+  getDeps,
+  selectRunner: (deps) => {
+    if (chooseProtected) return deps.withProtectedMutation;
+    return deps.withPublicContext;
+  },
+});
+
+const mixedConditional = createServerFunctionInvoker({
+  getDeps,
+  selectRunner: (deps) =>
+    chooseProtected ? deps.withProtectedMutation : deps.withPublicContext,
+});
+
+export const unsafeMixedBlock = createServerFn({ method: 'POST' }).handler(
+  async ({ data }) => mixedBlock.withOperation('test')(data, () => data)
+);
+
+export const unsafeMixedConditional = createServerFn({
+  method: 'POST',
+}).handler(async ({ data }) =>
+  mixedConditional.withOperation('test')(data, () => data)
+);
