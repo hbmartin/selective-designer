@@ -8,6 +8,7 @@ import {
   baseEnvSchema,
   getSeedAccountEmails,
   isProdRuntimeEnvironment,
+  isProductionSeedRuntime,
   parseEnv,
 } from '@/modules/kernel/infrastructure/config/env-schema';
 
@@ -130,5 +131,16 @@ describe('seed account email config', () => {
         SEED_ADMIN_EMAIL: 'not-an-email',
       })
     ).toThrow(ConfigurationError);
+  });
+});
+
+describe('demo seed production detection', () => {
+  it.each([
+    [{ PROD: true }, true],
+    [{ VERCEL_ENV: 'production' }, true],
+    [{ NODE_ENV: 'development', VERCEL_ENV: 'production' }, true],
+    [{ NODE_ENV: 'development' }, false],
+  ] as const)('classifies %j as production: %s', (env, expected) => {
+    expect(isProductionSeedRuntime(env)).toBe(expected);
   });
 });

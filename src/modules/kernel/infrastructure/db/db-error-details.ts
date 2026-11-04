@@ -264,6 +264,14 @@ function extractFromErrorOrCause<T, R>(
 
 const errorWithCodeSchema = z.looseObject({ code: z.string() });
 
+export function getDatabaseErrorCode(error: unknown): string | undefined {
+  return extractFromErrorOrCause(
+    error,
+    errorWithCodeSchema,
+    (data) => data.code
+  );
+}
+
 export function isUniqueConstraintViolation(error: unknown): boolean {
   return checkErrorOrCause(
     error,

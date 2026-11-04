@@ -58,9 +58,12 @@ test.describe('Manager users visual regression', () => {
       await page.getByRole('link', { name: /provision user/i }).click();
       await expect(page).toHaveURL(/\/manager\/users\/new$/);
       await expect(
-        page.getByText('pnpm auth:password create EMAIL NAME [user|admin]', {
-          exact: true,
-        })
+        page.getByText(
+          'pnpm auth:password create person@example.com "Person Name" user',
+          {
+            exact: true,
+          }
+        )
       ).toBeVisible();
       await screenshot(page, 'manager-user-create.png');
     });

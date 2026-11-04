@@ -1008,11 +1008,36 @@ rules:
       exclude:
         - src/modules/kernel/infrastructure/config/server.ts
 
-  - id: detection-lease-release-must-be-fenced
-    message: Match the detection run ID as well as the image ID when releasing a lease.
+  - id: detection-lease-write-must-be-fenced
+    message: Use ownedDetection in the where clause for detection lease updates and deletes.
     languages: [typescript]
     severity: ERROR
-    pattern: '$DB.delete(activeDetection).where(eq(activeDetection.imageId, ...))'
+    patterns:
+      - pattern-either:
+          - pattern: $DB.delete(activeDetection).where($WHERE)
+          - pattern: $DB.update(activeDetection).set(...).where($WHERE)
+      - pattern-not: $DB.delete(activeDetection).where(ownedDetection(...))
+      - pattern-not: $DB.delete(activeDetection).where(and(..., ownedDetection(...), ...))
+      - pattern-not: $DB.update(activeDetection).set(...).where(ownedDetection(...))
+      - pattern-not: $DB.update(activeDetection).set(...).where(and(..., ownedDetection(...), ...))
+    paths:
+      include:
+        - src/modules/segmentation/infrastructure/drizzle/region-repository-drizzle.ts
+
+  - id: detection-ownership-must-include-run-id
+    message: ownedDetection must match both image ID and run ID, including legacy null run IDs.
+    languages: [typescript]
+    severity: ERROR
+    patterns:
+      - pattern: const ownedDetection = ($RUN) => $FILTER
+      - pattern-not: |
+          const ownedDetection = ($RUN) =>
+            and(
+              eq(activeDetection.imageId, $RUN.imageId),
+              $RUN.runId === null
+                ? isNull(activeDetection.runId)
+                : eq(activeDetection.runId, $RUN.runId)
+            )
     paths:
       include:
         - src/modules/segmentation/infrastructure/drizzle/region-repository-drizzle.ts

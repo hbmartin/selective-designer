@@ -147,20 +147,6 @@ export async function createDesign(
   if (created.isError()) return Result.Error(created.getError());
   const design = created.get().design;
 
-  // Eager segmentation; a scheduling failure must not fail the creation.
-  const announced = await deps.imageArrivedListener.imageArrived({
-    designId: design.id,
-    imageId: design.baseImage.id,
-    kind: 'base',
-    carryFromImageId: null,
-  });
-  if (announced.isError()) {
-    deps.logger.warn({
-      event: 'design.image_arrival.failed',
-      details: { designId: design.id },
-    });
-  }
-
   // A revised image: copy the mood board and placements; never fail creation.
   if (input.copiedFromDesignId) {
     const copied = await deps.designCopiedListener.designCopied({
@@ -177,6 +163,20 @@ export async function createDesign(
         },
       });
     }
+  }
+
+  // Snapshot detection concepts after the copy has populated the mood board.
+  const announced = await deps.imageArrivedListener.imageArrived({
+    designId: design.id,
+    imageId: design.baseImage.id,
+    kind: 'base',
+    carryFromImageId: null,
+  });
+  if (announced.isError()) {
+    deps.logger.warn({
+      event: 'design.image_arrival.failed',
+      details: { designId: design.id },
+    });
   }
 
   const view = await toDesignView(deps, design);

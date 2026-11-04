@@ -256,12 +256,16 @@ describe('RegionRepositoryDrizzle', () => {
         })
       ).type
     ).toBe('detection_superseded');
-    await repository.replaceDetections({
-      ...second,
-      now,
-      concept: 'chair',
-      regions: [region('must-not-replace', 'chair')],
-    });
+    expect(
+      okValue(
+        await repository.replaceDetections({
+          ...second,
+          now,
+          concept: 'chair',
+          regions: [region('must-not-replace', 'chair')],
+        })
+      ).type
+    ).toBe('detection_concept_already_completed');
     await repository.replaceDetections({
       ...second,
       now,

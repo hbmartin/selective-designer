@@ -15,43 +15,53 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
  * pattern; `vi.resetModules()` clears the module-level config caches between
  * cases so each import re-parses the stubbed environment.
  */
-describe('validateServerConfig fails closed on insecure production config', () => {
-  beforeEach(() => {
-    vi.resetModules();
-    vi.unstubAllEnvs();
-    vi.stubEnv('SKIP_ENV_VALIDATION', undefined);
-  });
+describe.each(['validateServerConfig', 'validateServerBuildConfig'] as const)(
+  '%s fails closed on insecure production config',
+  (validator) => {
+    beforeEach(() => {
+      vi.resetModules();
+      vi.unstubAllEnvs();
+      vi.stubEnv('SKIP_ENV_VALIDATION', undefined);
+    });
 
-  it('throws ConfigurationError in production when AUTH_SECRET is missing', async () => {
-    vi.stubEnv('NODE_ENV', 'production');
-    vi.stubEnv('AUTH_SECRET', undefined);
+    it('throws ConfigurationError in production when AUTH_SECRET is missing', async () => {
+      vi.stubEnv('NODE_ENV', 'production');
+      vi.stubEnv('AUTH_SECRET', undefined);
+      vi.stubEnv('PROVIDER_MODE', 'live');
+      vi.stubEnv('FAL_KEY', undefined);
+      vi.stubEnv('BFL_API_KEY', undefined);
 
-    const { ConfigurationError } = await import('@/modules/kernel');
-    const { validateServerConfig } = await import('@/modules/kernel/backend');
+      const { ConfigurationError } = await import('@/modules/kernel');
+      const validate = (await import('@/modules/kernel/backend'))[validator];
 
-    expect(() => validateServerConfig()).toThrow(ConfigurationError);
-  });
+      expect(() => validate()).toThrow(ConfigurationError);
+      expect(() => validate()).toThrow(/AUTH_SECRET/u);
+    });
 
-  it('throws ConfigurationError in production for a cleartext database URL', async () => {
-    vi.stubEnv('NODE_ENV', 'production');
-    vi.stubEnv('AUTH_SECRET', makeStrongTestSecret('auth'));
-    vi.stubEnv('DATABASE_URL', makeTestDatabaseUrl({ host: 'db.example.com' }));
+    it('throws ConfigurationError in production for a cleartext database URL', async () => {
+      vi.stubEnv('NODE_ENV', 'production');
+      vi.stubEnv('AUTH_SECRET', makeStrongTestSecret('auth'));
+      vi.stubEnv(
+        'DATABASE_URL',
+        makeTestDatabaseUrl({ host: 'db.example.com' })
+      );
 
-    const { ConfigurationError } = await import('@/modules/kernel');
-    const { validateServerConfig } = await import('@/modules/kernel/backend');
+      const { ConfigurationError } = await import('@/modules/kernel');
+      const validate = (await import('@/modules/kernel/backend'))[validator];
 
-    expect(() => validateServerConfig()).toThrow(ConfigurationError);
-    expect(() => validateServerConfig()).toThrow('DATABASE_URL');
-  });
+      expect(() => validate()).toThrow(ConfigurationError);
+      expect(() => validate()).toThrow('DATABASE_URL');
+    });
 
-  it('is a no-op when env validation is skipped outside production', async () => {
-    vi.stubEnv('NODE_ENV', 'development');
-    vi.stubEnv('SKIP_ENV_VALIDATION', 'true');
-    vi.stubEnv('AUTH_SECRET', undefined);
-    vi.stubEnv('DATABASE_URL', undefined);
+    it('is a no-op when env validation is skipped outside production', async () => {
+      vi.stubEnv('NODE_ENV', 'development');
+      vi.stubEnv('SKIP_ENV_VALIDATION', 'true');
+      vi.stubEnv('AUTH_SECRET', undefined);
+      vi.stubEnv('DATABASE_URL', undefined);
 
-    const { validateServerConfig } = await import('@/modules/kernel/backend');
+      const validate = (await import('@/modules/kernel/backend'))[validator];
 
-    expect(() => validateServerConfig()).not.toThrow();
-  });
-});
+      expect(() => validate()).not.toThrow();
+    });
+  }
+);

@@ -106,7 +106,11 @@ export interface RegionRepository {
     regions: NewRegion[];
     runId?: string | null;
     now?: Date;
-  }): Promise<ApplicationResult<WriteRegionsOutcome>>;
+  }): Promise<
+    ApplicationResult<
+      WriteRegionsOutcome | { type: 'detection_concept_already_completed' }
+    >
+  >;
   update(input: {
     regionId: RegionId;
     label?: string;

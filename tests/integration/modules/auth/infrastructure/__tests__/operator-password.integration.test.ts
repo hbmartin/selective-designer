@@ -1,7 +1,15 @@
 import { createPgliteTestDatabase } from '@tests/server/pglite';
 import { okValue } from '@tests/support/result';
 import { randomBytes } from 'node:crypto';
-import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
+import {
+  afterAll,
+  beforeAll,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  vi,
+} from 'vitest';
 
 import { createAuth } from '@/modules/auth/infrastructure/better-auth/auth';
 import { writeOperatorPassword } from '@/modules/auth/infrastructure/better-auth/password-credentials';
@@ -18,7 +26,12 @@ describe('operator passwords', () => {
     database = await createPgliteTestDatabase();
   });
 
+  beforeEach(async () => {
+    await database.reset();
+  });
+
   afterAll(async () => {
+    await database?.reset();
     vi.unstubAllEnvs();
     await database?.close();
   });

@@ -230,11 +230,17 @@ export async function segmentByPrompt(
     label,
   });
   if (regions.isError()) return Result.Error(regions.getError());
-  const saved = await deps.regionRepository.insertMany(regions.get());
+  const stored = regions.get();
+  if (stored.type === 'detection_mask_unavailable')
+    return Result.Ok({
+      type: 'segmentation_failed',
+      reason: 'mask_unavailable',
+    });
+  const saved = await deps.regionRepository.insertMany(stored.regions);
   if (saved.isError()) return Result.Error(saved.getError());
   const views = await toViews(
     deps,
-    regions.get().map((region) => ({ ...region, createdAt: deps.clock.now() }))
+    stored.regions.map((region) => ({ ...region, createdAt: deps.clock.now() }))
   );
   if (views.isError()) return Result.Error(views.getError());
   return Result.Ok({ type: 'regions_created', regions: views.get() });

@@ -23,7 +23,8 @@ export const PageUserNew = () => {
           <CardContent className="space-y-3">
             <p>{t('user:manager.new.instructions')}</p>
             <code className="block break-all">
-              pnpm auth:password create EMAIL NAME [user|admin]
+              pnpm auth:password create person@example.com &quot;Person
+              Name&quot; user
             </code>
             <p>{t('user:manager.new.handoffInstructions')}</p>
           </CardContent>

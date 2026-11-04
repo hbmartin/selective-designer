@@ -24,8 +24,9 @@ import {
   gptImageInput,
   ideogramInput,
   kreaInput,
-  readImageDimensions,
 } from '@/modules/rendering/backend';
+
+import { MAX_OUTPUT_BYTES, writeSmokeOutput } from './smoke-model-output';
 
 const size = { width: 768, height: 512 };
 const target = { x: 0.6, y: 0.44, width: 0.24, height: 0.34 };
@@ -50,8 +51,6 @@ const png = (
   return encode({ width, height, channels, data, depth: 8 });
 };
 
-const MAX_OUTPUT_BYTES = 40 * 1024 * 1024;
-
 const downloadOutput = async (value: string, modelId: ModelId) => {
   const url = new URL(value);
   const domain = modelId === 'flux-3-image' ? 'bfl.ai' : 'fal.media';
@@ -74,19 +73,6 @@ const downloadOutput = async (value: string, modelId: ModelId) => {
     throw new Error('The result exceeds the smoke download limit.');
   }
   return readLimitedBody(response, MAX_OUTPUT_BYTES);
-};
-
-const resultFilename = (format: string) => {
-  switch (format) {
-    case 'png':
-      return 'output.png';
-    case 'jpg':
-      return 'output.jpg';
-    case 'webp':
-      return 'output.webp';
-    default:
-      throw new Error('The result is not a supported image format.');
-  }
 };
 
 const sourceName = 'source.png';
@@ -286,32 +272,19 @@ async function main() {
       (result.outputUrl
         ? await downloadOutput(result.outputUrl, selected)
         : undefined);
-    if (!bytes?.length || bytes.byteLength > MAX_OUTPUT_BYTES)
-      throw new Error(
-        'The provider returned no image or exceeded the smoke download limit.'
-      );
-    const dimensions = readImageDimensions(bytes);
-    if (dimensions.type !== 'dimensions')
-      throw new Error('The result is not a supported image.');
-    await writeFile(join(directory, resultFilename(dimensions.format)), bytes, {
-      flag: 'wx',
+    const output = await writeSmokeOutput(directory, bytes, {
+      elapsedMs: Date.now() - startedAt,
+      modelVersion: result.modelVersion,
+      settings: submitted.settings,
+      costUsdMicros: result.costUsdMicros ?? spec.estimatedCostUsdMicros,
+      costSource:
+        result.costUsdMicros === null ? 'price_table' : result.costSource,
     });
-    await writeFile(
-      join(directory, 'result.json'),
-      JSON.stringify(
-        {
-          elapsedMs: Date.now() - startedAt,
-          dimensions,
-          modelVersion: result.modelVersion,
-          settings: submitted.settings,
-          costUsdMicros: result.costUsdMicros ?? spec.estimatedCostUsdMicros,
-          costSource:
-            result.costUsdMicros === null ? 'price_table' : result.costSource,
-        },
-        null,
-        2
-      )
-    );
+    if (output.type === 'output_rejected') {
+      throw new Error(
+        `Smoke output rejected (${output.reason}). See result.json.`
+      );
+    }
     console.log(
       'Compare the output to the source. The sphere should replace the blue rectangle, with framing and the other shapes preserved.'
     );

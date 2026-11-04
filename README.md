@@ -183,6 +183,10 @@ pnpm build
 pnpm start
 ```
 
+When rolling forward from an older deployment, unset any legacy
+`PROVIDER_CALLBACK_MODE` value other than `poll` before deploying. Server
+configuration accepts polling only.
+
 ## Manual model smoke
 
 Run `pnpm smoke:model <model-id>` to write a synthetic source, reference, provider mask when applicable, and request preview under `test-results/smoke-model-*`. Model IDs are `krea-3`, `flux-3-image`, `ideogram-4-5`, and `gpt-image-2`.

@@ -8,7 +8,7 @@ import {
   type RegionRepository,
 } from '@/modules/segmentation';
 import { createRegionRepository } from '@/modules/segmentation/backend';
-import { recoverableAutoDetectWorkflow } from '@/modules/segmentation/transport/workflows/auto-detect-workflow';
+import { recoverableAutoDetectWorkflow } from '@/modules/segmentation/workflows/backend';
 
 import type { PipelineKernel } from './pipeline-kernel';
 import {

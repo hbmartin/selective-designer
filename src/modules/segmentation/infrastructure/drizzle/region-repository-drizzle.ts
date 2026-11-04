@@ -341,7 +341,9 @@ export const createRegionRepository = ({
           if (run && !owned)
             return Result.Ok({ type: 'detection_superseded' } as const);
           if (owned?.progress?.completedConcepts.includes(input.concept))
-            return Result.Ok({ type: 'regions_saved' } as const);
+            return Result.Ok({
+              type: 'detection_concept_already_completed',
+            } as const);
           await tx
             .delete(regionTable)
             .where(

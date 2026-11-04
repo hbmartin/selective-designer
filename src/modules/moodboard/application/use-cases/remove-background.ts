@@ -236,7 +236,13 @@ export async function markCutoutFailed(
     cutoutStatus: 'failed',
     cutoutKey: null,
   });
-  if (saved.isError()) return Result.Error(saved.getError());
+  if (saved.isError()) {
+    deps.logger.warn({
+      event: 'moodboard.cutout.failure_state_write_failed',
+      details: { ...attempt, failureCode, code: saved.getError().code },
+    });
+    return Result.Error(saved.getError());
+  }
   await cleanAbandonedCutout(deps, attempt);
   deps.logger.warn({
     event: 'moodboard.cutout.workflow_failed',
