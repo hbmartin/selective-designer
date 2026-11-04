@@ -52,6 +52,15 @@ const fakeRegions = () => {
     async startDetection() {
       return Result.Ok({ type: 'detection_started' });
     },
+    async resumeDetection() {
+      return Result.Ok({ type: 'detection_started' });
+    },
+    async prepareDetection() {
+      return Result.Ok({ type: 'detection_superseded' });
+    },
+    async finalizeDetection() {
+      return Result.Ok({ type: 'detection_finished' });
+    },
     async finishDetection() {
       return Result.Ok({ type: 'detection_finished' });
     },
@@ -144,6 +153,9 @@ const setup = (segmenter: Segmenter = createFakeSegmenter()) => {
   const useCases = createSegmentationUseCases({
     ...common,
     uploadIntentStore: intents.store,
+    detectionRetry: {
+      retry: async () => Result.Ok({ type: 'auto_detection_scheduled' }),
+    },
     permissionChecker: {
       hasPermission: async () => Result.Ok({ type: 'permission_granted' }),
     },

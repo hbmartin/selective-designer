@@ -16,7 +16,11 @@ import type { MoodboardResult, MoodboardUseCaseDeps } from './types';
 export async function copyItems(
   deps: Pick<
     MoodboardUseCaseDeps,
-    'itemRepository' | 'idGenerator' | 'backgroundRemovalScheduler' | 'logger'
+    | 'itemRepository'
+    | 'idGenerator'
+    | 'backgroundRemovalScheduler'
+    | 'logger'
+    | 'clock'
   >,
   input: { fromDesignId: DesignId; toDesignId: DesignId }
 ): Promise<
@@ -56,7 +60,9 @@ export async function copyItems(
         cutoutKey: attemptId ? null : version.cutoutKey,
         maskKey: attemptId ? null : version.maskKey,
         cutoutStatus: version.cutoutStatus,
-        ...(attemptId ? { cutoutAttemptId: attemptId } : {}),
+        ...(attemptId
+          ? { cutoutAttempt: { id: attemptId, startedAt: deps.clock.now() } }
+          : {}),
       },
     });
     if (created.isError()) return Result.Error(created.getError());

@@ -7,6 +7,7 @@
   },
   "list": {
     "title": "Regions",
+    "retryDetection": "Retry detection",
     "confirm": "Keep suggested region",
     "remove": "Remove region"
   },
@@ -19,6 +20,7 @@
     "lasso": "Lasso"
   },
   "errors": {
+    "retryDetectionFailed": "Could not retry detection. Please try again.",
     "segmentFailed": "Selection failed. Try another point or description."
   }
 }

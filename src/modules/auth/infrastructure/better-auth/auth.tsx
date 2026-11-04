@@ -11,6 +11,7 @@ import {
 } from '@/modules/kernel/infrastructure/db/client';
 import { envClient } from '@/platform/env/client';
 
+import { BETTER_AUTH_CREATE_USER_PATH } from './auth-http-exposure';
 import { createAuthCookieSecurityOptions } from './cookie-options';
 import {
   type CreateAuthOptions,
@@ -32,6 +33,7 @@ export function createAuth(input?: Database | CreateAuthOptions) {
   const authConfig = getBetterAuthConfig();
 
   return betterAuth({
+    disabledPaths: [BETTER_AUTH_CREATE_USER_PATH],
     secret: authConfig.secret,
     baseURL: {
       allowedHosts: [
@@ -80,7 +82,7 @@ export function createAuth(input?: Database | CreateAuthOptions) {
     emailAndPassword: {
       enabled: true,
       disableSignUp: true,
-      requireEmailVerification: true,
+      requireEmailVerification: false,
       minPasswordLength: PASSWORD_MIN_LENGTH,
       maxPasswordLength: PASSWORD_MAX_LENGTH,
     },

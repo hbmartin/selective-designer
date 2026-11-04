@@ -14,6 +14,8 @@ import {
   idColumn,
 } from '@/modules/kernel/infrastructure/db/schema/common';
 
+import type { DetectionProgress } from '../../application/ports/ports';
+
 export const region = pgTable(
   'region',
   {
@@ -40,10 +42,14 @@ export const region = pgTable(
 
 export type RegionRow = typeof region.$inferSelect;
 
-/** A row exists while automatic detection for the image is in progress. */
+/** In-progress or retryable automatic detection for one image. */
 export const activeDetection = pgTable('active_detection', {
   imageId: text('imageId')
     .primaryKey()
     .references(() => image.id, { onDelete: 'cascade' }),
+  // Null identifies leases acquired before run IDs were introduced.
+  runId: text('runId'),
+  failed: boolean('failed').default(false).notNull(),
+  progress: jsonb('progress').$type<DetectionProgress>(),
   expiresAt: timestamp('expiresAt', { precision: 3, mode: 'date' }).notNull(),
 });

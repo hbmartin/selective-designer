@@ -1,7 +1,6 @@
 import { type Result as BoxedResult, Result } from '@bloodyowl/boxed';
-import { and, asc, eq } from 'drizzle-orm';
+import { and, asc, eq, gt, isNull, lte, or } from 'drizzle-orm';
 
-import { image } from '@/modules/design/infrastructure/drizzle/schema';
 import { AppError } from '@/modules/kernel/domain/errors/app-error';
 import {
   toDesignId,
@@ -10,8 +9,10 @@ import {
   toRegionId,
 } from '@/modules/kernel/domain/ids';
 import { observeRepository } from '@/modules/kernel/infrastructure/db/observability';
+import { image } from '@/modules/kernel/infrastructure/db/schema';
 import type { DbLike } from '@/modules/kernel/infrastructure/db/types';
 import type {
+  DetectionRun,
   NewRegion,
   RegionRepository,
 } from '@/modules/segmentation/application/ports/ports';
@@ -93,6 +94,30 @@ const toValues = (input: NewRegion) => ({
   carriedFromRegionId: input.carriedFromRegionId,
 });
 
+const ownedDetection = (run: DetectionRun) =>
+  and(
+    eq(activeDetection.imageId, run.imageId),
+    run.runId === null
+      ? isNull(activeDetection.runId)
+      : eq(activeDetection.runId, run.runId)
+  );
+
+/** Lock the lease row in the same transaction as publishing region changes. */
+const lockDetection = async (db: DbLike, run: DetectionRun) => {
+  const [row] = await db
+    .select({ progress: activeDetection.progress })
+    .from(activeDetection)
+    .where(
+      and(
+        ownedDetection(run),
+        eq(activeDetection.failed, false),
+        run.now ? gt(activeDetection.expiresAt, run.now) : undefined
+      )
+    )
+    .for('update');
+  return row;
+};
+
 export const createRegionRepository = ({
   db,
 }: {
@@ -115,6 +140,11 @@ export const createRegionRepository = ({
           .select({
             region: regionTable,
             detectionExpiresAt: activeDetection.expiresAt,
+            detectionState: {
+              failed: activeDetection.failed,
+              runId: activeDetection.runId,
+              progress: activeDetection.progress,
+            },
           })
           .from(image)
           .leftJoin(regionTable, eq(regionTable.imageId, image.id))
@@ -129,6 +159,9 @@ export const createRegionRepository = ({
           type: 'regions_listed',
           regions: parsed.get(),
           detectionExpiresAt: rows[0]?.detectionExpiresAt ?? null,
+          ...(rows[0]?.detectionState
+            ? { detectionState: rows[0].detectionState }
+            : {}),
         });
       } catch (error) {
         return Result.Error(dbError(error));
@@ -138,8 +171,13 @@ export const createRegionRepository = ({
       try {
         const [started] = await db
           .insert(activeDetection)
-          .values(input)
-          .onConflictDoNothing()
+          .values({
+            imageId: input.imageId,
+            runId: input.runId,
+            expiresAt: new Date(input.expiresAtMs),
+            progress: input.progress,
+          })
+          .onConflictDoNothing({ target: activeDetection.imageId })
           .returning({ imageId: activeDetection.imageId });
         return Result.Ok(
           started
@@ -150,11 +188,94 @@ export const createRegionRepository = ({
         return Result.Error(dbError(error));
       }
     },
-    async finishDetection(imageId) {
+    async resumeDetection(input) {
+      try {
+        const [claimed] = await db
+          .update(activeDetection)
+          .set({
+            runId: input.runId,
+            failed: false,
+            expiresAt: new Date(input.expiresAtMs),
+            ...(input.legacyProgress ? { progress: input.legacyProgress } : {}),
+          })
+          .where(
+            and(
+              ownedDetection(input.previous),
+              or(
+                eq(activeDetection.failed, true),
+                lte(activeDetection.expiresAt, input.now)
+              )
+            )
+          )
+          .returning({ imageId: activeDetection.imageId });
+        return Result.Ok({
+          type: claimed ? 'detection_started' : 'detection_already_started',
+        });
+      } catch (error) {
+        return Result.Error(dbError(error));
+      }
+    },
+
+    async prepareDetection({ concepts, ...run }) {
+      try {
+        return await db.transaction(async (tx) => {
+          const owned = await lockDetection(tx, run);
+          if (!owned?.progress)
+            return Result.Ok({ type: 'detection_superseded' } as const);
+          const progress = owned.progress;
+          if (progress.concepts !== null)
+            return Result.Ok({ type: 'detection_prepared', progress } as const);
+          const prepared = { ...progress, concepts };
+          await tx
+            .update(activeDetection)
+            .set({ progress: prepared })
+            .where(ownedDetection(run));
+          return Result.Ok({
+            type: 'detection_prepared',
+            progress: prepared,
+          } as const);
+        });
+      } catch (error) {
+        return Result.Error(dbError(error));
+      }
+    },
+
+    async finalizeDetection(run) {
+      try {
+        return await db.transaction(async (tx) => {
+          const owned = await lockDetection(tx, run);
+          if (!owned?.progress)
+            return Result.Ok({ type: 'detection_superseded' } as const);
+          const { carryOverCompleted, concepts, completedConcepts } =
+            owned.progress;
+          if (
+            carryOverCompleted &&
+            concepts?.every((concept) => completedConcepts.includes(concept))
+          ) {
+            await tx.delete(activeDetection).where(ownedDetection(run));
+            return Result.Ok({ type: 'detection_finished' } as const);
+          }
+          await tx
+            .update(activeDetection)
+            .set({ failed: true })
+            .where(ownedDetection(run));
+          return Result.Ok({ type: 'detection_failed' } as const);
+        });
+      } catch (error) {
+        return Result.Error(dbError(error));
+      }
+    },
+
+    async finishDetection(run) {
       try {
         await db
           .delete(activeDetection)
-          .where(eq(activeDetection.imageId, imageId));
+          .where(
+            and(
+              ownedDetection(run),
+              run.now ? gt(activeDetection.expiresAt, run.now) : undefined
+            )
+          );
         return Result.Ok({ type: 'detection_finished' });
       } catch (error) {
         return Result.Error(dbError(error));
@@ -175,11 +296,31 @@ export const createRegionRepository = ({
         return Result.Error(dbError(error));
       }
     },
-    async insertMany(regions) {
+    async insertMany(regions, run) {
       try {
-        if (regions.length > 0) {
-          await db.insert(regionTable).values(regions.map(toValues));
+        if (run) {
+          return await db.transaction(async (tx) => {
+            const owned = await lockDetection(tx, run);
+            if (!owned)
+              return Result.Ok({ type: 'detection_superseded' } as const);
+            if (owned.progress?.carryOverCompleted)
+              return Result.Ok({ type: 'regions_saved' } as const);
+
+            if (regions.length > 0)
+              await tx.insert(regionTable).values(regions.map(toValues));
+            if (owned.progress) {
+              await tx
+                .update(activeDetection)
+                .set({
+                  progress: { ...owned.progress, carryOverCompleted: true },
+                })
+                .where(ownedDetection(run));
+            }
+            return Result.Ok({ type: 'regions_saved' } as const);
+          });
         }
+        if (regions.length > 0)
+          await db.insert(regionTable).values(regions.map(toValues));
         return Result.Ok({ type: 'regions_saved' });
       } catch (error) {
         return Result.Error(dbError(error));
@@ -187,7 +328,20 @@ export const createRegionRepository = ({
     },
     async replaceDetections(input) {
       try {
-        await db.transaction(async (tx) => {
+        return await db.transaction(async (tx) => {
+          const run =
+            input.runId === undefined
+              ? null
+              : {
+                  imageId: input.imageId,
+                  runId: input.runId,
+                  now: input.now,
+                };
+          const owned = run ? await lockDetection(tx, run) : undefined;
+          if (run && !owned)
+            return Result.Ok({ type: 'detection_superseded' } as const);
+          if (owned?.progress?.completedConcepts.includes(input.concept))
+            return Result.Ok({ type: 'regions_saved' } as const);
           await tx
             .delete(regionTable)
             .where(
@@ -200,8 +354,22 @@ export const createRegionRepository = ({
           if (input.regions.length > 0) {
             await tx.insert(regionTable).values(input.regions.map(toValues));
           }
+          if (run && owned?.progress) {
+            await tx
+              .update(activeDetection)
+              .set({
+                progress: {
+                  ...owned.progress,
+                  completedConcepts: [
+                    ...owned.progress.completedConcepts,
+                    input.concept,
+                  ],
+                },
+              })
+              .where(ownedDetection(run));
+          }
+          return Result.Ok({ type: 'regions_saved' } as const);
         });
-        return Result.Ok({ type: 'regions_saved' });
       } catch (error) {
         return Result.Error(dbError(error));
       }

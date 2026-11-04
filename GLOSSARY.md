@@ -28,6 +28,9 @@ _Avoid_: Product reference, reference, asset
 **Item version**:
 One state of an item's imagery. A render recipe can pin an item version so later corrections do not change the images used by that render.
 
+**Cutout attempt**:
+One run of background removal for an item version. The owner can retry a failed run or one that has been pending too long. Once they retry, only the new attempt can supply the cutout.
+
 **Product**:
 An item made from a product photo with its background removed. It must keep its silhouette, proportions, details and finish when rendered.
 
@@ -56,7 +59,7 @@ A region found automatically by segmentation.
 _Avoid_: Auto-region
 
 **Detection run**:
-The automatic pass over an image that finds regions for each detection concept.
+The automatic pass over an image that finds regions for each detection concept. A retry resumes unfinished work and preserves regions from completed concepts.
 
 **Placement**:
 One instance of an item positioned on an image, with its own position, scale and rotation.

@@ -56,7 +56,11 @@ describe('ItemRepositoryDrizzle', () => {
     await database?.close();
   });
 
-  const create = (id: string, category: string, cutoutAttemptId?: string) =>
+  const create = (
+    id: string,
+    category: string,
+    cutoutAttempt?: { id: string; startedAt: Date }
+  ) =>
     repository.create({
       id: unwrapParseResult(toItemId(id)),
       designId,
@@ -76,7 +80,7 @@ describe('ItemRepositoryDrizzle', () => {
         cutoutKey: null,
         maskKey: null,
         cutoutStatus: 'pending',
-        ...(cutoutAttemptId === undefined ? {} : { cutoutAttemptId }),
+        cutoutAttempt,
       },
     });
 
@@ -137,51 +141,127 @@ describe('ItemRepositoryDrizzle', () => {
     ]);
   });
 
-  it('claims one retry and only lets the current attempt publish', async () => {
-    await create('retry', 'Lighting', 'first');
-    const id = versionId('retry-v1');
-    const fail = (attemptId: string | null) =>
-      repository.finishCutoutAttempt({
-        versionId: id,
-        attemptId,
-        cutoutStatus: 'failed',
-        cutoutKey: null,
-      });
-    expect(okValue(await fail(null)).type).toBe('cutout_attempt_skipped');
-    expect(okValue(await fail('first')).type).toBe('cutout_result_saved');
-
-    const attempts = ['retry-a', 'retry-b'];
-    const claims = await Promise.all(
-      attempts.map((attemptId) =>
-        repository.claimCutoutAttempt({ versionId: id, attemptId })
-      )
+  it('protects shared cutouts held by a historical item version', async () => {
+    const attempt = {
+      id: 'old',
+      startedAt: new Date('2027-01-01T00:00:00.000Z'),
+    };
+    const { item: original } = okValue(
+      await create('original', 'Chairs', attempt)
     );
-    expect(claims.map((claim) => okValue(claim).type).sort()).toEqual([
-      'cutout_attempt_claimed',
-      'cutout_attempt_skipped',
-    ]);
-    const winner =
-      attempts[
-        claims.findIndex(
-          (claim) => okValue(claim).type === 'cutout_attempt_claimed'
-        )
-      ]!;
-    const finish = (attemptId: string) =>
-      repository.finishCutoutAttempt({
-        versionId: id,
-        attemptId,
-        cutoutStatus: 'ready',
-        cutoutKey: key(`item-cutouts/retry-v1/${attemptId}.png`),
-      });
-    expect(okValue(await finish('first')).type).toBe('cutout_attempt_skipped');
-    expect(okValue(await finish(winner)).type).toBe('cutout_result_saved');
-    expect(okValue(await fail(winner)).type).toBe('cutout_attempt_skipped');
-    expect(okValue(await repository.findVersion(id))).toMatchObject({
-      cutoutAttemptId: winner,
+    const { item: copy } = okValue(await create('copy', 'Chairs', attempt));
+    const objectKey = key('item-cutouts/original-v1/old.png');
+    const lookup = {
+      versionId: original.currentVersion.id,
+      attemptId: attempt.id,
+      cutoutKey: objectKey,
+    };
+    expect(okValue(await repository.checkAbandonedCutout(lookup)).type).toBe(
+      'cutout_object_in_use'
+    );
+    await repository.finishCutoutAttempt({
+      versionId: original.currentVersion.id,
+      attemptId: attempt.id,
+      cutoutStatus: 'failed',
+      cutoutKey: null,
+    });
+    expect(okValue(await repository.checkAbandonedCutout(lookup)).type).toBe(
+      'cutout_object_abandoned'
+    );
+    await repository.finishCutoutAttempt({
+      versionId: copy.currentVersion.id,
+      attemptId: attempt.id,
+      cutoutStatus: 'ready',
+      cutoutKey: objectKey,
+    });
+    await repository.addVersion({
+      itemId: copy.id,
       version: {
+        id: versionId('copy-v2'),
+        photo: copy.currentVersion.photo,
         cutoutStatus: 'ready',
-        cutoutKey: `item-cutouts/retry-v1/${winner}.png`,
+        cutoutKey: key('item-cutouts/copy-v2/other.png'),
+        maskKey: null,
       },
     });
+    expect(okValue(await repository.checkAbandonedCutout(lookup)).type).toBe(
+      'cutout_object_in_use'
+    );
   });
+
+  it.each(['failed', 'expired', 'legacy'] as const)(
+    'claims one %s retry and only lets the current attempt publish',
+    async (scenario) => {
+      const originalAttempt =
+        scenario === 'legacy'
+          ? undefined
+          : { id: 'first', startedAt: new Date('2026-11-03T12:00:00Z') };
+      const { item } = okValue(
+        await create('retry', 'Lighting', originalAttempt)
+      );
+      const id = item.currentVersion.id;
+      const oldId = originalAttempt?.id ?? null;
+      const originalStart =
+        originalAttempt?.startedAt ?? item.currentVersion.createdAt;
+      const cutoffMs = originalStart.getTime();
+      const startedAt = new Date(cutoffMs + 30 * 60_000);
+      const claim = (attemptId: string, expiredBeforeMs = cutoffMs) =>
+        repository.claimCutoutAttempt({
+          versionId: id,
+          attemptId,
+          expiredBeforeMs,
+          startedAt,
+        });
+      const fail = (attemptId: string | null) =>
+        repository.finishCutoutAttempt({
+          versionId: id,
+          attemptId,
+          cutoutStatus: 'failed',
+          cutoutKey: null,
+        });
+      const finish = (attemptId: string | null) =>
+        repository.finishCutoutAttempt({
+          versionId: id,
+          attemptId,
+          cutoutStatus: 'ready',
+          cutoutKey: key(`item-cutouts/retry-v1/${attemptId}.png`),
+        });
+
+      expect(okValue(await claim('too-early', cutoffMs - 1)).type).toBe(
+        'cutout_attempt_skipped'
+      );
+      if (scenario === 'failed') {
+        expect(okValue(await fail(null)).type).toBe('cutout_attempt_skipped');
+        expect(okValue(await fail(oldId)).type).toBe('cutout_result_saved');
+      }
+
+      const attempts = ['retry-a', 'retry-b'];
+      const claims = await Promise.all(attempts.map((id) => claim(id)));
+      expect(claims.map((claim) => okValue(claim).type).sort()).toEqual([
+        'cutout_attempt_claimed',
+        'cutout_attempt_skipped',
+      ]);
+      const winner =
+        attempts[
+          claims.findIndex(
+            (claim) => okValue(claim).type === 'cutout_attempt_claimed'
+          )
+        ]!;
+      expect(okValue(await finish(oldId)).type).toBe('cutout_attempt_skipped');
+      expect(okValue(await fail(oldId)).type).toBe('cutout_attempt_skipped');
+      expect(okValue(await claim('too-early-again')).type).toBe(
+        'cutout_attempt_skipped'
+      );
+      expect(okValue(await finish(winner)).type).toBe('cutout_result_saved');
+      expect(okValue(await fail(winner)).type).toBe('cutout_attempt_skipped');
+      expect(okValue(await repository.findVersion(id))).toMatchObject({
+        cutoutAttemptId: winner,
+        version: {
+          cutoutStatus: 'ready',
+          cutoutAttemptStartedAt: startedAt,
+          cutoutKey: `item-cutouts/retry-v1/${winner}.png`,
+        },
+      });
+    }
+  );
 });

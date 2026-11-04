@@ -1,3 +1,4 @@
+import { randomBytes } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { match } from 'ts-pattern';
 import { z } from 'zod';
@@ -23,15 +24,30 @@ const args = z.union([
 async function main() {
   // run-jiti passes the script filename before the operator arguments.
   const parsed = args.safeParse(process.argv.slice(3));
-  if (!parsed.success || process.stdin.isTTY) {
+  if (!parsed.success) {
     console.error(
-      'Usage: pipe a password to pnpm auth:password create EMAIL NAME [user|admin] or pnpm auth:password reset EMAIL.'
+      'Usage: pnpm auth:password create EMAIL NAME [user|admin], or pipe a password to pnpm auth:password reset EMAIL.'
     );
     process.exitCode = 1;
     return;
   }
+  const [type, address, name, role] = parsed.data;
+  if (type === 'create' && !process.stdout.isTTY) {
+    console.error(
+      'Account creation requires a terminal to display the generated password.'
+    );
+    process.exitCode = 1;
+    return;
+  }
+  if (type === 'reset' && process.stdin.isTTY) {
+    console.error('Pipe the new password to this command on standard input.');
+    process.exitCode = 1;
+    return;
+  }
   const password = operatorPasswordSchema.safeParse(
-    readFileSync(0, 'utf8').replace(/\r?\n$/u, '')
+    type === 'create'
+      ? randomBytes(24).toString('base64url')
+      : readFileSync(0, 'utf8').replace(/\r?\n$/u, '')
   );
   if (!password.success) {
     console.error(
@@ -40,7 +56,6 @@ async function main() {
     process.exitCode = 1;
     return;
   }
-  const [type, address, name, role] = parsed.data;
   const db = getDefaultDbClient();
   try {
     // Resolve shared session storage before changing an existing credential.
@@ -79,8 +94,11 @@ async function main() {
               );
             });
         }
-        if (type === 'create') console.log('Account created.');
-        else if (authContext)
+        if (type === 'create') {
+          // Intentionally display the new credential once, only in an interactive terminal.
+          // nosemgrep: token-or-secret-logging
+          console.log(`Account created. Password: ${password.data}`);
+        } else if (authContext)
           console.log('Password updated and sessions revoked.');
         else
           console.log(

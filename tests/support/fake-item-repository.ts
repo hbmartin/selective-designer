@@ -37,16 +37,16 @@ export const createFakeItemRepository = (now: () => Date) => {
       );
     },
     async create(input) {
-      const { cutoutAttemptId, ...imagery } = input.version;
+      const { cutoutAttempt, ...imagery } = input.version;
       const version: ItemVersion = {
         ...imagery,
+        cutoutAttemptStartedAt: cutoutAttempt?.startedAt ?? null,
         itemId: input.id,
         number: 1,
         createdAt: now(),
       };
       versions.set(version.id, version);
-      if (cutoutAttemptId !== undefined)
-        attempts.set(version.id, cutoutAttemptId);
+      if (cutoutAttempt) attempts.set(version.id, cutoutAttempt.id);
       const item = {
         id: input.id,
         designId: input.designId,
@@ -72,16 +72,16 @@ export const createFakeItemRepository = (now: () => Date) => {
     async addVersion(input) {
       const item = visible(input.itemId);
       if (!item) return Result.Ok({ type: 'item_not_found' });
-      const { cutoutAttemptId, ...imagery } = input.version;
+      const { cutoutAttempt, ...imagery } = input.version;
       const version: ItemVersion = {
         ...imagery,
+        cutoutAttemptStartedAt: cutoutAttempt?.startedAt ?? null,
         itemId: item.id,
         number: item.currentVersion.number + 1,
         createdAt: now(),
       };
       versions.set(version.id, version);
-      if (cutoutAttemptId !== undefined)
-        attempts.set(version.id, cutoutAttemptId);
+      if (cutoutAttempt) attempts.set(version.id, cutoutAttempt.id);
       item.currentVersion = version;
       return Result.Ok({ type: 'item_found', item });
     },
@@ -108,13 +108,18 @@ export const createFakeItemRepository = (now: () => Date) => {
     async claimCutoutAttempt(input) {
       const version = versions.get(input.versionId);
       if (
-        version?.cutoutStatus !== 'failed' ||
-        visible(version.itemId)?.currentVersion.id !== version.id
+        !version ||
+        visible(version.itemId)?.currentVersion.id !== version.id ||
+        (version.cutoutStatus !== 'failed' &&
+          (version.cutoutStatus !== 'pending' ||
+            (version.cutoutAttemptStartedAt ?? version.createdAt).getTime() >
+              input.expiredBeforeMs))
       ) {
         return Result.Ok({ type: 'cutout_attempt_skipped' });
       }
       version.cutoutStatus = 'pending';
       version.cutoutKey = null;
+      version.cutoutAttemptStartedAt = input.startedAt;
       attempts.set(version.id, input.attemptId);
       return Result.Ok({ type: 'cutout_attempt_claimed' });
     },
@@ -129,6 +134,20 @@ export const createFakeItemRepository = (now: () => Date) => {
       version.cutoutStatus = input.cutoutStatus;
       version.cutoutKey = input.cutoutKey;
       return Result.Ok({ type: 'cutout_result_saved' });
+    },
+    async checkAbandonedCutout(input) {
+      const inUse = [...versions.values()].some(
+        (version) =>
+          version.cutoutKey === input.cutoutKey ||
+          version.photo.key === input.cutoutKey ||
+          version.maskKey === input.cutoutKey ||
+          (version.id === input.versionId &&
+            version.cutoutStatus === 'pending' &&
+            (attempts.get(version.id) ?? null) === input.attemptId)
+      );
+      return Result.Ok({
+        type: inUse ? 'cutout_object_in_use' : 'cutout_object_abandoned',
+      });
     },
     async categoryUsage() {
       const counts = new Map<string, number>();

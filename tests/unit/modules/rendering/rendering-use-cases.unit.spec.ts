@@ -931,10 +931,14 @@ describe('review', () => {
       );
       // Stored recipes are snapshots. Expand the fixture without involving model limits.
       const edit = first.recipe.edits[0]!;
-      first.recipe.edits = Array.from({ length: MAX_EDITS }, (_, index) => ({
-        ...edit,
-        id: `edit-${index}`,
-      }));
+      first.recipe.edits = Array.from(
+        { length: MAX_EDITS - 1 },
+        (_, index) => ({
+          ...edit,
+          id: `edit-${index}`,
+        })
+      );
+      second.recipe.edits.push({ ...second.recipe.edits[0]!, id: 'overflow' });
       if (withUnmappableRegion) {
         second.recipe.edits.unshift({
           kind: 'removal',
@@ -965,9 +969,13 @@ describe('review', () => {
       });
       expect(
         ctx.renders.drafts.get(baseImageId)?.editSet.edits.map(({ id }) => id)
-      ).toEqual(
-        Array.from({ length: MAX_EDITS }, (_, index) => `r0-edit-${index}`)
-      );
+      ).toEqual([
+        ...Array.from(
+          { length: MAX_EDITS - 1 },
+          (_, index) => `r0-edit-${index}`
+        ),
+        'r1-second',
+      ]);
     }
   );
 

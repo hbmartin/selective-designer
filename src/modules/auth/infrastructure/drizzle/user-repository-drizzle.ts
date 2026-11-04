@@ -279,7 +279,7 @@ export class UserRepositoryDrizzle implements UserRepository {
         .insert(userTable)
         .values({
           email: input.email,
-          emailVerified: true,
+          emailVerified: false,
           name: input.name ?? '',
           role: input.role ?? 'user',
         })

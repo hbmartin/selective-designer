@@ -9,8 +9,7 @@
       "updateAction": "Update your name"
     },
     "email": {
-      "label": "Email",
-      "notVerified": "Not Verified"
+      "label": "Email"
     }
   },
   "changeNameDrawer": {

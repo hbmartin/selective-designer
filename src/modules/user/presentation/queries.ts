@@ -20,7 +20,6 @@ type GetAllInput = {
 export type UserQueryFacade = ServerFunctionFacade<
   Pick<
     UserServerFunctions,
-    | 'userCreate'
     | 'userDeleteById'
     | 'userGetAll'
     | 'userGetById'
@@ -81,11 +80,6 @@ export const createUserQueries = <TFacade extends UserQueryFacade>(
           facade.userGetUserSessions({
             data: { ...data, cursor: pageParam, limit: data.limit ?? 20 },
           }),
-      }),
-    create: () =>
-      serverMutationOptions({
-        mutationKey: [...all(), 'create'],
-        mutationFn: facade.userCreate,
       }),
     updateById: () =>
       serverMutationOptions({

@@ -1,5 +1,5 @@
 import { useQuery } from '@tanstack/react-query';
-import { useRef, useState } from 'react';
+import { type ReactNode, useRef, useState } from 'react';
 import {
   ReactCompareSlider,
   ReactCompareSliderImage,
@@ -100,20 +100,19 @@ const SideBySide = (props: { a: Pane; b: Pane; labels: [string, string] }) => {
   );
 };
 
-/** The change check for one result of a render, with a heatmap toggle. */
-const CheckControls = (props: {
-  renderId: RenderId;
-  resultId: string;
-  onHeatmapChange: (url: string | null) => void;
-}) => {
+const CompareWithCheck = (
+  props: CompareProps & { check: NonNullable<CompareProps['check']> }
+) => {
   const { t } = useTranslation(['rendering']);
   const scopeKey = useCurrentScopeKey();
   const render = useQuery(
-    renderingQueries.render({ scopeKey, renderId: props.renderId })
+    renderingQueries.render({ scopeKey, renderId: props.check.renderId })
   );
-  const result = render.data?.results.find((r) => r.id === props.resultId);
+  const result = render.data?.results.find(
+    (r) => r.id === props.check.resultId
+  );
   const check = useChangeCheck({
-    resultId: props.resultId,
+    resultId: props.check.resultId,
     sourceUrl: render.data?.sourceUrl ?? null,
     resultUrl: result?.outputUrl ?? null,
     maskUrl: render.data?.editMaskUrl ?? null,
@@ -122,7 +121,8 @@ const CheckControls = (props: {
   const [shown, setShown] = useState(false);
   const heatmapUrl =
     check.data?.status === 'ready' ? check.data.heatmapUrl : null;
-  return (
+  if (shown && !heatmapUrl) setShown(false);
+  const controls = (
     <div className="ml-auto flex items-center gap-2">
       <ChangeCheckBadge check={check.data} />
       {heatmapUrl && (
@@ -130,10 +130,7 @@ const CheckControls = (props: {
           size="xs"
           variant="ghost"
           aria-pressed={shown}
-          onClick={() => {
-            props.onHeatmapChange(shown ? null : heatmapUrl);
-            setShown(!shown);
-          }}
+          onClick={() => setShown(!shown)}
         >
           {shown
             ? t('rendering:check.hideHeatmap')
@@ -141,6 +138,13 @@ const CheckControls = (props: {
         </Button>
       )}
     </div>
+  );
+  return (
+    <ComparePanes
+      {...props}
+      controls={controls}
+      heatmapUrl={shown ? heatmapUrl : null}
+    />
   );
 };
 
@@ -153,7 +157,7 @@ const toPane = (source: RenderSourceView | undefined): Pane | null =>
  * Compare a render source with a result: side by side (synced zoom), swipe
  * or onion skin. With `check`, the advisory change check and its heatmap.
  */
-export const CompareView = (props: {
+type CompareProps = {
   a: ImageId;
   b: ImageId;
   mode: CompareMode;
@@ -161,15 +165,19 @@ export const CompareView = (props: {
   onModeChange: (mode: CompareMode) => void;
   onOpacityChange: (opacity: number) => void;
   check?: { renderId: RenderId; resultId: string };
-}) => {
+};
+
+const ComparePanes = (
+  props: CompareProps & { controls?: ReactNode; heatmapUrl?: string | null }
+) => {
   const { t } = useTranslation(['rendering']);
   const scopeKey = useCurrentScopeKey();
   const a = useQuery(renderingQueries.source({ scopeKey, imageId: props.a }));
   const b = useQuery(renderingQueries.source({ scopeKey, imageId: props.b }));
-  const [heatmapUrl, setHeatmapUrl] = useState<string | null>(null);
   const paneA = toPane(a.data);
   const paneB = toPane(b.data);
-  const shownB = paneB && heatmapUrl ? { ...paneB, url: heatmapUrl } : paneB;
+  const shownB =
+    paneB && props.heatmapUrl ? { ...paneB, url: props.heatmapUrl } : paneB;
   const labels: [string, string] = [
     t('rendering:compare.before'),
     t('rendering:compare.after'),
@@ -211,13 +219,7 @@ export const CompareView = (props: {
             />
           </label>
         )}
-        {props.check && (
-          <CheckControls
-            renderId={props.check.renderId}
-            resultId={props.check.resultId}
-            onHeatmapChange={setHeatmapUrl}
-          />
-        )}
+        {props.controls}
       </div>
 
       {!paneA || !shownB ? (
@@ -263,3 +265,19 @@ export const CompareView = (props: {
     </div>
   );
 };
+
+export const CompareView = (props: CompareProps) =>
+  props.check ? (
+    <CompareWithCheck
+      key={JSON.stringify([
+        props.a,
+        props.b,
+        props.check.renderId,
+        props.check.resultId,
+      ])}
+      {...props}
+      check={props.check}
+    />
+  ) : (
+    <ComparePanes {...props} />
+  );

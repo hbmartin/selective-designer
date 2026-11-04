@@ -36,13 +36,17 @@ describe('background removal workflow', () => {
       Result.Ok({ type: 'cutout_marked_failed' })
     );
     const input = { itemVersionId: 'version', attemptId: 'attempt' };
-    expect(await removeBackgroundWorkflow(input)).toEqual({
-      type: 'cutout_failed',
-      reason: 'workflow_step_failed',
+    await expect(removeBackgroundWorkflow(input)).rejects.toThrow(
+      'PROVIDER_UNAVAILABLE: Background removal workflow failed'
+    );
+    expect(pipeline.removeBackground).toHaveBeenCalledExactlyOnceWith({
+      versionId: input.itemVersionId,
+      attemptId: input.attemptId,
     });
     expect(pipeline.markCutoutFailed).toHaveBeenCalledExactlyOnceWith({
       versionId: input.itemVersionId,
       attemptId: input.attemptId,
+      failureCode: 'PROVIDER_UNAVAILABLE',
     });
   });
 

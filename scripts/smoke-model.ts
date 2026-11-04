@@ -7,6 +7,7 @@ import { toObjectKey } from '@/modules/kernel';
 import {
   BetterUploadObjectStorage,
   getAiProvidersConfig,
+  readLimitedBody,
 } from '@/modules/kernel/backend';
 import {
   buildPrompt,
@@ -47,6 +48,45 @@ const png = (
     }
   }
   return encode({ width, height, channels, data, depth: 8 });
+};
+
+const MAX_OUTPUT_BYTES = 40 * 1024 * 1024;
+
+const downloadOutput = async (value: string, modelId: ModelId) => {
+  const url = new URL(value);
+  const domain = modelId === 'flux-3-image' ? 'bfl.ai' : 'fal.media';
+  if (
+    url.protocol !== 'https:' ||
+    url.port ||
+    url.username ||
+    url.password ||
+    (url.hostname !== domain && !url.hostname.endsWith(`.${domain}`))
+  )
+    throw new Error('The provider returned an unexpected download URL.');
+  const response = await fetch(url, {
+    redirect: 'error',
+    signal: AbortSignal.timeout(30_000),
+  });
+  if (!response.ok)
+    throw new Error(`Could not download the result (HTTP ${response.status}).`);
+  if (Number(response.headers.get('content-length')) > MAX_OUTPUT_BYTES) {
+    await response.body?.cancel();
+    throw new Error('The result exceeds the smoke download limit.');
+  }
+  return readLimitedBody(response, MAX_OUTPUT_BYTES);
+};
+
+const resultFilename = (format: string) => {
+  switch (format) {
+    case 'png':
+      return 'output.png';
+    case 'jpg':
+      return 'output.jpg';
+    case 'webp':
+      return 'output.webp';
+    default:
+      throw new Error('The result is not a supported image format.');
+  }
 };
 
 const sourceName = 'source.png';
@@ -241,22 +281,21 @@ async function main() {
       await delay(4000);
       continue;
     }
-    let bytes = result.outputBytes?.bytes;
-    if (!bytes && result.outputUrl) {
-      const response = await fetch(result.outputUrl, {
-        signal: AbortSignal.timeout(30_000),
-      });
-      if (!response.ok)
-        throw new Error(
-          `Could not download the result (HTTP ${response.status}).`
-        );
-      bytes = new Uint8Array(await response.arrayBuffer());
-    }
-    if (!bytes) throw new Error('The provider returned no image.');
+    const bytes =
+      result.outputBytes?.bytes ??
+      (result.outputUrl
+        ? await downloadOutput(result.outputUrl, selected)
+        : undefined);
+    if (!bytes?.length || bytes.byteLength > MAX_OUTPUT_BYTES)
+      throw new Error(
+        'The provider returned no image or exceeded the smoke download limit.'
+      );
     const dimensions = readImageDimensions(bytes);
     if (dimensions.type !== 'dimensions')
       throw new Error('The result is not a supported image.');
-    await writeFile(join(directory, `output.${dimensions.format}`), bytes);
+    await writeFile(join(directory, resultFilename(dimensions.format)), bytes, {
+      flag: 'wx',
+    });
     await writeFile(
       join(directory, 'result.json'),
       JSON.stringify(

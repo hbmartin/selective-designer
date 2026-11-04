@@ -1,7 +1,6 @@
 import { type Result as BoxedResult, Result } from '@bloodyowl/boxed';
-import { and, asc, eq, exists, isNull, sql } from 'drizzle-orm';
+import { and, asc, eq, exists, isNull, lte, or, sql } from 'drizzle-orm';
 
-import { design } from '@/modules/design/infrastructure/drizzle/schema';
 import { AppError } from '@/modules/kernel/domain/errors/app-error';
 import {
   toDesignId,
@@ -10,6 +9,7 @@ import {
   toObjectKey,
 } from '@/modules/kernel/domain/ids';
 import { observeRepository } from '@/modules/kernel/infrastructure/db/observability';
+import { design } from '@/modules/kernel/infrastructure/db/schema';
 import type { DbLike } from '@/modules/kernel/infrastructure/db/types';
 import type {
   ItemRepository,
@@ -85,6 +85,7 @@ const toVersion = (row: ItemVersionRow): BoxedResult<ItemVersion, AppError> => {
     cutoutKey: cutoutKey?.isOk() ? cutoutKey.get() : null,
     maskKey: maskKey?.isOk() ? maskKey.get() : null,
     cutoutStatus: row.cutoutStatus,
+    cutoutAttemptStartedAt: row.cutoutAttemptStartedAt,
     createdAt: row.createdAt,
   });
 };
@@ -133,7 +134,8 @@ const versionValues = (itemId: string, number: number, v: NewItemVersion) => ({
   cutoutKey: v.cutoutKey,
   maskKey: v.maskKey,
   cutoutStatus: v.cutoutStatus,
-  cutoutAttemptId: v.cutoutAttemptId ?? null,
+  cutoutAttemptId: v.cutoutAttempt?.id ?? null,
+  cutoutAttemptStartedAt: v.cutoutAttempt?.startedAt ?? null,
 });
 
 export const createItemRepository = ({
@@ -348,6 +350,7 @@ export const createItemRepository = ({
     },
 
     async claimCutoutAttempt(input) {
+      const expiredBefore = new Date(input.expiredBeforeMs);
       try {
         const [claimed] = await db
           .update(versionTable)
@@ -355,11 +358,24 @@ export const createItemRepository = ({
             cutoutStatus: 'pending',
             cutoutKey: null,
             cutoutAttemptId: input.attemptId,
+            cutoutAttemptStartedAt: input.startedAt,
           })
           .where(
             and(
               eq(versionTable.id, input.versionId),
-              eq(versionTable.cutoutStatus, 'failed'),
+              or(
+                eq(versionTable.cutoutStatus, 'failed'),
+                and(
+                  eq(versionTable.cutoutStatus, 'pending'),
+                  or(
+                    lte(versionTable.cutoutAttemptStartedAt, expiredBefore),
+                    and(
+                      isNull(versionTable.cutoutAttemptStartedAt),
+                      lte(versionTable.createdAt, expiredBefore)
+                    )
+                  )
+                )
+              ),
               exists(
                 db
                   .select({ id: itemTable.id })
@@ -400,6 +416,34 @@ export const createItemRepository = ({
           .returning({ id: versionTable.id });
         return Result.Ok({
           type: saved ? 'cutout_result_saved' : 'cutout_attempt_skipped',
+        });
+      } catch (error) {
+        return Result.Error(dbError(error));
+      }
+    },
+
+    async checkAbandonedCutout(input) {
+      try {
+        const [inUse] = await db
+          .select({ id: versionTable.id })
+          .from(versionTable)
+          .where(
+            or(
+              eq(versionTable.cutoutKey, input.cutoutKey),
+              eq(versionTable.photoKey, input.cutoutKey),
+              eq(versionTable.maskKey, input.cutoutKey),
+              and(
+                eq(versionTable.id, input.versionId),
+                eq(versionTable.cutoutStatus, 'pending'),
+                input.attemptId === null
+                  ? isNull(versionTable.cutoutAttemptId)
+                  : eq(versionTable.cutoutAttemptId, input.attemptId)
+              )
+            )
+          )
+          .limit(1);
+        return Result.Ok({
+          type: inUse ? 'cutout_object_in_use' : 'cutout_object_abandoned',
         });
       } catch (error) {
         return Result.Error(dbError(error));

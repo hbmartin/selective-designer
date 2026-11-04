@@ -45,7 +45,7 @@ describe('user HTTP transport handlers', () => {
       zUpdateByIdInput().parse({
         id: 'user-2',
         name: testUserDisplayName('Ada'),
-        email: 'ada@example.com',
+        email: ' Ada@Example.COM ',
         role: 'admin',
       })
     );
@@ -97,7 +97,7 @@ describe('user HTTP transport handlers', () => {
       zUpdateByIdInput().parse({
         id: 'user-2',
         name: ` ${name} `,
-        email: 'ada@example.com',
+        email: ' Ada@Example.COM ',
       }).name
     ).toBe(name);
   });

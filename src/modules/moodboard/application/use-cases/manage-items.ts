@@ -11,6 +11,7 @@ import {
 import { objectKeyMatchesPurpose } from '@/modules/kernel/domain/upload-policy';
 
 import { checkMoodboardAccess } from './access';
+import { cutoutRetryCutoff, isCutoutRetryable } from './cutout-retry-policy';
 import { type ItemView, toItemView } from './item-view';
 import { scheduleCutoutAttempt } from './schedule-cutout-attempt';
 import type {
@@ -151,7 +152,9 @@ export async function createItem(
     cutoutKey: null,
     maskKey: null,
     cutoutStatus,
-    ...(attemptId ? { cutoutAttemptId: attemptId } : {}),
+    ...(attemptId
+      ? { cutoutAttempt: { id: attemptId, startedAt: deps.clock.now() } }
+      : {}),
   };
   const created = await deps.itemRepository.create({
     id: itemId.get(),
@@ -325,7 +328,7 @@ export async function correctCutout(
   );
 }
 
-/** Re-run background removal for a failed cut-out. */
+/** Re-run background removal for a failed or expired cut-out attempt. */
 export async function retryCutout(
   deps: MoodboardUseCaseDeps,
   input: { currentUserId: UserId; itemId: ItemId }
@@ -337,7 +340,9 @@ export async function retryCutout(
   const outcome = owned.get();
   if (outcome.type !== 'item_found') return Result.Ok(outcome);
   const version = outcome.item.currentVersion;
-  if (version.cutoutStatus !== 'failed') {
+  const startedAt = deps.clock.now();
+  const expiredBeforeMs = cutoutRetryCutoff(startedAt);
+  if (!isCutoutRetryable(version, expiredBeforeMs)) {
     return Result.Ok({ type: 'cutout_not_retryable' });
   }
   const attempt = deps.idGenerator.createId();
@@ -346,6 +351,8 @@ export async function retryCutout(
   const claimed = await deps.itemRepository.claimCutoutAttempt({
     versionId: version.id,
     attemptId,
+    startedAt,
+    expiredBeforeMs,
   });
   if (claimed.isError()) return Result.Error(claimed.getError());
   if (claimed.get().type === 'cutout_attempt_skipped') {

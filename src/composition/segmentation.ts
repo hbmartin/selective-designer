@@ -7,6 +7,7 @@ import { createRegionRepository } from '@/modules/segmentation/backend';
 
 import { getKernel, type Kernel } from './kernel';
 import { createImageAccess, createSegmenter } from './segmentation-pipeline';
+import { createAutoDetectionScheduler } from './segmentation-scheduler';
 import { createCachedFactory } from './shared/singleton';
 
 export type SegmentationOverrides = {
@@ -17,9 +18,11 @@ export type SegmentationOverrides = {
 
 const build = (overrides?: SegmentationOverrides) => {
   const kernel = overrides?.kernel ?? getKernel();
+  const regionRepository =
+    overrides?.regionRepository ?? createRegionRepository({ db: kernel.db });
   return createSegmentationUseCases({
-    regionRepository:
-      overrides?.regionRepository ?? createRegionRepository({ db: kernel.db }),
+    regionRepository,
+    detectionRetry: createAutoDetectionScheduler(kernel, regionRepository),
     imageAccess: createImageAccess(kernel),
     segmenter: overrides?.segmenter ?? createSegmenter(),
     objectStorage: kernel.objectStorage,

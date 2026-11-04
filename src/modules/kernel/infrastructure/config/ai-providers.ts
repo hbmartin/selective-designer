@@ -21,79 +21,75 @@ const optionalSecret = () =>
     z.string().trim().min(1).optional()
   );
 
-const aiProvidersEnvSchema = baseEnvSchema
-  .extend({
-    GITHUB_ACTIONS: z.string().optional(),
-    VERCEL: z.string().optional(),
-    FAL_KEY: optionalSecret(),
-    BFL_API_KEY: optionalSecret(),
-    /**
-     * `fake` serves deterministic local results with no network or cost; it is
-     * the default outside production so tests and local work never spend money.
-     */
-    PROVIDER_MODE: z.enum(['live', 'fake']).optional(),
-    /**
-     * `webhook` needs a public HTTPS base URL (fal refuses localhost);
-     * `poll` works everywhere and is the default.
-     */
-    PROVIDER_CALLBACK_MODE: z.enum(['webhook', 'poll']).default('poll'),
-    PROVIDER_WEBHOOK_BASE_URL: optionalSecret(),
-    VERCEL_AUTOMATION_BYPASS_SECRET: optionalSecret(),
-    RENDER_ENABLED_MODELS: optionalSecret(),
-  })
-  .superRefine((env, ctx) => {
-    const mode =
-      env.PROVIDER_MODE ?? (isProdRuntimeEnvironment(env) ? 'live' : 'fake');
+const aiProvidersEnvSchema = (phase: 'build' | 'runtime') =>
+  baseEnvSchema
+    .extend({
+      GITHUB_ACTIONS: z.string().optional(),
+      CI_PROVIDER_KEY_PLACEHOLDERS: z.string().optional(),
+      VERCEL: z.string().optional(),
+      FAL_KEY: optionalSecret(),
+      BFL_API_KEY: optionalSecret(),
+      /**
+       * `fake` serves deterministic local results with no network or cost; it is
+       * the default outside production so tests and local work never spend money.
+       */
+      PROVIDER_MODE: z.enum(['live', 'fake']).optional(),
+      // Accept the old explicit poll setting while rejecting unsupported modes.
+      PROVIDER_CALLBACK_MODE: z
+        .literal('poll', {
+          error: 'Only poll mode is supported',
+        })
+        .optional(),
+      RENDER_ENABLED_MODELS: optionalSecret(),
+    })
+    .superRefine((env, ctx) => {
+      const mode =
+        env.PROVIDER_MODE ?? (isProdRuntimeEnvironment(env) ? 'live' : 'fake');
 
-    if (isProdRuntimeEnvironment(env) && mode === 'fake') {
-      ctx.addIssue({
-        code: 'custom',
-        path: ['PROVIDER_MODE'],
-        message: 'PROVIDER_MODE=fake is not allowed in production',
-      });
-    }
-
-    if (mode === 'live') {
-      const ciBuild =
-        env.GITHUB_ACTIONS === 'true' && !env.VERCEL && !env.VERCEL_ENV;
-      for (const field of ['FAL_KEY', 'BFL_API_KEY'] as const) {
-        const key = env[field]?.toLowerCase();
-        if (
-          !key ||
-          key === 'replace me' ||
-          (key === 'ci-placeholder' && !ciBuild)
-        ) {
-          ctx.addIssue({
-            code: 'custom',
-            path: [field],
-            message: `${field} is required when PROVIDER_MODE=live`,
-          });
-        }
-      }
-    }
-
-    if (env.PROVIDER_CALLBACK_MODE === 'webhook') {
-      const base = env.PROVIDER_WEBHOOK_BASE_URL;
-      if (!base || !base.startsWith('https://')) {
+      if (isProdRuntimeEnvironment(env) && mode === 'fake') {
         ctx.addIssue({
           code: 'custom',
-          path: ['PROVIDER_WEBHOOK_BASE_URL'],
-          message:
-            'PROVIDER_WEBHOOK_BASE_URL must be a public https:// URL when PROVIDER_CALLBACK_MODE=webhook',
+          path: ['PROVIDER_MODE'],
+          message: 'PROVIDER_MODE=fake is not allowed in production',
         });
       }
-    }
-  });
+
+      if (mode === 'live') {
+        const ciBuild =
+          phase === 'build' &&
+          env.CI_PROVIDER_KEY_PLACEHOLDERS === 'true' &&
+          env.GITHUB_ACTIONS === 'true' &&
+          !env.VERCEL &&
+          !env.VERCEL_ENV;
+        for (const field of ['FAL_KEY', 'BFL_API_KEY'] as const) {
+          const key = env[field]?.toLowerCase();
+          if (
+            !key ||
+            key === 'replace me' ||
+            (key === 'ci-placeholder' && !ciBuild)
+          ) {
+            ctx.addIssue({
+              code: 'custom',
+              path: [field],
+              message: key
+                ? `Replace the placeholder for ${field} with a live provider key`
+                : `${field} is required when PROVIDER_MODE=live`,
+            });
+          }
+        }
+      }
+    });
+
+export function validateAiProvidersBuildConfig(
+  source?: Record<string, unknown>
+) {
+  parseEnv(aiProvidersEnvSchema('build'), source);
+}
 
 export type AiProvidersConfig = {
   mode: 'live' | 'fake';
   falKey: string | undefined;
   bflApiKey: string | undefined;
-  callbackMode: 'webhook' | 'poll';
-  /** Public origin providers call back to, e.g. `https://app.example.com`. */
-  webhookBaseUrl: string | undefined;
-  /** Appended to webhook URLs so Vercel deployment protection lets them in. */
-  vercelAutomationBypassSecret: string | undefined;
   /** Model ids in the order the UI shows them; validated by `rendering`. */
   enabledModelIds: string[];
 };
@@ -115,15 +111,12 @@ export function getAiProvidersConfig(
     return cachedAiProvidersConfig;
   }
 
-  const env = parseEnv(aiProvidersEnvSchema, source);
+  const env = parseEnv(aiProvidersEnvSchema('runtime'), source);
   const config: AiProvidersConfig = {
     mode:
       env.PROVIDER_MODE ?? (isProdRuntimeEnvironment(env) ? 'live' : 'fake'),
     falKey: env.FAL_KEY,
     bflApiKey: env.BFL_API_KEY,
-    callbackMode: env.PROVIDER_CALLBACK_MODE,
-    webhookBaseUrl: env.PROVIDER_WEBHOOK_BASE_URL?.replace(/\/+$/u, ''),
-    vercelAutomationBypassSecret: env.VERCEL_AUTOMATION_BYPASS_SECRET,
     enabledModelIds: parseEnabledModelIds(env.RENDER_ENABLED_MODELS),
   };
   if (source === undefined) cachedAiProvidersConfig = config;

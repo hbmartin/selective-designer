@@ -52,11 +52,6 @@ describe('user server functions runner wiring', () => {
     await expect(
       (fns.userRevokeUserSession as ExplicitAny)({ data: {} })
     ).resolves.toBe('fresh');
-    // Creating a user can mint an admin (with `user:set-role`), so it requires
-    // a fresh session for parity with the other destructive admin mutations.
-    await expect((fns.userCreate as ExplicitAny)({ data: {} })).resolves.toBe(
-      'fresh'
-    );
   });
 
   it('runs reads on the protected (non-step-up) runner', async () => {

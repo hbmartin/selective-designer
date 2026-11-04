@@ -23,6 +23,8 @@ import type { ApplicationResult } from '@/modules/kernel/application/result';
 import { AppError } from '@/modules/kernel/domain/errors/app-error';
 import { getStorageConfig } from '@/modules/kernel/infrastructure/config/storage';
 
+import { readLimitedBody } from './limited-response-body';
+
 const OBJECT_DELETE_TIMEOUT_MS = 5_000;
 const OBJECT_COPY_TIMEOUT_MS = 60_000;
 const MAX_SIGNED_URL_SECONDS = 7 * 24 * 60 * 60;
@@ -36,33 +38,6 @@ const isNotFoundError = (error: unknown) =>
 /** RFC 6266 filename: ASCII only, no quotes or path separators. */
 const safeAttachmentFileName = (fileName: string) =>
   fileName.replace(/[^A-Za-z0-9._-]+/gu, '-').slice(0, 120) || 'download';
-
-const readLimitedBody = async (
-  response: Response,
-  maxBytes: number
-): Promise<Uint8Array | undefined> => {
-  const reader = response.body?.getReader();
-  if (!reader) return new Uint8Array(await response.arrayBuffer());
-  const chunks: Uint8Array[] = [];
-  let total = 0;
-  for (;;) {
-    const { done, value } = await reader.read();
-    if (done) break;
-    total += value.byteLength;
-    if (total > maxBytes) {
-      await reader.cancel();
-      return undefined;
-    }
-    chunks.push(value);
-  }
-  const bytes = new Uint8Array(total);
-  let offset = 0;
-  for (const chunk of chunks) {
-    bytes.set(chunk, offset);
-    offset += chunk.byteLength;
-  }
-  return bytes;
-};
 
 const createUploadClient = () => {
   const config = getStorageConfig();

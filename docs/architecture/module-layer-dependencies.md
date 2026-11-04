@@ -205,6 +205,7 @@ node_segmentation_infrastructure --> node_kernel_domain
 node_segmentation_infrastructure --> node_kernel_infrastructure
 node_segmentation_infrastructure --> node_segmentation_domain
 node_segmentation_presentation --> node_auth_public
+node_segmentation_presentation --> node_segmentation_application
 node_segmentation_presentation --> node_segmentation_public
 node_segmentation_public --> node_segmentation_application
 node_segmentation_public --> node_segmentation_domain
@@ -257,14 +258,14 @@ linkStyle 108 stroke-dasharray: 1 4
 linkStyle 110 stroke-dasharray: 1 4
 linkStyle 111 stroke-dasharray: 1 4
 linkStyle 112 stroke-dasharray: 6 4
-linkStyle 125 stroke-dasharray: 1 4
-linkStyle 127 stroke-dasharray: 1 4
+linkStyle 126 stroke-dasharray: 1 4
 linkStyle 128 stroke-dasharray: 1 4
-linkStyle 129 stroke-dasharray: 6 4
-linkStyle 141 stroke-dasharray: 1 4
+linkStyle 129 stroke-dasharray: 1 4
+linkStyle 130 stroke-dasharray: 6 4
 linkStyle 142 stroke-dasharray: 1 4
 linkStyle 143 stroke-dasharray: 1 4
-linkStyle 144 stroke-dasharray: 6 4
+linkStyle 144 stroke-dasharray: 1 4
+linkStyle 145 stroke-dasharray: 6 4
 ```
 
 ## Edge Styles

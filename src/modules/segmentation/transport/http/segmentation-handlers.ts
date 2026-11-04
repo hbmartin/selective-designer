@@ -87,7 +87,27 @@ export const createSegmentationHandlers = ({
         regions_listed: ({
           regions,
           detection,
-        }: RegionListView): RegionListView => ({ regions, detection }),
+          detectionRemainingMs,
+        }: RegionListView): RegionListView => ({
+          regions,
+          detection,
+          detectionRemainingMs,
+        }),
+      }
+    ),
+  retryDetection: (
+    ctx: ProtectedContext,
+    data: z.output<ReturnType<typeof zRegionsInput>>
+  ) =>
+    unwrapApplicationResult(
+      getUseCases(ctx).retryDetection({
+        currentUserId: ctx.scope.userId,
+        imageId: data.imageId,
+      }),
+      {
+        ...common,
+        auto_detection_scheduled: () => undefined,
+        detection_not_retryable: () => undefined,
       }
     ),
   segment: (

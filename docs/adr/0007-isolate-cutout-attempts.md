@@ -3,3 +3,5 @@
 A cutout attempt has its own stored identity and output key, separate from the item version a render recipe can pin. A workflow start can report an error after the queue accepted it, so a late worker could otherwise replace a newer result or overwrite a published image. The item version accepts a result only from its pending attempt.
 
 Saving the attempt and starting the workflow remain separate operations. If the request process dies between them, a version can remain pending until an operator investigates.
+
+The owner can retry a failed attempt immediately or a pending attempt after 30 minutes. The new attempt starts a new window and takes over the right to publish. An earlier worker might still finish its provider call; its result cannot replace the new attempt. Older pending rows without a start time use the item version's creation time.

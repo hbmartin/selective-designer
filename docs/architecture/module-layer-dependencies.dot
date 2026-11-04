@@ -230,6 +230,7 @@ digraph ModuleLayerDependencies {
   "segmentation/infrastructure" -> "kernel/infrastructure" [style="solid"];
   "segmentation/infrastructure" -> "segmentation/domain" [style="solid"];
   "segmentation/presentation" -> "auth/public" [style="solid"];
+  "segmentation/presentation" -> "segmentation/application" [style="solid"];
   "segmentation/presentation" -> "segmentation/public" [style="solid"];
   "segmentation/public" -> "segmentation/application" [style="solid"];
   "segmentation/public" -> "segmentation/domain" [style="dotted"];

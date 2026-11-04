@@ -994,6 +994,29 @@ rules:
         - '**/*.unit.spec.ts'
         - '**/*.test.ts'
 
+  - id: build-provider-key-validation-is-cli-only
+    message: Runtime code must reject provider key placeholders.
+    languages: [typescript]
+    severity: ERROR
+    pattern-either:
+      - pattern: validateServerBuildConfig(...)
+      - pattern: validateAiProvidersBuildConfig(...)
+    paths:
+      include:
+        - src/**/*.ts
+        - src/**/*.tsx
+      exclude:
+        - src/modules/kernel/infrastructure/config/server.ts
+
+  - id: detection-lease-release-must-be-fenced
+    message: Match the detection run ID as well as the image ID when releasing a lease.
+    languages: [typescript]
+    severity: ERROR
+    pattern: '$DB.delete(activeDetection).where(eq(activeDetection.imageId, ...))'
+    paths:
+      include:
+        - src/modules/segmentation/infrastructure/drizzle/region-repository-drizzle.ts
+
   - id: no-console-in-production-source
     message: Use frontendLogger or the backend logger; console.* is allowed only in tests, fixtures, scripts, and localhost/debug diagnostics.
     languages: [typescript]

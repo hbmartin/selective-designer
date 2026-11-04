@@ -46,6 +46,6 @@ Production wiring lives in `src/composition/<capability>.ts`.
 
 ## Auth and Runtime Config
 
-- Auth depends on `SessionGateway`, `AuthorizationGateway`, `AuthEmailPort`, and `UserAdminGateway`.
+- Auth depends on `SessionGateway`, `AuthorizationGateway`, and `UserAdminGateway`.
 - Runtime config depends on `RuntimeConfigSource`.
 - Provider/env details live in infrastructure adapters and are selected by composition.

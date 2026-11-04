@@ -23,7 +23,7 @@ export type NewItemVersion = {
   cutoutKey: ObjectKey | null;
   maskKey: ObjectKey | null;
   cutoutStatus: CutoutStatus;
-  cutoutAttemptId?: string;
+  cutoutAttempt?: { id: string; startedAt: Date };
 };
 
 export type ItemChanges = {
@@ -85,6 +85,8 @@ export interface ItemRepository {
   claimCutoutAttempt(input: {
     versionId: ItemVersionId;
     attemptId: string;
+    startedAt: Date;
+    expiredBeforeMs: number;
   }): Promise<
     ApplicationResult<
       { type: 'cutout_attempt_claimed' } | { type: 'cutout_attempt_skipped' }
@@ -98,6 +100,15 @@ export interface ItemRepository {
   ): Promise<
     ApplicationResult<
       { type: 'cutout_result_saved' } | { type: 'cutout_attempt_skipped' }
+    >
+  >;
+  checkAbandonedCutout(input: {
+    versionId: ItemVersionId;
+    attemptId: string | null;
+    cutoutKey: ObjectKey;
+  }): Promise<
+    ApplicationResult<
+      { type: 'cutout_object_abandoned' } | { type: 'cutout_object_in_use' }
     >
   >;
   /** How often the owner used each category across their designs. */

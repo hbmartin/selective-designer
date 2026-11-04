@@ -101,7 +101,7 @@ const mutationConfig = {
   item_upload_unowned: unowned,
   cutout_not_retryable: {
     code: 'BAD_REQUEST',
-    message: 'Only a failed cut-out can be retried.',
+    message: 'This cut-out is not ready to retry.',
   },
 } as const;
 

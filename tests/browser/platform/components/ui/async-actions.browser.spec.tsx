@@ -118,6 +118,35 @@ test('confirmation owns pending state and invokes its action once', async () => 
   await expect.element(page.getByText('Delete record')).not.toBeInTheDocument();
 });
 
+test('confirmation stays open when the action requests a retry', async () => {
+  const user = setupUser();
+  const confirmAction = vi
+    .fn<() => Promise<void | 'keep_open'>>()
+    .mockResolvedValueOnce('keep_open')
+    .mockResolvedValueOnce(undefined);
+  render(
+    <ConfirmResponsiveDrawer
+      title="Retryable action"
+      confirmText="Confirm retry"
+      confirmAction={confirmAction}
+    >
+      <Button>Open retryable confirmation</Button>
+    </ConfirmResponsiveDrawer>
+  );
+  await user.click(
+    page.getByRole('button', { name: 'Open retryable confirmation' })
+  );
+  const confirm = page.getByRole('button', { name: 'Confirm retry' });
+  await user.click(confirm);
+  await expect.element(confirm).toBeEnabled();
+  await expect.element(page.getByText('Retryable action')).toBeVisible();
+  await user.click(confirm);
+  await expect
+    .element(page.getByText('Retryable action'))
+    .not.toBeInTheDocument();
+  expect(confirmAction).toHaveBeenCalledTimes(2);
+});
+
 test('retry actions expose localized pending feedback and prevent duplicates', async () => {
   const user = setupUser();
   let resolveRetry!: () => void;
