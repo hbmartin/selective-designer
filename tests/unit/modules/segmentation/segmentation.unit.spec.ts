@@ -234,6 +234,87 @@ describe('interactive segmentation', () => {
       ).type
     ).toBe('image_not_found');
   });
+
+  it.each(['missing source', 'upload failure', 'cleanup failure'] as const)(
+    'handles a multi-mask batch with %s',
+    async (scenario) => {
+      const bytes = { kind: 'bytes' as const, bytes: Uint8Array.of(1) };
+      const ctx = setup({
+        async segment() {
+          return Result.Ok({
+            type: 'segmented',
+            provider: 'fake',
+            endpoint: 'fake/segmentation',
+            providerRequestId: undefined,
+            costUsdMicros: 0,
+            costSource: 'price_table',
+            masks: [
+              { mask: bytes, box: [0, 0, 10, 10], score: 1 },
+              {
+                mask:
+                  scenario === 'missing source'
+                    ? { kind: 'url', url: 'https://provider.test/missing.png' }
+                    : bytes,
+                box: [10, 0, 20, 10],
+                score: 1,
+              },
+            ],
+          });
+        },
+      });
+      ctx.storage.objects.set('region-masks/previous.png', {
+        bytes: bytes.bytes,
+        contentType: 'image/png',
+      });
+      const uploadError = new AppError({
+        code: 'UPLOAD_FAILED',
+        category: 'system',
+        status: 500,
+      });
+      if (scenario !== 'missing source') {
+        const put = ctx.storage.storage.putObject;
+        vi.spyOn(ctx.storage.storage, 'putObject')
+          .mockImplementationOnce(put)
+          .mockImplementationOnce(async (input) => {
+            await put(input);
+            return Result.Error(uploadError);
+          });
+      }
+      if (scenario === 'cleanup failure') {
+        vi.spyOn(ctx.storage.storage, 'deleteObject').mockResolvedValueOnce(
+          Result.Error(
+            new AppError({
+              code: 'DELETE_FAILED',
+              category: 'system',
+              status: 500,
+            })
+          )
+        );
+      }
+
+      const outcome = await ctx.useCases.segment({
+        currentUserId: ownerId,
+        imageId: baseImageId,
+        label: 'Front door',
+        prompt: { type: 'click', points: [{ x: 0.5, y: 0.5, positive: true }] },
+      });
+      if (scenario === 'missing source') {
+        expect(okValue(outcome)).toMatchObject({
+          type: 'regions_created',
+          regions: [{ id: 'r1' }],
+        });
+        expect(ctx.regions.rows).toHaveLength(1);
+      } else {
+        expect(outcome.isError() && outcome.getError()).toBe(uploadError);
+        expect(ctx.regions.rows).toHaveLength(0);
+      }
+      expect([...ctx.storage.objects.keys()]).toEqual(
+        scenario === 'upload failure'
+          ? ['region-masks/previous.png']
+          : ['region-masks/previous.png', 'region-masks/r1.png']
+      );
+    }
+  );
 });
 
 describe('segmentation pipeline', () => {

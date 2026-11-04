@@ -104,16 +104,16 @@ export class BetterUploadObjectStorage implements ObjectStoragePort {
   async deleteObject(
     objectKey: string
   ): Promise<ApplicationResult<ObjectDeleteOutcome>> {
-    const config = getStorageConfig();
-    const client = createUploadClient();
-    const objectUrl = `${client.buildBucketUrl(config.bucketName)}/${objectKey}`;
-    const controller = new AbortController();
-    const timeoutId = setTimeout(
-      () => controller.abort(),
-      OBJECT_DELETE_TIMEOUT_MS
-    );
-
+    let timeoutId: ReturnType<typeof setTimeout> | undefined;
     try {
+      const config = getStorageConfig();
+      const client = createUploadClient();
+      const objectUrl = `${client.buildBucketUrl(config.bucketName)}/${objectKey}`;
+      const controller = new AbortController();
+      timeoutId = setTimeout(
+        () => controller.abort(),
+        OBJECT_DELETE_TIMEOUT_MS
+      );
       const response = await client.s3.fetch(objectUrl, {
         method: 'DELETE',
         signal: controller.signal,

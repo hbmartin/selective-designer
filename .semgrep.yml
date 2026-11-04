@@ -87,6 +87,16 @@ rules:
         - src/server.ts
         - drizzle/seed/**/*.ts
 
+  - id: seed-validates-before-loading-worker
+    message: Load the seed worker and auth backend only after the seed entry point validates the target and password.
+    severity: ERROR
+    languages:
+      - typescript
+    pattern-regex: '(?m)^[\t ]*import\s*(?:[^(''";]+?\bfrom\s*)?[''"](?:\./user|@/modules/auth/backend)(?:\.ts)?[''"]'
+    paths:
+      include:
+        - drizzle/seed/index.ts
+
   - id: no-unnormalized-glob-star-regexp
     message: Collapse consecutive '*' before converting glob strings to RegExp; raw split('*').join('.*') can create adjacent wildcards and backtracking risk.
     severity: ERROR

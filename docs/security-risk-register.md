@@ -38,7 +38,9 @@ periodic re-review even though `pnpm audit` reports no advisory for these.
 
 ## Accepted local tooling behavior
 
-The opt-in model smoke command saves the original provider image so operators can inspect the exact result. CodeQL flags this deliberate network-to-file flow in [alert #61](https://github.com/hbmartin/selective-designer/security/code-scanning/61). Downloads require approved HTTPS hosts, disallow redirects and cap the bytes. The script checks the image header against a format allowlist and writes to a fixed, exclusive filename in a fresh local directory. Treat the resulting artifact as external image data. Revisit this decision if the command accepts user-supplied URLs or writes to a shared or deployed location.
+| Behavior | Alerts | Decision | Next review |
+| --- | --- | --- | --- |
+| Save the original provider image during an opt-in local model smoke run | CodeQL [#61](https://github.com/hbmartin/selective-designer/security/code-scanning/61) and [#63](https://github.com/hbmartin/selective-designer/security/code-scanning/63) | Operators need the exact bytes for inspection. Downloads require approved HTTPS hosts, disallow redirects, and cap the bytes. The script checks the image header against a format allowlist and writes to a fixed, exclusive filename in a fresh local directory. Treat the artifact as external image data. Revisit if the command accepts user-supplied URLs or writes to a shared or deployed location. | 2027-02-02 |
 
 ## Implemented Controls
 

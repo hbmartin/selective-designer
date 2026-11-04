@@ -12,6 +12,10 @@ export {
 } from './application/scope-authorization';
 export type { AuthUseCaseDeps } from './application/use-cases/types';
 export {
+  PASSWORD_MAX_LENGTH,
+  PASSWORD_MIN_LENGTH,
+} from './domain/password-policy';
+export {
   defaultUserPermissions,
   hasRolePermission,
   isRole,
