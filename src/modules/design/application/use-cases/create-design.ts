@@ -129,7 +129,7 @@ export async function createDesign(
   if (ids.isError()) return Result.Error(ids.getError());
 
   deps.logger.info({ event: 'design.create' });
-  const created = await deps.designRepository.create({
+  const created = await deps.writeDesignWithBaseImage({
     id: ids.get().designId,
     ownerId: input.currentUserId,
     name: input.name,
@@ -165,7 +165,7 @@ export async function createDesign(
     }
   }
 
-  // Snapshot detection concepts after the copy has populated the mood board.
+  // Dispatch after the copy attempt. The worker snapshots the saved categories.
   const announced = await deps.imageArrivedListener.imageArrived({
     designId: design.id,
     imageId: design.baseImage.id,

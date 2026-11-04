@@ -3,25 +3,24 @@ import { inArray, notInArray, sql } from 'drizzle-orm';
 
 import { addSeedCredentials } from '@/modules/auth/backend';
 import {
-  getDefaultDbClient,
-  getSeedAccountEmails,
+  type getDefaultDbClient,
   isProdRuntimeEnvironment,
   user,
 } from '@/modules/kernel/backend';
 
 import { emphasis } from './_utils';
 
-/**
- * Seed accounts come from SEED_ADMIN_EMAIL / SEED_USER_EMAIL when provided,
- * otherwise stable local defaults keep reruns idempotent.
- */
-const { adminEmail, userEmail } = getSeedAccountEmails();
-
 const seedOnboardedAt = new Date('2024-01-01T00:00:00.000Z');
 
-export async function createUsers(password: string) {
+export async function createUsers(
+  db: ReturnType<typeof getDefaultDbClient>,
+  {
+    adminEmail,
+    userEmail,
+    password,
+  }: { adminEmail: string; userEmail: string; password: string }
+) {
   console.log(`⏳ Seeding users`);
-  const db = getDefaultDbClient();
 
   let createdCounter = 0;
   const [countRow] = await db

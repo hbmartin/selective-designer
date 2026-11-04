@@ -1,6 +1,5 @@
 import { hashPassword } from 'better-auth/crypto';
 import { eq } from 'drizzle-orm';
-import { z } from 'zod';
 
 import {
   createTransactionRunner,
@@ -9,15 +8,7 @@ import {
 } from '@/modules/kernel/infrastructure/db/client';
 
 import { account, user } from './schema';
-import {
-  PASSWORD_MAX_LENGTH,
-  PASSWORD_MIN_LENGTH,
-} from '../../domain/password-policy';
-
-export const operatorPasswordSchema = z
-  .string()
-  .min(PASSWORD_MIN_LENGTH)
-  .max(PASSWORD_MAX_LENGTH);
+import { operatorPasswordSchema } from '../../domain/password-policy';
 
 const writeCredential = (
   db: Database | DbTransaction,

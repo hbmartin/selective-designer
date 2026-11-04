@@ -26,6 +26,8 @@ describe('demo seed command', () => {
     vi.stubEnv('DATABASE_DRIVER', 'node-pg');
     vi.stubEnv('DATABASE_URL', makeTestDatabaseUrl());
     vi.stubEnv('SEED_ACCOUNT_PASSWORD', undefined);
+    vi.stubEnv('SEED_ADMIN_EMAIL', undefined);
+    vi.stubEnv('SEED_USER_EMAIL', undefined);
     vi.doMock('../../../drizzle/seed/user', loadWorker);
     const { assertLocalSeedTarget } =
       await import('@/modules/kernel/infrastructure/config/database');
@@ -76,6 +78,35 @@ describe('demo seed command', () => {
       expect(loadWorker).not.toHaveBeenCalled();
       expect(console.error).toHaveBeenCalledExactlyOnceWith(
         'SEED_ACCOUNT_PASSWORD must be 12–128 characters long.'
+      );
+    }
+  );
+
+  it.each(['SEED_ADMIN_EMAIL', 'SEED_USER_EMAIL'])(
+    'rejects an invalid %s before acquiring a client or importing the worker',
+    async (key) => {
+      vi.stubEnv(key, 'invalid');
+      await import('../../../drizzle/seed/index');
+      expect(process.exitCode).toBe(1);
+      expect(mocks.connect).not.toHaveBeenCalled();
+      expect(loadWorker).not.toHaveBeenCalled();
+    }
+  );
+
+  it.each([undefined, 'example-local-test-password'])(
+    'passes the acquired client and validated settings for override %s',
+    async (override) => {
+      vi.stubEnv('SEED_ACCOUNT_PASSWORD', override);
+      vi.stubEnv('SEED_ADMIN_EMAIL', 'admin@example.test');
+      vi.stubEnv('SEED_USER_EMAIL', 'member@example.test');
+      await import('../../../drizzle/seed/index');
+      expect(mocks.createUsers).toHaveBeenCalledExactlyOnceWith(
+        { $close: mocks.close },
+        {
+          adminEmail: 'admin@example.test',
+          userEmail: 'member@example.test',
+          password: override ?? 'local-development-only-password',
+        }
       );
     }
   );

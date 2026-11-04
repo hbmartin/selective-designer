@@ -114,6 +114,14 @@ export async function storeSegmentedMasks(
           contentType: 'image/png',
           cacheControl: IMMUTABLE_OBJECT_CACHE_CONTROL,
         }));
+    if (
+      stored.isError() &&
+      input.source !== 'detection' &&
+      stored.getError().code === 'OBJECT_STORAGE_COPY_FAILED'
+    ) {
+      attemptedKeys.pop();
+      continue;
+    }
     if (stored.isError()) {
       // A failed upload may have written the destination before losing its response.
       // oxlint-disable-next-line no-await-in-loop -- stop and clean this batch.
@@ -136,7 +144,9 @@ export async function storeSegmentedMasks(
         return Result.Ok({
           type: 'detection_mask_unavailable',
           reason:
-            outcome.type === 'copy_source_rejected'
+            outcome.type === 'copy_source_rejected' &&
+            (outcome.reason === 'insecure_url' ||
+              outcome.reason === 'too_large')
               ? 'invalid_mask'
               : 'mask_unavailable',
         });

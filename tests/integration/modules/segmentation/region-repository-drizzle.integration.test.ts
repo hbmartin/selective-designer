@@ -127,6 +127,100 @@ describe('RegionRepositoryDrizzle', () => {
     });
   });
 
+  it('does not mix regions read before publication with status read after finalization', async () => {
+    const run = { imageId, runId: 'finalizing' };
+    const expiresAt = new Date('2027-01-01T00:00:00.000Z');
+    expect(
+      okValue(
+        await repository.startDetection({
+          ...run,
+          expiresAtMs: expiresAt.getTime(),
+        })
+      ).type
+    ).toBe('detection_started');
+
+    const reader = await createPgliteTestDatabase();
+    const readerRepository = createRegionRepository({ db: reader.db });
+    const query = reader.db.$client.query.bind(reader.db.$client);
+    const published = Promise.withResolvers<void>();
+    const intercepted = vi
+      .spyOn(reader.db.$client, 'query')
+      .mockImplementation(
+        async <TRow extends Record<string, unknown>>(
+          statement: string,
+          values?: readonly unknown[]
+        ) => {
+          // Drizzle supplies a pg QueryConfig for mapped selections.
+          const sql =
+            typeof statement === 'string'
+              ? statement
+              : (statement as { text: string }).text;
+          const readsRegions = sql.includes('"region"');
+          if (!readsRegions) await published.promise;
+          const result = await query<TRow>(statement, values);
+          if (readsRegions) {
+            try {
+              expect(
+                okValue(
+                  await repository.replaceDetections({
+                    ...run,
+                    concept: 'window',
+                    regions: [region('last-region', 'window')],
+                  })
+                ).type
+              ).toBe('regions_saved');
+              expect(okValue(await repository.finishDetection(run)).type).toBe(
+                'detection_finished'
+              );
+            } finally {
+              published.resolve();
+            }
+          }
+          return result;
+        }
+      );
+
+    try {
+      expect(
+        okValue(await readerRepository.listByImage(imageId))
+      ).toMatchObject({
+        regions: [],
+        detection: { type: 'detection_recorded', expiresAt },
+      });
+      expect(intercepted).toHaveBeenCalledOnce();
+      intercepted.mockRestore();
+      expect(
+        okValue(await readerRepository.listByImage(imageId))
+      ).toMatchObject({
+        detection: { type: 'no_detection' },
+        regions: [{ id: 'last-region' }],
+      });
+    } finally {
+      intercepted.mockRestore();
+      await reader.close();
+    }
+  });
+
+  it('rejects a worker-only replacement without deleting existing regions', async () => {
+    expect(
+      okValue(await repository.insertMany([region('existing', 'window')])).type
+    ).toBe('regions_saved');
+    const partial = {
+      imageId,
+      concept: 'window',
+      workerId: 'worker',
+      regions: [],
+    };
+    // @ts-expect-error Simulate malformed input crossing the typed boundary.
+    const outcome = await repository.replaceDetections(partial);
+    expect(outcome.isError() && outcome.getError().code).toBe(
+      'DETECTION_IDENTITY_INVALID'
+    );
+    expect(
+      okValue(await repository.listByImage(imageId)).regions
+    ).toMatchObject([{ id: 'existing' }]);
+  });
+
   it('lets an accepted worker publish even if its queue acknowledgement was lost', async () => {
     const now = new Date('2027-01-01T00:00:00.000Z');
     const enqueue = vi.fn(async () =>
@@ -228,7 +322,7 @@ describe('RegionRepositoryDrizzle', () => {
     const now = new Date('2027-01-01T00:00:00.000Z');
     const expiresAtMs = now.getTime() + 30_000;
     const first = { imageId, runId: 'first' };
-    const second = { imageId, runId: 'second' };
+    const second = { imageId, runId: 'second', workerId: 'worker-second' };
     await repository.startDetection({
       ...first,
       expiresAtMs,
@@ -269,6 +363,16 @@ describe('RegionRepositoryDrizzle', () => {
           runId: second.runId,
           now,
           expiresAtMs,
+          dispatch: { previousPhase: null, initial: false },
+        })
+      ).type
+    ).toBe('detection_started');
+    expect(
+      okValue(
+        await repository.claimDetection({
+          ...second,
+          now,
+          expiresAt: new Date(expiresAtMs),
         })
       ).type
     ).toBe('detection_started');
@@ -420,7 +524,9 @@ describe('RegionRepositoryDrizzle', () => {
       'detection_queue_rejected'
     );
     categories = ['sofa', 'pendant light'];
-    await scheduler.schedule({ imageId });
+    expect(okValue(await scheduler.schedule({ imageId })).type).toBe(
+      'auto_detection_scheduled'
+    );
     expect(enqueue).toHaveBeenCalledOnce();
     expect(okValue(await repository.findDetection(imageId))).toMatchObject({
       type: 'detection_lease',
@@ -515,6 +621,7 @@ describe('RegionRepositoryDrizzle', () => {
     await repository.startDetection({
       ...oldRun,
       expiresAtMs: expiresAt.getTime(),
+      progress: { ...newDetectionProgress(null), concepts: ['window'] },
     });
     const claims = await Promise.all([
       repository.resumeDetection({
@@ -522,22 +629,35 @@ describe('RegionRepositoryDrizzle', () => {
         runId: newRun.runId,
         now: expiresAt,
         expiresAtMs: nextExpiry.getTime(),
+        dispatch: { previousPhase: null, initial: false },
       }),
       repository.resumeDetection({
         previous: oldRun,
         runId: 'other',
         now: expiresAt,
         expiresAtMs: nextExpiry.getTime(),
+        dispatch: { previousPhase: null, initial: false },
       }),
     ]);
     expect(claims.map((claim) => okValue(claim).type).sort()).toEqual([
       'detection_already_started',
       'detection_started',
     ]);
-    const winner =
-      okValue(claims[0]!).type === 'detection_started'
+    const winner = {
+      ...(okValue(claims[0]!).type === 'detection_started'
         ? newRun
-        : { ...newRun, runId: 'other' };
+        : { ...newRun, runId: 'other' }),
+      workerId: 'worker-winner',
+    };
+    expect(
+      okValue(
+        await repository.claimDetection({
+          ...winner,
+          now: expiresAt,
+          expiresAt: nextExpiry,
+        })
+      ).type
+    ).toBe('detection_started');
     await repository.finishDetection(oldRun);
     expect(
       okValue(await repository.listByImage(imageId)).detection
@@ -565,11 +685,28 @@ describe('RegionRepositoryDrizzle', () => {
         })
       ).type
     ).toBe('regions_saved');
-    await repository.finishDetection(winner);
+    await repository.finalizeDetection({ ...winner, now: expiresAt });
     expect(okValue(await repository.listByImage(imageId))).toMatchObject({
       detection: { type: 'no_detection' },
       regions: [{ id: 'new-result' }],
     });
+  });
+
+  it('identifies a server-rejected interactive region insert', async () => {
+    const existing = region('existing', 'door', 'click');
+    expect(okValue(await repository.insertMany([existing])).type).toBe(
+      'regions_saved'
+    );
+    const duplicate = await repository.insertMany([
+      region('never-published', 'chair', 'click'),
+      existing,
+    ]);
+    expect(duplicate.isError() && duplicate.getError().code).toBe(
+      'REGION_INSERT_REJECTED'
+    );
+    expect(
+      okValue(await repository.listByImage(imageId)).regions.map(({ id }) => id)
+    ).toEqual([existing.id]);
   });
 
   it('replaces detections per concept and keeps user regions', async () => {

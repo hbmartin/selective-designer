@@ -61,6 +61,74 @@ describe('smoke model artifacts', () => {
     });
   });
 
+  it.each([
+    {
+      url: 'https://unknown.test/image',
+      reason: 'download_url_rejected',
+      fetch: vi.fn(),
+    },
+    {
+      url: 'https://fal.media/image',
+      reason: 'download_timeout',
+      fetch: vi
+        .fn()
+        .mockRejectedValue(new DOMException('private details', 'TimeoutError')),
+    },
+    {
+      url: 'https://fal.media/image',
+      reason: 'download_failed',
+      fetch: vi.fn().mockRejectedValue(new TypeError('private details')),
+    },
+  ])(
+    'retains paid-run diagnostics for $reason',
+    async ({ url, reason, fetch }) => {
+      vi.stubGlobal('fetch', fetch);
+      await writeSmokeOutput(
+        directory,
+        await downloadSmokeOutput(url, 'krea-3'),
+        {
+          costUsdMicros: 7,
+          settings: { size: 512 },
+        }
+      );
+      expect(await readdir(directory)).toEqual(['result.json']);
+      expect(
+        JSON.parse(await readFile(join(directory, 'result.json'), 'utf8'))
+      ).toEqual({
+        status: 'rejected',
+        reason,
+        costUsdMicros: 7,
+        settings: { size: 512 },
+      });
+    }
+  );
+
+  it('discards an HTTP error body and records the status', async () => {
+    const cancel = vi.fn().mockRejectedValue(new Error('body already closed'));
+    vi.stubGlobal(
+      'fetch',
+      vi
+        .fn()
+        .mockResolvedValue(
+          new Response(new ReadableStream({ cancel }), { status: 403 })
+        )
+    );
+    const output = await downloadSmokeOutput(
+      'https://fal.media/image',
+      'krea-3'
+    );
+    await writeSmokeOutput(directory, output, { costUsdMicros: 7 });
+    expect(cancel).toHaveBeenCalledOnce();
+    expect(
+      JSON.parse(await readFile(join(directory, 'result.json'), 'utf8'))
+    ).toEqual({
+      status: 'rejected',
+      reason: 'download_http_error',
+      costUsdMicros: 7,
+      httpStatus: 403,
+    });
+  });
+
   it.each(['declared', 'streamed', 'empty'] as const)(
     'records the reason for a %s rejected download without saving an image',
     async (scenario) => {

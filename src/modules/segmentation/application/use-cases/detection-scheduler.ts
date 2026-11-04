@@ -90,7 +90,7 @@ export const createDetectionScheduler = (deps: {
       runId,
       now,
       expiresAtMs: now.getTime() + DETECTION_START_WINDOW_MS,
-      legacyProgress: progress,
+      progress,
       dispatch: { previousPhase: lease.phase, initial },
     });
     if (claimed.isError()) return Result.Error(claimed.getError());
@@ -106,10 +106,10 @@ export const createDetectionScheduler = (deps: {
       const found = await deps.regionRepository.findDetection(imageId);
       if (found.isError()) return Result.Error(found.getError());
       const lease = found.get();
-      if (
-        lease.type === 'no_detection' ||
-        (lease.phase !== 'ready' && lease.phase !== 'copying')
-      ) {
+      if (lease.type === 'no_detection') {
+        return Result.Ok({ type: 'detection_intent_missing' });
+      }
+      if (lease.phase !== 'ready' && lease.phase !== 'copying') {
         return Result.Ok({ type: 'auto_detection_scheduled' });
       }
       const dispatch = await claimDispatch(imageId, lease, true);
@@ -136,9 +136,11 @@ export const createDetectionScheduler = (deps: {
 
       let progress: DetectionProgress | undefined;
       if (!lease.progress) {
-        const source = await deps.findCarrySource(imageId);
+        const [source, labels] = await Promise.all([
+          deps.findCarrySource(imageId),
+          deps.regionRepository.detectionLabels(imageId),
+        ]);
         if (source.isError()) return Result.Error(source.getError());
-        const labels = await deps.regionRepository.detectionLabels(imageId);
         if (labels.isError()) return Result.Error(labels.getError());
         const carry = source.get();
         progress = {

@@ -1,7 +1,11 @@
 import { writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 
-import { readLimitedBody } from '@/modules/kernel/backend';
+import {
+  discardResponseBody,
+  hasOversizedResponseBody,
+  readLimitedBody,
+} from '@/modules/kernel/backend';
 import type { ModelId } from '@/modules/rendering';
 import {
   contentTypeForFormat,
@@ -12,37 +16,61 @@ export const MAX_OUTPUT_BYTES = 40 * 1024 * 1024;
 
 type SmokeImage =
   | { type: 'image'; bytes: Uint8Array }
-  | { type: 'download_limit' }
-  | { type: 'no_image' };
+  | { type: 'download_http_error'; status: number }
+  | {
+      type:
+        | 'download_limit'
+        | 'download_url_rejected'
+        | 'download_timeout'
+        | 'download_failed'
+        | 'no_image';
+    };
+
+type RejectionReason =
+  | Exclude<SmokeImage['type'], 'image'>
+  | 'inline_output_limit'
+  | 'unsupported_format';
 
 export async function downloadSmokeOutput(
   value: string,
   modelId: ModelId
 ): Promise<SmokeImage> {
-  const url = new URL(value);
+  const url = URL.parse(value);
   const domain = modelId === 'flux-3-image' ? 'bfl.ai' : 'fal.media';
   if (
+    !url ||
     url.protocol !== 'https:' ||
     url.port ||
     url.username ||
     url.password ||
     (url.hostname !== domain && !url.hostname.endsWith(`.${domain}`))
   )
-    throw new Error('The provider returned an unexpected download URL.');
-  const response = await fetch(url, {
-    redirect: 'error',
-    signal: AbortSignal.timeout(30_000),
-  });
-  if (!response.ok)
-    throw new Error(`Could not download the result (HTTP ${response.status}).`);
-  if (Number(response.headers.get('content-length')) > MAX_OUTPUT_BYTES) {
-    await response.body?.cancel();
-    return { type: 'download_limit' };
+    return { type: 'download_url_rejected' };
+
+  const signal = AbortSignal.timeout(30_000);
+  try {
+    const response = await fetch(url, { redirect: 'error', signal });
+    if (!response.ok) {
+      await discardResponseBody(response);
+      return { type: 'download_http_error', status: response.status };
+    }
+    if (hasOversizedResponseBody(response, MAX_OUTPUT_BYTES)) {
+      await discardResponseBody(response);
+      return { type: 'download_limit' };
+    }
+    const bytes = await readLimitedBody(response, MAX_OUTPUT_BYTES);
+    return bytes === undefined
+      ? { type: 'download_limit' }
+      : { type: 'image', bytes };
+  } catch (error) {
+    return {
+      type:
+        signal.aborted ||
+        (error instanceof Error && error.name === 'TimeoutError')
+          ? 'download_timeout'
+          : 'download_failed',
+    };
   }
-  const bytes = await readLimitedBody(response, MAX_OUTPUT_BYTES);
-  return bytes === undefined
-    ? { type: 'download_limit' }
-    : { type: 'image', bytes };
 }
 
 export async function writeSmokeOutput(
@@ -56,14 +84,19 @@ export async function writeSmokeOutput(
       JSON.stringify({ ...diagnostics, ...output }, null, 2),
       { flag: 'wx' }
     );
-  const reject = async (reason: string, details?: Record<string, unknown>) => {
+  const reject = async (
+    reason: RejectionReason,
+    details?: Record<string, unknown>
+  ) => {
     await writeManifest({ status: 'rejected', reason, ...details });
     return { type: 'output_rejected', reason } as const;
   };
+  if (image.type === 'download_http_error')
+    return reject(image.type, { httpStatus: image.status });
   if (image.type !== 'image') return reject(image.type);
   const { bytes } = image;
   if (!bytes.length) return reject('no_image');
-  if (bytes.byteLength > MAX_OUTPUT_BYTES) return reject('download_limit');
+  if (bytes.byteLength > MAX_OUTPUT_BYTES) return reject('inline_output_limit');
 
   const dimensions = readImageDimensions(bytes);
   const filename =

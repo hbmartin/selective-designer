@@ -9,20 +9,22 @@ import {
   toRegionId,
 } from '@/modules/kernel/domain/ids';
 import { createTransactionRunner } from '@/modules/kernel/infrastructure/db/client';
+import { getDatabaseErrorCode } from '@/modules/kernel/infrastructure/db/db-error-details';
 import { observeRepository } from '@/modules/kernel/infrastructure/db/observability';
 import {
   type DbLike,
   type DbTransaction,
   isRootDatabase,
 } from '@/modules/kernel/infrastructure/db/types';
+import { detectionRunFor } from '@/modules/segmentation/application/detection-run';
 import type {
   DetectionOmission,
-  DetectionProgress,
   DetectionRun,
   NewRegion,
   RegionRepository,
 } from '@/modules/segmentation/application/ports/ports';
 import {
+  isDetectionConceptSettled,
   type Region,
   type RegionSource,
   regionSources,
@@ -116,14 +118,6 @@ const runPhase = (run: DetectionRun) =>
     ? isNull(activeDetection.phase)
     : eq(activeDetection.phase, 'running');
 
-const conceptSettled = (
-  progress: DetectionProgress | null | undefined,
-  concept: string
-) =>
-  progress?.completedConcepts.includes(concept) ||
-  progress?.omissions?.some((omission) => omission.concept === concept);
-
-/** Lock the lease row in the same transaction as publishing region changes. */
 const lockDetection = async (db: DbLike, run: DetectionRun) => {
   const [row] = await db
     .select({ progress: activeDetection.progress })
@@ -162,37 +156,42 @@ export const createRegionRepository = ({
   const repository: RegionRepository = {
     async listByImage(imageId) {
       try {
-        const [rows, [lease]] = await Promise.all([
-          db
-            .select()
-            .from(regionTable)
-            .where(eq(regionTable.imageId, imageId))
-            .orderBy(asc(regionTable.createdAt), asc(regionTable.id)),
-          db
-            .select({
-              expiresAt: activeDetection.expiresAt,
-              failed: activeDetection.failed,
-              phase: activeDetection.phase,
-              omissions: sql<
-                DetectionOmission[] | null
-              >`${activeDetection.progress}->'omissions'`,
-            })
-            .from(activeDetection)
-            .where(eq(activeDetection.imageId, imageId))
-            .limit(1),
-        ]);
-        const parsed = parseAll(rows);
+        // Read the regions and their display status from the same snapshot.
+        // The anchor also returns the status when no regions exist yet.
+        const rows = await db
+          .select({
+            region: regionTable,
+            expiresAt: activeDetection.expiresAt,
+            failed: activeDetection.failed,
+            phase: activeDetection.phase,
+            omissions: sql<DetectionOmission[] | null>`
+              case when row_number() over (order by ${regionTable.createdAt}, ${regionTable.id}) = 1
+                then ${activeDetection.progress}->'omissions'
+              end
+            `,
+          })
+          .from(sql`(select 1) as requested_image`)
+          .leftJoin(regionTable, eq(regionTable.imageId, imageId))
+          .leftJoin(activeDetection, eq(activeDetection.imageId, imageId))
+          .orderBy(asc(regionTable.createdAt), asc(regionTable.id));
+        const parsed = parseAll(
+          rows.flatMap(({ region }) => (region ? [region] : []))
+        );
         if (parsed.isError()) return Result.Error(parsed.getError());
+        const lease = rows[0];
         return Result.Ok({
           type: 'regions_listed',
           regions: parsed.get(),
-          detection: lease
-            ? {
-                type: 'detection_recorded',
-                ...lease,
-                omissions: lease.omissions ?? [],
-              }
-            : { type: 'no_detection' },
+          detection:
+            lease?.expiresAt && lease.failed !== null
+              ? {
+                  type: 'detection_recorded',
+                  expiresAt: lease.expiresAt,
+                  failed: lease.failed,
+                  phase: lease.phase,
+                  omissions: lease.omissions ?? [],
+                }
+              : { type: 'no_detection' },
         });
       } catch (error) {
         return Result.Error(dbError(error));
@@ -260,20 +259,17 @@ export const createRegionRepository = ({
             runId: input.runId,
             failed: false,
             expiresAt: new Date(input.expiresAtMs),
-            ...(input.dispatch
-              ? { phase: 'queued' as const, workerId: null }
-              : {}),
-            ...(input.legacyProgress ? { progress: input.legacyProgress } : {}),
+            phase: 'queued',
+            workerId: null,
+            ...(input.progress ? { progress: input.progress } : {}),
           })
           .where(
             and(
               ownedDetection(input.previous),
-              input.dispatch
-                ? input.dispatch.previousPhase === null
-                  ? isNull(activeDetection.phase)
-                  : eq(activeDetection.phase, input.dispatch.previousPhase)
-                : isNull(activeDetection.phase),
-              input.dispatch?.initial
+              input.dispatch.previousPhase === null
+                ? isNull(activeDetection.phase)
+                : eq(activeDetection.phase, input.dispatch.previousPhase),
+              input.dispatch.initial
                 ? undefined
                 : or(
                     eq(activeDetection.failed, true),
@@ -340,7 +336,7 @@ export const createRegionRepository = ({
           const owned = await lockDetection(tx, run);
           if (!owned?.progress)
             return Result.Ok({ type: 'detection_superseded' } as const);
-          if (conceptSettled(owned.progress, concept))
+          if (isDetectionConceptSettled(owned.progress, concept))
             return Result.Ok({
               type: 'detection_concept_already_completed',
             } as const);
@@ -397,7 +393,7 @@ export const createRegionRepository = ({
           if (
             carryOverCompleted &&
             concepts?.every((concept) =>
-              conceptSettled(owned.progress, concept)
+              isDetectionConceptSettled(owned.progress, concept)
             )
           ) {
             if (omissions?.length)
@@ -477,25 +473,39 @@ export const createRegionRepository = ({
           await db.insert(regionTable).values(regions.map(toValues));
         return Result.Ok({ type: 'regions_saved' });
       } catch (error) {
+        // PostgreSQL rejected the single unfenced INSERT. Transport errors can
+        // arrive after it commits and do not prove the fresh masks are unused.
+        if (
+          !run &&
+          ['23502', '23503', '23505', '23514'].includes(
+            getDatabaseErrorCode(error) ?? ''
+          )
+        ) {
+          return Result.Error(
+            new AppError({
+              code: 'REGION_INSERT_REJECTED',
+              category: 'system',
+              status: 500,
+              message: 'Region persistence failed',
+              cause: error,
+            })
+          );
+        }
         return Result.Error(dbError(error));
       }
     },
     async replaceDetections(input) {
+      const identity = detectionRunFor(input.imageId, input);
+      if (identity.isError()) return Result.Error(identity.getError());
+      const run = identity.get();
       try {
         return await transact(async (tx) => {
-          const run =
-            input.runId === undefined
-              ? null
-              : {
-                  imageId: input.imageId,
-                  runId: input.runId,
-                  workerId: input.workerId,
-                  now: input.now,
-                };
-          const owned = run ? await lockDetection(tx, run) : undefined;
+          const owned = run
+            ? await lockDetection(tx, { ...run, now: input.now })
+            : undefined;
           if (run && !owned)
             return Result.Ok({ type: 'detection_superseded' } as const);
-          if (conceptSettled(owned?.progress, input.concept))
+          if (isDetectionConceptSettled(owned?.progress, input.concept))
             return Result.Ok({
               type: 'detection_concept_already_completed',
             } as const);

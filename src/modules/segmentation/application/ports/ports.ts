@@ -27,12 +27,15 @@ export type NewRegion = {
   carriedFromRegionId: RegionId | null;
 };
 
-export type DetectionRun = {
+export type DetectionIdentity =
+  | { runId?: string | null; workerId?: never }
+  | { runId: string; workerId: string };
+export type DetectionRun = DetectionIdentity & {
   imageId: ImageId;
   runId: string | null;
-  workerId?: string;
   now?: Date;
 };
+export type ClaimedDetectionRun = Extract<DetectionRun, { workerId: string }>;
 export type DetectionOmission = {
   concept: string;
   reason: 'prompt_rejected' | 'invalid_mask';
@@ -94,15 +97,15 @@ export interface RegionRepository {
     runId: string;
     now: Date;
     expiresAtMs: number;
-    legacyProgress?: DetectionProgress;
-    dispatch?: { previousPhase: DetectionPhase | null; initial: boolean };
+    progress?: DetectionProgress;
+    dispatch: { previousPhase: DetectionPhase | null; initial: boolean };
   }): Promise<ApplicationResult<DetectionClaim>>;
   findDetection(
     imageId: ImageId
   ): Promise<ApplicationResult<DetectionLease | { type: 'no_detection' }>>;
   detectionLabels(imageId: ImageId): Promise<ApplicationResult<string[]>>;
   claimDetection(
-    run: Required<DetectionRun> & { expiresAt: Date }
+    run: ClaimedDetectionRun & { now: Date; expiresAt: Date }
   ): Promise<ApplicationResult<DetectionClaim>>;
   failDispatch(
     run: DetectionRun
@@ -142,14 +145,14 @@ export interface RegionRepository {
     run?: DetectionRun
   ): Promise<ApplicationResult<WriteRegionsOutcome>>;
   /** Replace automatic detections of one concept on an image (idempotent re-runs). */
-  replaceDetections(input: {
-    imageId: ImageId;
-    concept: string;
-    regions: NewRegion[];
-    runId?: string | null;
-    workerId?: string;
-    now?: Date;
-  }): Promise<
+  replaceDetections(
+    input: DetectionIdentity & {
+      imageId: ImageId;
+      concept: string;
+      regions: NewRegion[];
+      now?: Date;
+    }
+  ): Promise<
     ApplicationResult<
       WriteRegionsOutcome | { type: 'detection_concept_already_completed' }
     >
@@ -234,7 +237,9 @@ export interface Segmenter {
 export interface AutoDetectionScheduler {
   schedule(input: {
     imageId: ImageId;
-  }): Promise<ApplicationResult<DetectionDispatch>>;
+  }): Promise<
+    ApplicationResult<DetectionDispatch | { type: 'detection_intent_missing' }>
+  >;
 }
 
 export type DetectionDispatch =

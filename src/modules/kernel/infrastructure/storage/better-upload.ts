@@ -23,7 +23,11 @@ import type { ApplicationResult } from '@/modules/kernel/application/result';
 import { AppError } from '@/modules/kernel/domain/errors/app-error';
 import { getStorageConfig } from '@/modules/kernel/infrastructure/config/storage';
 
-import { readLimitedBody } from './limited-response-body';
+import {
+  discardResponseBody,
+  hasOversizedResponseBody,
+  readLimitedBody,
+} from './limited-response-body';
 
 const OBJECT_DELETE_TIMEOUT_MS = 5_000;
 const OBJECT_COPY_TIMEOUT_MS = 60_000;
@@ -118,6 +122,7 @@ export class BetterUploadObjectStorage implements ObjectStoragePort {
         method: 'DELETE',
         signal: controller.signal,
       });
+      await discardResponseBody(response);
       if (response.ok || response.status === 404) {
         return Result.Ok({ type: 'object_deleted' });
       }
@@ -277,6 +282,7 @@ export class BetterUploadObjectStorage implements ObjectStoragePort {
         signal: controller.signal,
       });
       if (!response.ok) {
+        await discardResponseBody(response);
         return Result.Ok({
           type: 'copy_source_unavailable',
           status: response.status,
@@ -292,14 +298,18 @@ export class BetterUploadObjectStorage implements ObjectStoragePort {
           .map((type) => type.toLowerCase())
           .includes(contentType)
       ) {
+        await discardResponseBody(response);
         return Result.Ok({
           type: 'copy_source_rejected',
           reason: 'content_type',
         });
       }
-      const declaredLength = Number(response.headers.get('content-length'));
-      if (Number.isFinite(declaredLength) && declaredLength > input.maxBytes) {
-        return Result.Ok({ type: 'copy_source_rejected', reason: 'too_large' });
+      if (hasOversizedResponseBody(response, input.maxBytes)) {
+        await discardResponseBody(response);
+        return Result.Ok({
+          type: 'copy_source_rejected',
+          reason: 'declared_too_large',
+        });
       }
       const bytes = await readLimitedBody(response, input.maxBytes);
       if (!bytes) {

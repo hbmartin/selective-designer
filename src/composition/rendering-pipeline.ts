@@ -178,9 +178,14 @@ export const createResultImages = (
       imageId,
     });
     if (scheduled.isError()) {
-      // Detection is a convenience; a result without it is still a result.
+      // The image and intent have committed. The editor can recover dispatch.
       kernel.logger.warn({
         event: 'rendering.result.detection_not_scheduled',
+        details: { imageId },
+      });
+    } else if (scheduled.get().type === 'detection_intent_missing') {
+      kernel.logger.warn({
+        event: 'segmentation.detection.intent_missing',
         details: { imageId },
       });
     }

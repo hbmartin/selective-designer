@@ -9,7 +9,11 @@ import {
 } from '@/modules/kernel/domain/ids';
 import { objectKeyMatchesPurpose } from '@/modules/kernel/domain/upload-policy';
 
-import { providerCallIdFor, storeSegmentedMasks } from './store-masks';
+import {
+  discardUnpublishedMasks,
+  providerCallIdFor,
+  storeSegmentedMasks,
+} from './store-masks';
 import {
   type SegmentationResultOf,
   type SegmentationUseCaseDeps,
@@ -246,8 +250,23 @@ export async function segmentByPrompt(
   });
   if (regions.isError()) return Result.Error(regions.getError());
   const stored = regions.get();
+  if (result.masks.length > 0 && stored.regions.length === 0) {
+    return Result.Ok({
+      type: 'segmentation_failed',
+      reason: 'mask_unavailable',
+    });
+  }
   const saved = await deps.regionRepository.insertMany(stored.regions);
-  if (saved.isError()) return Result.Error(saved.getError());
+  if (saved.isError()) {
+    const error = saved.getError();
+    if (error.code === 'REGION_INSERT_REJECTED') {
+      await discardUnpublishedMasks(
+        deps,
+        stored.regions.map(({ maskKey }) => maskKey)
+      );
+    }
+    return Result.Error(error);
+  }
   const views = await toViews(
     deps,
     stored.regions.map((region) => ({ ...region, createdAt: deps.clock.now() }))

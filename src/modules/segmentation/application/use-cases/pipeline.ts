@@ -12,7 +12,13 @@ import {
   type SegmentationResultOf,
   SIGNED_MASK_URL_SECONDS,
 } from './types';
-import { detectionConcepts, isUserMadeSource } from '../../domain/region';
+import { detectionRunFor, ownsDetectionLease } from '../detection-run';
+import type { DetectionIdentity } from '../ports/ports';
+import {
+  detectionConcepts,
+  isDetectionConceptSettled,
+  isUserMadeSource,
+} from '../../domain/region';
 
 /** Concepts automatic detection looks for in this image's design. */
 export async function detectionConceptsFor(
@@ -43,12 +49,7 @@ export async function detectionConceptsFor(
  */
 export async function detectConcept(
   deps: SegmentationPipelineDeps,
-  input: {
-    imageId: ImageId;
-    concept: string;
-    runId?: string | null;
-    workerId?: string;
-  }
+  input: DetectionIdentity & { imageId: ImageId; concept: string }
 ): Promise<
   SegmentationResultOf<
     | { type: 'concept_detected'; count: number }
@@ -59,34 +60,16 @@ export async function detectConcept(
     | { type: 'image_missing' }
   >
 > {
-  const run =
-    input.runId === undefined
-      ? undefined
-      : {
-          imageId: input.imageId,
-          runId: input.runId,
-          workerId: input.workerId,
-        };
+  const identity = detectionRunFor(input.imageId, input);
+  if (identity.isError()) return Result.Error(identity.getError());
+  const run = identity.get();
   if (run) {
     const found = await deps.regionRepository.findDetection(run.imageId);
     if (found.isError()) return Result.Error(found.getError());
     const lease = found.get();
-    if (
-      lease.type !== 'detection_lease' ||
-      lease.phase !== (run.workerId === undefined ? null : 'running') ||
-      lease.runId !== run.runId ||
-      lease.workerId !== (run.workerId ?? null) ||
-      lease.failed ||
-      lease.expiresAt <= deps.clock.now()
-    ) {
+    if (!ownsDetectionLease(lease, run, deps.clock.now()))
       return Result.Ok({ type: 'detection_superseded' });
-    }
-    if (
-      lease.progress?.completedConcepts.includes(input.concept) ||
-      lease.progress?.omissions?.some(
-        ({ concept }) => concept === input.concept
-      )
-    ) {
+    if (isDetectionConceptSettled(lease.progress, input.concept)) {
       return Result.Ok({ type: 'detection_concept_already_completed' });
     }
   }
@@ -176,11 +159,10 @@ export async function detectConcept(
     return Result.Ok({ type: 'concept_failed', reason: 'mask_unavailable' });
   }
   const saved = await deps.regionRepository.replaceDetections({
+    ...run,
     imageId: image.imageId,
     concept: input.concept,
     regions: stored.regions,
-    runId: input.runId,
-    workerId: input.workerId,
     now: deps.clock.now(),
   });
   // A persistence error may have arrived after the commit.
@@ -203,12 +185,7 @@ export async function detectConcept(
  */
 export async function carryOverRegions(
   deps: SegmentationPipelineDeps,
-  input: {
-    fromImageId: ImageId;
-    toImageId: ImageId;
-    runId?: string | null;
-    workerId?: string;
-  }
+  input: DetectionIdentity & { fromImageId: ImageId; toImageId: ImageId }
 ): Promise<
   SegmentationResultOf<
     | { type: 'regions_carried_over'; count: number }
@@ -216,6 +193,10 @@ export async function carryOverRegions(
     | { type: 'detection_superseded' }
   >
 > {
+  const identity = detectionRunFor(input.toImageId, input);
+  if (identity.isError()) return Result.Error(identity.getError());
+  const run = identity.get();
+
   const target = await deps.imageAccess.find(input.toImageId);
   if (target.isError()) return Result.Error(target.getError());
   const targetOutcome = target.get();
@@ -255,17 +236,10 @@ export async function carryOverRegions(
       carriedFromRegionId: region.id,
     });
   }
-  if (copies.length > 0 || input.runId !== undefined) {
+  if (copies.length > 0 || run) {
     const saved = await deps.regionRepository.insertMany(
       copies,
-      input.runId === undefined
-        ? undefined
-        : {
-            imageId: input.toImageId,
-            runId: input.runId,
-            workerId: input.workerId,
-            now: deps.clock.now(),
-          }
+      run && { ...run, now: deps.clock.now() }
     );
     if (saved.isError()) return Result.Error(saved.getError());
     if (saved.get().type === 'detection_superseded')

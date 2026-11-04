@@ -99,7 +99,7 @@ Decisions come from two planning interviews held on the same day. Conflicts betw
 
 **P1: Infrastructure**
 - **Vite:** add `workflow()` from `workflow/vite` as the **first** plugin in `vite.config.ts`, and the workflow tsconfig plugin.
-- **Provider config:** add `kernel/infrastructure/config/ai-providers.ts` (`FAL_KEY`, `BFL_API_KEY`, `PROVIDER_MODE=live|fake`, `PROVIDER_CALLBACK_MODE=webhook|poll`, `VERCEL_AUTOMATION_BYPASS_SECRET`, `RENDER_ENABLED_MODELS`) and register it in `config/server.ts`.
+- **Provider config:** add `kernel/infrastructure/config/ai-providers.ts` (`FAL_KEY`, `BFL_API_KEY`, `PROVIDER_MODE=live|fake`, optional `PROVIDER_CALLBACK_MODE=poll`, `VERCEL_AUTOMATION_BYPASS_SECRET`, `RENDER_ENABLED_MODELS`) and register it in `config/server.ts`.
 - **Storage:** extend `kernel/application/ports/object-storage.ts` with `putObject`, `getObjectBytes`, `createSignedReadUrl` and `copyFromUrl`, implemented in `kernel/infrastructure/storage/better-upload.ts` with aws4fetch signing. Remove `VITE_S3_BUCKET_PUBLIC_URL` and fix CSP `img-src`.
 - **Uploads:** add a DB-backed `upload_intent` table to replace the in-memory `SecondaryStore` binding, which breaks across Vercel instances. Generalise `book-policy.ts` into a kernel `upload-policy.ts`.
 - **Cost log:** a `provider_call` table.
@@ -125,7 +125,7 @@ Decisions come from two planning interviews held on the same day. Conflicts betw
 - **Domain:** `model-catalog.ts` (targeting, mask polarity, reference limits, minimum target size), `edit-set.ts` (a zod union), `render-plan.ts` (include or skip each model, plus small-item warnings) and `prompt-builder.ts`.
 - **Tables:** `draft(renderSourceImageId, revision)`, `edit`, `render(recipe jsonb snapshot, batchId?, preferredResultId?)`, `batch`, `render_result(status pending|running|succeeded|failed|skipped, skipReason, attempt, providerRequestId, model, version, settings, prompt, outputImageId, framingChanged, error)` and `scheme`.
 - **Adapters:** `providers/fal/{krea-v3,ideogram-v4-5,gpt-image-2}.ts`, `providers/bfl/flux-3-image.ts` and `providers/fake/*`.
-- **Workflow:** `transport/workflows/render-workflow.ts` runs `Promise.allSettled(runResult)`. Each result is submitted idempotently, then waits on a hook resumed by the verified `/api/webhooks/fal` route (raced against `sleep` as a fallback), or is polled locally or for BFL. The output is copied straight to `results/{id}/{attempt}/raw.*`, the image-arrived listener fires (carry-over plus auto-detection), and the cost is logged.
+- **Workflow:** `transport/workflows/render-workflow.ts` runs `Promise.allSettled(runResult)`. Each result is submitted idempotently, then the workflow polls the provider for completion. The output is copied straight to `results/{id}/{attempt}/raw.*`, the image-arrived listener fires (carry-over plus auto-detection), and the cost is logged.
 - **Retry:** `retryResult` starts a single-result workflow.
 - **Permissions:** steps call pipeline use cases exported through `backend.ts`, because a step has no request headers for permission checks.
 

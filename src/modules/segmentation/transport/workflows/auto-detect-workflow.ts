@@ -3,6 +3,8 @@ import { FatalError, getWorkflowMetadata } from 'workflow';
 import { toImageId } from '@/modules/kernel/domain/ids';
 import { unwrapStepResult } from '@/modules/kernel/transport/workflow/step-result-mapper';
 
+import { isDetectionConceptSettled } from '../../domain/region';
+
 const imageIdOrFail = (value: string) => {
   const id = toImageId(value);
   if (id.isError()) throw new FatalError(`Invalid image id: ${value}`);
@@ -238,9 +240,7 @@ export async function claimedAutoDetectWorkflow(input: {
       if (carried.type !== 'regions_carried_over') return;
     }
     const remaining = (progress.concepts ?? []).filter(
-      (concept) =>
-        !progress.completedConcepts.includes(concept) &&
-        !progress.omissions?.some((omission) => omission.concept === concept)
+      (concept) => !isDetectionConceptSettled(progress, concept)
     );
     await Promise.allSettled(
       remaining.map((concept) => detectAttemptConceptStep(attempt, concept))
