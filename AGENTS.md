@@ -56,6 +56,7 @@ Cross-module imports must use one of these public files:
 | `index.ts` | Domain types, application ports, factories, stable constants. |
 | `server.ts` | TanStack `createServerFn` exports only. |
 | `backend.ts` | Server-only non-server-function APIs, protected runners, HTTP route handlers. |
+| `workflows/backend.ts` | Durable workflow entry points for composition. |
 | `client.ts` | Client-only public API, query options, client facades. |
 | `presentation.ts` | React components and presentation exports. |
 | `testing.ts` | Test-only public gate for owner internals. |

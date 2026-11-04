@@ -9,6 +9,7 @@ import {
 } from '@/modules/design';
 import { createDesignRepository } from '@/modules/design/backend';
 
+import { writeImageWithDetection } from './image-detection-intent';
 import { getKernel, type Kernel } from './kernel';
 import { getMoodboardUseCases } from './moodboard';
 import { getRenderingPipelineUseCases } from './rendering-pipeline';
@@ -32,7 +33,6 @@ const segmentationOnArrival = (kernel: Kernel): ImageArrivedListener => {
       }
       const scheduled = await scheduler.schedule({
         imageId: input.imageId,
-        carryFromImageId: input.carryFromImageId,
       });
       if (scheduled.isError()) return Result.Error(scheduled.getError());
       return Result.Ok({ type: 'image_arrival_handled' });
@@ -76,9 +76,18 @@ const copyIntoRevisedDesign = (kernel: Kernel): DesignCopiedListener => ({
 
 const buildDesignUseCases = (overrides?: DesignOverrides) => {
   const kernel = overrides?.kernel ?? getKernel();
+  const repository = createDesignRepository({ db: kernel.db });
   return createDesignUseCases({
-    designRepository:
-      overrides?.designRepository ?? createDesignRepository({ db: kernel.db }),
+    designRepository: overrides?.designRepository ?? {
+      ...repository,
+      create: (input) =>
+        writeImageWithDetection(kernel, {
+          waitingForCopy: input.copiedFromDesignId !== null,
+          carryFromImageId: null,
+          save: (design) => design.create(input),
+          imageId: (saved) => saved.design.baseImage.id,
+        }),
+    },
     uploadIntentStore: kernel.uploadIntentStore,
     objectStorage: kernel.objectStorage,
     permissionChecker: kernel.permissionChecker,

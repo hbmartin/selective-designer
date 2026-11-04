@@ -4,7 +4,6 @@ import type { ApplicationResult } from '@/modules/kernel/application/result';
 
 import type { UserAuthGateway } from '../ports/user-auth-gateway';
 import type {
-  UserCreateRepositoryOutcome,
   UserGetRepositoryOutcome,
   UserListRepositoryOutcome,
   UserRepository,
@@ -26,10 +25,6 @@ export type UserSelfOutcome = { type: 'user_self' };
 export type UserListOutcome = UserListRepositoryOutcome | UserForbiddenOutcome;
 
 export type UserGetOutcome = UserGetRepositoryOutcome | UserForbiddenOutcome;
-
-export type UserCreateOutcome =
-  | UserCreateRepositoryOutcome
-  | UserForbiddenOutcome;
 
 export type UserUpdateOutcome =
   | UserUpdateRepositoryOutcome

@@ -36,12 +36,6 @@ private predicate isProtectedRunnerProperty(string name) {
   name = "withFreshProtectedMutation"
 }
 
-private predicate isProtectedRunnerName(string name) {
-  isProtectedRunnerProperty(name) or
-  name = "runProtected" or
-  name = "runMutation"
-}
-
 private predicate invokesInstrumentedProtectedRunner(CallExpr call) {
   exists(MethodCallExpr operation, VarRef runner, CallExpr factory, Property selection,
     Function selectRunner, PropAccess protectedRunner |
@@ -63,7 +57,7 @@ private predicate invokesInstrumentedProtectedRunner(CallExpr call) {
 private predicate usesProtectedRunner(Expr expr) {
   exists(CallExpr call |
     call = expr.getAChild*() and
-    (isProtectedRunnerName(call.getCalleeName()) or invokesInstrumentedProtectedRunner(call))
+    (isProtectedRunnerProperty(call.getCalleeName()) or invokesInstrumentedProtectedRunner(call))
   )
 }
 

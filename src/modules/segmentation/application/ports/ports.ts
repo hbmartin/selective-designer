@@ -30,17 +30,41 @@ export type NewRegion = {
 export type DetectionRun = {
   imageId: ImageId;
   runId: string | null;
+  workerId?: string;
   now?: Date;
 };
+export type DetectionOmission = {
+  concept: string;
+  reason: 'prompt_rejected' | 'invalid_mask';
+};
+export type DetectionPhase =
+  | 'copying'
+  | 'ready'
+  | 'queued'
+  | 'running'
+  | 'omissions';
 export type DetectionProgress = {
   concepts: string[] | null;
   completedConcepts: string[];
   carryFromImageId: string | null;
   carryOverCompleted: boolean;
+  omissions?: DetectionOmission[];
 };
-export type DetectionState = {
-  runId: string | null;
+type DetectionStatus = {
+  phase: DetectionPhase | null;
+  expiresAt: Date;
   failed: boolean;
+};
+export type DetectionSummary =
+  | { type: 'no_detection' }
+  | (DetectionStatus & {
+      type: 'detection_recorded';
+      omissions: DetectionOmission[];
+    });
+export type DetectionLease = DetectionStatus & {
+  type: 'detection_lease';
+  runId: string | null;
+  workerId: string | null;
   progress: DetectionProgress | null;
 };
 type DetectionClaim =
@@ -55,8 +79,7 @@ export interface RegionRepository {
     ApplicationResult<{
       type: 'regions_listed';
       regions: Region[];
-      detectionExpiresAt: Date | null;
-      detectionState?: DetectionState;
+      detection: DetectionSummary;
     }>
   >;
   startDetection(input: {
@@ -64,6 +87,7 @@ export interface RegionRepository {
     runId: string;
     expiresAtMs: number;
     progress?: DetectionProgress;
+    phase?: 'copying' | 'ready';
   }): Promise<ApplicationResult<DetectionClaim>>;
   resumeDetection(input: {
     previous: DetectionRun;
@@ -71,7 +95,25 @@ export interface RegionRepository {
     now: Date;
     expiresAtMs: number;
     legacyProgress?: DetectionProgress;
+    dispatch?: { previousPhase: DetectionPhase | null; initial: boolean };
   }): Promise<ApplicationResult<DetectionClaim>>;
+  findDetection(
+    imageId: ImageId
+  ): Promise<ApplicationResult<DetectionLease | { type: 'no_detection' }>>;
+  detectionLabels(imageId: ImageId): Promise<ApplicationResult<string[]>>;
+  claimDetection(
+    run: Required<DetectionRun> & { expiresAt: Date }
+  ): Promise<ApplicationResult<DetectionClaim>>;
+  failDispatch(
+    run: DetectionRun
+  ): Promise<ApplicationResult<{ type: 'dispatch_failure_recorded' }>>;
+  omitConcept(
+    run: DetectionRun & DetectionOmission
+  ): Promise<
+    ApplicationResult<
+      WriteRegionsOutcome | { type: 'detection_concept_already_completed' }
+    >
+  >;
   prepareDetection(
     input: DetectionRun & { concepts: string[] }
   ): Promise<
@@ -105,6 +147,7 @@ export interface RegionRepository {
     concept: string;
     regions: NewRegion[];
     runId?: string | null;
+    workerId?: string;
     now?: Date;
   }): Promise<
     ApplicationResult<
@@ -172,6 +215,7 @@ export type SegmentationResult =
   | {
       type: 'segmentation_failed';
       reason: string;
+      terminal?: true;
       provider: string;
       endpoint: string;
     };
@@ -190,17 +234,19 @@ export interface Segmenter {
 export interface AutoDetectionScheduler {
   schedule(input: {
     imageId: ImageId;
-    carryFromImageId: ImageId | null;
-  }): Promise<ApplicationResult<{ type: 'auto_detection_scheduled' }>>;
+  }): Promise<ApplicationResult<DetectionDispatch>>;
 }
+
+export type DetectionDispatch =
+  | { type: 'auto_detection_scheduled' }
+  | { type: 'detection_queue_uncertain' }
+  | { type: 'detection_queue_rejected' };
 
 export interface DetectionRetry {
   retry(
     imageId: ImageId
   ): Promise<
-    ApplicationResult<
-      { type: 'auto_detection_scheduled' } | { type: 'detection_not_retryable' }
-    >
+    ApplicationResult<DetectionDispatch | { type: 'detection_not_retryable' }>
   >;
 }
 
@@ -208,5 +254,9 @@ export interface DetectionQueue {
   enqueue(input: {
     imageId: ImageId;
     runId: string;
-  }): Promise<ApplicationResult<{ type: 'detection_enqueued' }>>;
+  }): Promise<
+    ApplicationResult<
+      { type: 'detection_enqueued' } | { type: 'detection_not_enqueued' }
+    >
+  >;
 }

@@ -31,4 +31,5 @@ export const readImageDimensions = (
   }
 };
 
-export const contentTypeForFormat = (format: string) => CONTENT_TYPES[format];
+export const contentTypeForFormat = (format: string) =>
+  Object.hasOwn(CONTENT_TYPES, format) ? CONTENT_TYPES[format] : undefined;

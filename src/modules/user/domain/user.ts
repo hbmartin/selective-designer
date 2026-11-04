@@ -78,12 +78,6 @@ export type UserSessionListPage = {
   total: number;
 };
 
-export type UserCreateInput = {
-  name?: UserDisplayName | null;
-  email: EmailAddress;
-  role?: UserRole | null;
-};
-
 export type UserUpdateInput = {
   name?: UserDisplayName | null;
   email: EmailAddress;

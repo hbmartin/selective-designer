@@ -57,21 +57,33 @@ export async function discardUnpublishedMasks(
   );
 }
 
+type StoreMaskDeps = MaskStorageDeps &
+  Pick<SegmentationPipelineDeps, 'idGenerator'>;
+type StoreMaskInput = {
+  image: SegmentableImage;
+  result: Extract<SegmentationResult, { type: 'segmented' }>;
+  source: RegionSource;
+  label: string;
+};
+type MasksStored = { type: 'masks_stored'; regions: NewRegion[] };
+type MaskUnavailable = {
+  type: 'detection_mask_unavailable';
+  reason: 'invalid_mask' | 'mask_unavailable';
+};
+
 /** Store fresh masks. Automatic detection publishes a whole concept at once. */
+export function storeSegmentedMasks(
+  deps: StoreMaskDeps,
+  input: StoreMaskInput & { source: Exclude<RegionSource, 'detection'> }
+): Promise<SegmentationResultOf<MasksStored>>;
+export function storeSegmentedMasks(
+  deps: StoreMaskDeps,
+  input: StoreMaskInput & { source: 'detection' }
+): Promise<SegmentationResultOf<MasksStored | MaskUnavailable>>;
 export async function storeSegmentedMasks(
-  deps: MaskStorageDeps & Pick<SegmentationPipelineDeps, 'idGenerator'>,
-  input: {
-    image: SegmentableImage;
-    result: Extract<SegmentationResult, { type: 'segmented' }>;
-    source: RegionSource;
-    label: string;
-  }
-): Promise<
-  SegmentationResultOf<
-    | { type: 'masks_stored'; regions: NewRegion[] }
-    | { type: 'detection_mask_unavailable' }
-  >
-> {
+  deps: StoreMaskDeps,
+  input: StoreMaskInput
+): Promise<SegmentationResultOf<MasksStored | MaskUnavailable>> {
   const regions: NewRegion[] = [];
   const attemptedKeys: ObjectKey[] = [];
 
@@ -121,7 +133,13 @@ export async function storeSegmentedMasks(
       if (input.source === 'detection') {
         // oxlint-disable-next-line no-await-in-loop -- stop and clean this batch.
         await discardUnpublishedMasks(deps, attemptedKeys);
-        return Result.Ok({ type: 'detection_mask_unavailable' });
+        return Result.Ok({
+          type: 'detection_mask_unavailable',
+          reason:
+            outcome.type === 'copy_source_rejected'
+              ? 'invalid_mask'
+              : 'mask_unavailable',
+        });
       }
       continue;
     }

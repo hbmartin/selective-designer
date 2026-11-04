@@ -15,7 +15,12 @@ import {
   type SegmentationUseCaseDeps,
   SIGNED_MASK_URL_SECONDS,
 } from './types';
-import type { SegmentableImage } from '../ports/ports';
+import type {
+  DetectionDispatch,
+  DetectionOmission,
+  DetectionSummary,
+  SegmentableImage,
+} from '../ports/ports';
 import {
   type FractionalBox,
   isValidFractionalBox,
@@ -96,8 +101,27 @@ export type ListRegionsOutcome =
 
 export type RegionListView = {
   regions: RegionView[];
-  detection: 'pending' | 'idle' | 'retryable';
-  detectionRemainingMs: number;
+  detection: DetectionView;
+};
+
+type DetectionView = (
+  | { type: 'idle' | 'retryable' | 'finished_with_omissions' }
+  | { type: 'waiting' | 'running'; remainingMs: number }
+) & { omissions: DetectionOmission[] };
+
+const detectionView = (summary: DetectionSummary, now: Date): DetectionView => {
+  if (summary.type === 'no_detection') return { type: 'idle', omissions: [] };
+  const { phase, omissions, expiresAt, failed } = summary;
+  if (phase === 'omissions')
+    return { type: 'finished_with_omissions', omissions };
+  const remainingMs = expiresAt.getTime() - now.getTime();
+  if (failed || phase === 'ready' || remainingMs <= 0)
+    return { type: 'retryable', omissions };
+  return {
+    type: phase === 'copying' || phase === 'queued' ? 'waiting' : 'running',
+    remainingMs,
+    omissions,
+  };
 };
 
 export async function listRegions(
@@ -110,29 +134,20 @@ export async function listRegions(
   if (ownedOutcome.type !== 'ok') return Result.Ok(ownedOutcome);
   const listed = await deps.regionRepository.listByImage(input.imageId);
   if (listed.isError()) return Result.Error(listed.getError());
-  const { regions, detectionExpiresAt, detectionState } = listed.get();
-  const detectionRemainingMs = detectionExpiresAt
-    ? Math.max(0, detectionExpiresAt.getTime() - deps.clock.now().getTime())
-    : 0;
+  const { regions, detection } = listed.get();
   const views = await toViews(deps, regions);
   if (views.isError()) return Result.Error(views.getError());
   return Result.Ok({
     type: 'regions_listed',
     regions: views.get(),
-    detection:
-      detectionState?.failed || (detectionState && detectionRemainingMs === 0)
-        ? 'retryable'
-        : detectionRemainingMs > 0
-          ? 'pending'
-          : 'idle',
-    detectionRemainingMs,
+    detection: detectionView(detection, deps.clock.now()),
   });
 }
 
 type RetryDetectionOutcome =
   | Forbidden
   | ImageNotFound
-  | { type: 'auto_detection_scheduled' }
+  | DetectionDispatch
   | { type: 'detection_not_retryable' };
 
 export async function retryDetection(
@@ -231,11 +246,6 @@ export async function segmentByPrompt(
   });
   if (regions.isError()) return Result.Error(regions.getError());
   const stored = regions.get();
-  if (stored.type === 'detection_mask_unavailable')
-    return Result.Ok({
-      type: 'segmentation_failed',
-      reason: 'mask_unavailable',
-    });
   const saved = await deps.regionRepository.insertMany(stored.regions);
   if (saved.isError()) return Result.Error(saved.getError());
   const views = await toViews(

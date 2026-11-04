@@ -1,6 +1,10 @@
 import { Result } from '@bloodyowl/boxed';
 
-import { createDesignPipelineUseCases } from '@/modules/design';
+import {
+  createDesignPipelineUseCases,
+  type DesignRepository,
+  type ImageAddedOutcome,
+} from '@/modules/design';
 import { createDesignRepository } from '@/modules/design/backend';
 import { getAiProvidersConfig } from '@/modules/kernel/backend';
 import { toItemId, toRegionId } from '@/modules/kernel/domain/ids';
@@ -31,6 +35,7 @@ import {
 import type { AutoDetectionScheduler } from '@/modules/segmentation';
 import { createRegionRepository } from '@/modules/segmentation/backend';
 
+import { writeImageWithDetection } from './image-detection-intent';
 import { getPipelineKernel, type PipelineKernel } from './pipeline-kernel';
 import { createAutoDetectionScheduler } from './segmentation-scheduler';
 import { createCachedFactory } from './shared/singleton';
@@ -53,9 +58,9 @@ type InputsKernel = Pick<
   'db' | 'objectStorage' | 'idGenerator' | 'logger'
 >;
 
-const designPipeline = (kernel: InputsKernel) =>
+const designPipeline = (kernel: InputsKernel, repository?: DesignRepository) =>
   createDesignPipelineUseCases({
-    designRepository: createDesignRepository({ db: kernel.db }),
+    designRepository: repository ?? createDesignRepository({ db: kernel.db }),
     objectStorage: kernel.objectStorage,
     idGenerator: kernel.idGenerator,
     logger: kernel.logger,
@@ -149,24 +154,28 @@ export const createResultImages = (
     if (dimensions.type === 'unreadable')
       return Result.Ok({ type: 'result_image_unreadable' });
     const size = { width: dimensions.width, height: dimensions.height };
-    const added = await designPipeline(kernel).addImage({
-      designId: input.designId,
-      image: {
-        kind: 'result',
-        originalKey: input.objectKey,
-        originalContentType:
-          contentTypeForFormat(dimensions.format) ?? input.contentType,
-        original: size,
-        // Results are shown and edited at their native size.
-        workingKey: input.objectKey,
-        working: size,
-      },
+    const added = await writeImageWithDetection<ImageAddedOutcome>(kernel, {
+      carryFromImageId: input.renderSourceImageId,
+      imageId: (saved) => saved.image.id,
+      save: (repository) =>
+        designPipeline(kernel, repository).addImage({
+          designId: input.designId,
+          image: {
+            kind: 'result',
+            originalKey: input.objectKey,
+            originalContentType:
+              contentTypeForFormat(dimensions.format) ?? input.contentType,
+            original: size,
+            // Results are shown and edited at their native size.
+            workingKey: input.objectKey,
+            working: size,
+          },
+        }),
     });
     if (added.isError()) return Result.Error(added.getError());
     const imageId = added.get().image.id;
     const scheduled = await scheduler.schedule({
       imageId,
-      carryFromImageId: input.renderSourceImageId,
     });
     if (scheduled.isError()) {
       // Detection is a convenience; a result without it is still a result.

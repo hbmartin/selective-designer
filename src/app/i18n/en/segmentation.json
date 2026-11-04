@@ -8,6 +8,13 @@
   "list": {
     "title": "Regions",
     "retryDetection": "Retry detection",
+    "waitingForDetection": "Waiting for automatic detection",
+    "detectingRegions": "Detecting regions",
+    "detectionOmissions": "Skipped detection categories",
+    "omissions": {
+      "prompt_rejected": "{{concept}}: the detection provider rejected this category.",
+      "invalid_mask": "{{concept}}: the detection provider returned an invalid mask."
+    },
     "confirm": "Keep suggested region",
     "remove": "Remove region"
   },

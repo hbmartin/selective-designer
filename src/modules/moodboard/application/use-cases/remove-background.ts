@@ -171,8 +171,19 @@ export async function removeBackgroundForVersion(
   });
   if (logged.isError()) return Result.Error(logged.getError());
 
+  const logOutputFailure = (
+    phase: 'copy' | 'storage' | 'publication',
+    code: string
+  ) =>
+    deps.logger.warn({
+      event: 'moodboard.cutout.output_failed',
+      details: { ...input, phase, code },
+    });
   const latest = await deps.itemRepository.findVersion(versionId);
-  if (latest.isError()) return Result.Error(latest.getError());
+  if (latest.isError()) {
+    logOutputFailure('publication', latest.getError().code);
+    return Result.Error(latest.getError());
+  }
   const current = latest.get();
   if (
     current.type !== 'item_version_found' ||
@@ -184,7 +195,10 @@ export async function removeBackgroundForVersion(
   }
 
   const cutoutKey = cutoutObjectKey(input);
-  if (cutoutKey.isError()) return Result.Error(cutoutKey.getError());
+  if (cutoutKey.isError()) {
+    logOutputFailure('storage', cutoutKey.getError().code);
+    return Result.Error(cutoutKey.getError());
+  }
 
   if (removal.result.kind === 'url') {
     const copied = await deps.objectStorage.copyFromUrl({
@@ -194,7 +208,10 @@ export async function removeBackgroundForVersion(
       maxBytes: CUTOUT_MAX_BYTES,
       cacheControl: IMMUTABLE_OBJECT_CACHE_CONTROL,
     });
-    if (copied.isError()) return Result.Error(copied.getError());
+    if (copied.isError()) {
+      logOutputFailure('copy', copied.getError().code);
+      return Result.Error(copied.getError());
+    }
     if (copied.get().type !== 'object_copied') {
       return markFailed(`copy_${copied.get().type}`);
     }
@@ -205,7 +222,10 @@ export async function removeBackgroundForVersion(
       contentType: removal.result.contentType,
       cacheControl: IMMUTABLE_OBJECT_CACHE_CONTROL,
     });
-    if (stored.isError()) return Result.Error(stored.getError());
+    if (stored.isError()) {
+      logOutputFailure('storage', stored.getError().code);
+      return Result.Error(stored.getError());
+    }
   }
 
   const saved = await deps.itemRepository.finishCutoutAttempt({
@@ -213,7 +233,10 @@ export async function removeBackgroundForVersion(
     cutoutStatus: 'ready',
     cutoutKey: cutoutKey.get(),
   });
-  if (saved.isError()) return Result.Error(saved.getError());
+  if (saved.isError()) {
+    logOutputFailure('publication', saved.getError().code);
+    return Result.Error(saved.getError());
+  }
   if (saved.get().type === 'cutout_attempt_skipped') {
     await cleanAbandonedCutout(deps, input);
     return Result.Ok({ type: 'cutout_skipped' });

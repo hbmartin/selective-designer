@@ -1,5 +1,5 @@
 import { Result } from '@bloodyowl/boxed';
-import { createFalClient } from '@fal-ai/client';
+import { createFalClient, ValidationError } from '@fal-ai/client';
 
 import { AppError } from '@/modules/kernel/domain/errors/app-error';
 import type { Segmenter } from '@/modules/segmentation/application/ports/ports';
@@ -90,6 +90,11 @@ export const createFalSam3Segmenter = (config: {
           return Result.Ok({
             type: 'segmentation_failed',
             reason: `provider_rejected_${status}`,
+            ...(error instanceof ValidationError &&
+            error.fieldErrors.length > 0 &&
+            error.fieldErrors.every(({ loc }) => loc.includes('prompt'))
+              ? { terminal: true as const }
+              : {}),
             provider: 'fal',
             endpoint: ENDPOINT,
           });

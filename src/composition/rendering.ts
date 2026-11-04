@@ -13,12 +13,10 @@ import {
   createPngMaskCompositor,
   createRenderRepository,
 } from '@/modules/rendering/backend';
-// Direct import (not via backend.ts): the workflow lazily imports the pipeline
-// composition, which uses backend.ts.
 import {
   renderResultWorkflow,
   renderWorkflow,
-} from '@/modules/rendering/transport/workflows/render-workflow';
+} from '@/modules/rendering/workflows/backend';
 
 import { getKernel, type Kernel } from './kernel';
 import { createRenderInputs } from './rendering-pipeline';

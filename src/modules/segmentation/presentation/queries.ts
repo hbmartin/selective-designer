@@ -12,6 +12,7 @@ import type { ImageId, ScopeKey } from '@/modules/kernel/domain/ids';
 import type { RegionListView } from '../application/use-cases/regions';
 import {
   DETECTION_LEASE_MS,
+  DETECTION_START_WINDOW_MS,
   SIGNED_MASK_URL_SECONDS,
 } from '../application/use-cases/types';
 import type { SegmentationServerFunctions } from '../server';
@@ -46,7 +47,7 @@ export const createSegmentationQueries = <
 >(
   facade: TFacade
 ) => {
-  const all = () => ['segmentation', 'v1'] as const;
+  const all = () => ['segmentation', 'v2'] as const;
   return {
     all,
     regions: (input: { imageId: ImageId } & ScopedQueryInput<ScopeKey>) => ({
@@ -57,16 +58,28 @@ export const createSegmentationQueries = <
         queryFn: (data) => facade.regionsGet({ data }),
       }),
       staleTime: 5000,
+      // An idle cached response cannot start polling on its own.
+      refetchOnMount: (query: {
+        state: { data: RegionListView | undefined };
+      }) =>
+        query.state.data?.detection.type === 'idle'
+          ? ('always' as const)
+          : true,
       structuralSharing: (previous: unknown, next: unknown) =>
         shareRegionMasks(previous, next as RegionListView),
       refetchInterval: (query: {
         state: { data: RegionListView | undefined };
       }) => {
-        const data = query.state.data;
-        if (data?.detection !== 'pending') return false;
-        return DETECTION_LEASE_MS - data.detectionRemainingMs < 60_000
-          ? 3000
-          : 15_000;
+        const detection = query.state.data?.detection;
+        if (detection?.type !== 'waiting' && detection?.type !== 'running')
+          return false;
+        const window =
+          detection.type === 'waiting'
+            ? DETECTION_START_WINDOW_MS
+            : DETECTION_LEASE_MS;
+        const interval =
+          window - detection.remainingMs < 60_000 ? 3000 : 15_000;
+        return Math.min(interval, Math.max(250, detection.remainingMs));
       },
     }),
     retryDetection: () =>

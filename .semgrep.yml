@@ -1024,12 +1024,12 @@ rules:
     severity: ERROR
     patterns:
       - pattern-either:
-          - pattern: $DB.delete(activeDetection).where($WHERE)
-          - pattern: $DB.update(activeDetection).set(...).where($WHERE)
-      - pattern-not: $DB.delete(activeDetection).where(ownedDetection(...))
-      - pattern-not: $DB.delete(activeDetection).where(and(..., ownedDetection(...), ...))
-      - pattern-not: $DB.update(activeDetection).set(...).where(ownedDetection(...))
-      - pattern-not: $DB.update(activeDetection).set(...).where(and(..., ownedDetection(...), ...))
+          - pattern: $DB.delete(activeDetection)
+          - pattern: $DB.update(activeDetection)
+      - pattern-not-inside: $DB.delete(activeDetection).where(ownedDetection(...))
+      - pattern-not-inside: $DB.delete(activeDetection).where(and(..., ownedDetection(...), ...))
+      - pattern-not-inside: $DB.update(activeDetection).set(...).where(ownedDetection(...))
+      - pattern-not-inside: $DB.update(activeDetection).set(...).where(and(..., ownedDetection(...), ...))
     paths:
       include:
         - src/modules/segmentation/infrastructure/drizzle/region-repository-drizzle.ts
@@ -1046,7 +1046,8 @@ rules:
               eq(activeDetection.imageId, $RUN.imageId),
               $RUN.runId === null
                 ? isNull(activeDetection.runId)
-                : eq(activeDetection.runId, $RUN.runId)
+                : eq(activeDetection.runId, $RUN.runId),
+              $RUN.workerId === undefined ? undefined : eq(activeDetection.workerId, $RUN.workerId)
             )
     paths:
       include:

@@ -87,12 +87,7 @@ export const createSegmentationHandlers = ({
         regions_listed: ({
           regions,
           detection,
-          detectionRemainingMs,
-        }: RegionListView): RegionListView => ({
-          regions,
-          detection,
-          detectionRemainingMs,
-        }),
+        }: RegionListView): RegionListView => ({ regions, detection }),
       }
     ),
   retryDetection: (
@@ -107,6 +102,8 @@ export const createSegmentationHandlers = ({
       {
         ...common,
         auto_detection_scheduled: () => undefined,
+        detection_queue_uncertain: () => undefined,
+        detection_queue_rejected: () => undefined,
         detection_not_retryable: () => undefined,
       }
     ),

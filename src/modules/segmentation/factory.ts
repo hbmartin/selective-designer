@@ -18,6 +18,7 @@ import type {
   SegmentationPipelineDeps,
   SegmentationUseCaseDeps,
 } from './application/use-cases/types';
+import { DETECTION_LEASE_MS } from './application/use-cases/types';
 
 type Input<TFn extends (deps: never, input: never) => unknown> =
   Parameters<TFn>[1];
@@ -43,11 +44,26 @@ export function createSegmentationPipelineUseCases(
   deps: SegmentationPipelineDeps
 ) {
   return {
+    claimDetection(run: Required<Omit<DetectionRun, 'now'>>) {
+      const now = deps.clock.now();
+      return deps.regionRepository.claimDetection({
+        ...run,
+        now,
+        expiresAt: new Date(now.getTime() + DETECTION_LEASE_MS),
+      });
+    },
     async prepareDetection(run: DetectionRun) {
-      const listed = await deps.regionRepository.listByImage(run.imageId);
+      const listed = await deps.regionRepository.findDetection(run.imageId);
       if (listed.isError()) return Result.Error(listed.getError());
-      const state = listed.get().detectionState;
-      if (!state?.progress || state.runId !== run.runId || state.failed)
+      const state = listed.get();
+      if (
+        state.type !== 'detection_lease' ||
+        !state.progress ||
+        state.runId !== run.runId ||
+        state.workerId !== (run.workerId ?? null) ||
+        state.failed ||
+        state.expiresAt <= deps.clock.now()
+      )
         return Result.Ok({ type: 'detection_superseded' } as const);
       let concepts = state.progress.concepts;
       if (concepts === null) {

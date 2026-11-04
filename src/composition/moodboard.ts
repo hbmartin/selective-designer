@@ -9,9 +9,7 @@ import {
   type ItemRepository,
 } from '@/modules/moodboard';
 import { createItemRepository } from '@/modules/moodboard/backend';
-// Imported directly (not via backend.ts): the workflow lazily imports the
-// pipeline composition, which uses backend.ts.
-import { removeBackgroundWorkflow } from '@/modules/moodboard/transport/workflows/remove-background-workflow';
+import { removeBackgroundWorkflow } from '@/modules/moodboard/workflows/backend';
 
 import { getKernel, type Kernel } from './kernel';
 import { createDesignAccess } from './moodboard-pipeline';

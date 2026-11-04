@@ -40,7 +40,6 @@ const makeUserRepository = (
   list: async () =>
     Result.Ok({ type: 'user_listed', page: { items: [user], total: 1 } }),
   getById: async () => Result.Ok({ type: 'user_found', user }),
-  create: async () => Result.Ok({ type: 'user_created', user }),
   getUpdateSnapshot: async () =>
     Result.Ok({
       type: 'user_update_snapshot_found',

@@ -4,7 +4,6 @@ import type { SessionId, UserId } from '@/modules/kernel/domain/ids';
 import type {
   SessionRevocationTarget,
   User,
-  UserCreateInput,
   UserListPage,
   UserSessionListPage,
   UserUpdateInput,
@@ -20,10 +19,6 @@ export type UserListRepositoryOutcome = {
 export type UserGetRepositoryOutcome =
   | { type: 'user_found'; user: User }
   | { type: 'user_not_found' };
-
-export type UserCreateRepositoryOutcome =
-  | { type: 'user_created'; user: User }
-  | { type: 'user_duplicate' };
 
 export type UserUpdateSnapshotRepositoryOutcome =
   | { type: 'user_update_snapshot_found'; snapshot: UserUpdateSnapshot }
@@ -53,9 +48,6 @@ export interface UserRepository {
     searchTerm: string;
   }): Promise<ApplicationResult<UserListRepositoryOutcome>>;
   getById(id: UserId): Promise<ApplicationResult<UserGetRepositoryOutcome>>;
-  create(
-    input: UserCreateInput
-  ): Promise<ApplicationResult<UserCreateRepositoryOutcome>>;
   getUpdateSnapshot(
     id: UserId
   ): Promise<ApplicationResult<UserUpdateSnapshotRepositoryOutcome>>;
