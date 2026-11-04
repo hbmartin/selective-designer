@@ -40,9 +40,14 @@ describe('background removal workflow', () => {
       type: 'cutout_failed',
       reason: 'workflow_step_failed',
     });
+    expect(pipeline.removeBackground).toHaveBeenCalledExactlyOnceWith({
+      versionId: input.itemVersionId,
+      attemptId: input.attemptId,
+    });
     expect(pipeline.markCutoutFailed).toHaveBeenCalledExactlyOnceWith({
       versionId: input.itemVersionId,
       attemptId: input.attemptId,
+      failureCode: 'PROVIDER_UNAVAILABLE',
     });
   });
 

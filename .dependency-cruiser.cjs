@@ -190,6 +190,20 @@ module.exports = {
       },
     },
     {
+      name: 'repositories-use-shared-schema-boundary',
+      severity: 'error',
+      comment:
+        'Schema definitions may reference foreign tables for foreign keys. Repositories use the shared kernel schema boundary for cross-feature table joins.',
+      from: {
+        path: '^src/modules/([^/]+)/infrastructure',
+        pathNot: '^src/modules/kernel/|/infrastructure/drizzle/schema\\.ts$',
+      },
+      to: {
+        path: '^src/modules/(?!kernel/)[^/]+/infrastructure/drizzle/schema\\.ts$',
+        pathNot: '^src/modules/$1/',
+      },
+    },
+    {
       name: 'transport-no-infrastructure',
       severity: 'error',
       from: { path: '^src/modules/[^/]+/transport' },

@@ -1,5 +1,6 @@
 import { Result } from '@bloodyowl/boxed';
 
+import { cutoutRetryCutoff, isCutoutRetryable } from './cutout-retry-policy';
 import type { MoodboardResult, MoodboardUseCaseDeps } from './types';
 import { SIGNED_ITEM_URL_SECONDS } from './types';
 import type { Item } from '../../domain/item';
@@ -8,10 +9,11 @@ import type { Item } from '../../domain/item';
 export type ItemView = Item & {
   photoUrl: string;
   cutoutUrl: string | null;
+  cutoutRetryable: boolean;
 };
 
 export const toItemView = async (
-  deps: Pick<MoodboardUseCaseDeps, 'objectStorage'>,
+  deps: Pick<MoodboardUseCaseDeps, 'objectStorage' | 'clock'>,
   item: Item
 ): Promise<MoodboardResult<ItemView>> => {
   const sign = (objectKey: string) =>
@@ -30,5 +32,13 @@ export const toItemView = async (
     if (cutout.isError()) return Result.Error(cutout.getError());
     cutoutUrl = cutout.get().url;
   }
-  return Result.Ok({ ...item, photoUrl: photo.get().url, cutoutUrl });
+  return Result.Ok({
+    ...item,
+    photoUrl: photo.get().url,
+    cutoutUrl,
+    cutoutRetryable: isCutoutRetryable(
+      item.currentVersion,
+      cutoutRetryCutoff(deps.clock.now())
+    ),
+  });
 };

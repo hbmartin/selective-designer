@@ -12,7 +12,7 @@ import { createDesignRepository } from '@/modules/design/backend';
 import { getKernel, type Kernel } from './kernel';
 import { getMoodboardUseCases } from './moodboard';
 import { getRenderingPipelineUseCases } from './rendering-pipeline';
-import { workflowAutoDetectionScheduler } from './segmentation-scheduler';
+import { createAutoDetectionScheduler } from './segmentation-scheduler';
 import { createCachedFactory } from './shared/singleton';
 
 export type DesignOverrides = {
@@ -23,18 +23,21 @@ export type DesignOverrides = {
 };
 
 /** New base images and results get eager segmentation (and carry-over). */
-const segmentationOnArrival: ImageArrivedListener = {
-  async imageArrived(input) {
-    if (input.kind === 'source_photo') {
+const segmentationOnArrival = (kernel: Kernel): ImageArrivedListener => {
+  const scheduler = createAutoDetectionScheduler(kernel);
+  return {
+    async imageArrived(input) {
+      if (input.kind === 'source_photo') {
+        return Result.Ok({ type: 'image_arrival_handled' });
+      }
+      const scheduled = await scheduler.schedule({
+        imageId: input.imageId,
+        carryFromImageId: input.carryFromImageId,
+      });
+      if (scheduled.isError()) return Result.Error(scheduled.getError());
       return Result.Ok({ type: 'image_arrival_handled' });
-    }
-    const scheduled = await workflowAutoDetectionScheduler.schedule({
-      imageId: input.imageId,
-      carryFromImageId: input.carryFromImageId,
-    });
-    if (scheduled.isError()) return Result.Error(scheduled.getError());
-    return Result.Ok({ type: 'image_arrival_handled' });
-  },
+    },
+  };
 };
 
 /**
@@ -83,7 +86,7 @@ const buildDesignUseCases = (overrides?: DesignOverrides) => {
     clock: kernel.clock,
     logger: kernel.logger,
     imageArrivedListener:
-      overrides?.imageArrivedListener ?? segmentationOnArrival,
+      overrides?.imageArrivedListener ?? segmentationOnArrival(kernel),
     designCopiedListener:
       overrides?.designCopiedListener ?? copyIntoRevisedDesign(kernel),
   });

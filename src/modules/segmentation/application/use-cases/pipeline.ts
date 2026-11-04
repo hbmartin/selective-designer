@@ -39,11 +39,12 @@ export async function detectionConceptsFor(
  */
 export async function detectConcept(
   deps: SegmentationPipelineDeps,
-  input: { imageId: ImageId; concept: string }
+  input: { imageId: ImageId; concept: string; runId?: string | null }
 ): Promise<
   SegmentationResultOf<
     | { type: 'concept_detected'; count: number }
     | { type: 'concept_failed'; reason: string }
+    | { type: 'detection_superseded' }
     | { type: 'image_missing' }
   >
 > {
@@ -72,7 +73,11 @@ export async function detectConcept(
   const result = segmented.get();
 
   // Deterministic id: a retried step updates the same cost-log row.
-  const callId = providerCallIdFor('detect', image.imageId, input.concept);
+  const callId = providerCallIdFor(
+    'detect',
+    image.imageId,
+    input.runId ? `${input.runId}:${input.concept}` : input.concept
+  );
   if (callId.isError()) return Result.Error(callId.getError());
   const logged = await deps.providerCallLog.record({
     id: callId.get(),
@@ -108,8 +113,11 @@ export async function detectConcept(
     imageId: image.imageId,
     concept: input.concept,
     regions: regions.get(),
+    runId: input.runId,
   });
   if (saved.isError()) return Result.Error(saved.getError());
+  if (saved.get().type === 'detection_superseded')
+    return Result.Ok({ type: 'detection_superseded' });
   return Result.Ok({ type: 'concept_detected', count: regions.get().length });
 }
 
@@ -120,10 +128,12 @@ export async function detectConcept(
  */
 export async function carryOverRegions(
   deps: SegmentationPipelineDeps,
-  input: { fromImageId: ImageId; toImageId: ImageId }
+  input: { fromImageId: ImageId; toImageId: ImageId; runId?: string | null }
 ): Promise<
   SegmentationResultOf<
-    { type: 'regions_carried_over'; count: number } | { type: 'image_missing' }
+    | { type: 'regions_carried_over'; count: number }
+    | { type: 'image_missing' }
+    | { type: 'detection_superseded' }
   >
 > {
   const target = await deps.imageAccess.find(input.toImageId);
@@ -166,8 +176,15 @@ export async function carryOverRegions(
     });
   }
   if (copies.length > 0) {
-    const saved = await deps.regionRepository.insertMany(copies);
+    const saved = await deps.regionRepository.insertMany(
+      copies,
+      input.runId === undefined
+        ? undefined
+        : { imageId: input.toImageId, runId: input.runId }
+    );
     if (saved.isError()) return Result.Error(saved.getError());
+    if (saved.get().type === 'detection_superseded')
+      return Result.Ok({ type: 'detection_superseded' });
   }
   return Result.Ok({ type: 'regions_carried_over', count: copies.length });
 }

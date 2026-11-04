@@ -6,7 +6,6 @@ import {
   AvatarFallback,
   AvatarImage,
 } from '@/platform/components/ui/avatar';
-import { Badge } from '@/platform/components/ui/badge';
 import { Button } from '@/platform/components/ui/button';
 import {
   Card,
@@ -73,11 +72,6 @@ export const UserCard = () => {
       </AccountCardRow>
       <AccountCardRow label={t('account:userCard.email.label')}>
         <p className="flex-1 truncate underline-offset-4">
-          {!session.data?.user.emailVerified && (
-            <Badge size="sm" variant="warning" className="me-2">
-              {t('account:userCard.email.notVerified')}
-            </Badge>
-          )}
           {session.data?.user.email || (
             <span className="text-xs text-muted-foreground">--</span>
           )}

@@ -27,7 +27,8 @@ async function removeBackgroundStep(
 
 async function markCutoutFailedStep(
   itemVersionId: string,
-  attemptId: string | null
+  attemptId: string | null,
+  failureCode: string
 ) {
   'use step';
   const { getMoodboardPipelineUseCases } =
@@ -36,6 +37,7 @@ async function markCutoutFailedStep(
     await getMoodboardPipelineUseCases().markCutoutFailed({
       versionId: versionIdOrFail(itemVersionId),
       attemptId,
+      failureCode,
     })
   );
 }
@@ -50,10 +52,16 @@ export async function removeBackgroundWorkflow(input: {
     return input.attemptId === undefined
       ? await removeBackgroundStep(input.itemVersionId)
       : await removeBackgroundStep(input.itemVersionId, input.attemptId);
-  } catch {
+  } catch (error) {
+    // AppError step failures carry a stable code. Avoid persisting provider messages.
+    const failureCode =
+      error instanceof Error
+        ? /^([A-Z][A-Z0-9_]{2,63}):/u.exec(error.message)?.[1]
+        : undefined;
     const failed = await markCutoutFailedStep(
       input.itemVersionId,
-      input.attemptId ?? null
+      input.attemptId ?? null,
+      failureCode ?? 'WORKFLOW_STEP_FAILED'
     );
     return failed.type === 'cutout_marked_failed'
       ? { type: 'cutout_failed' as const, reason: 'workflow_step_failed' }

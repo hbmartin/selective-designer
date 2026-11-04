@@ -4,6 +4,7 @@ export type {
   SegmentationPipelineDeps,
   SegmentationUseCaseDeps,
 } from './application/use-cases/types';
+export { DETECTION_LEASE_MS } from './application/use-cases/types';
 export * from './domain/region';
 export {
   createSegmentationPipelineUseCases,

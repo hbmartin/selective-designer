@@ -80,7 +80,7 @@ export function createAuth(input?: Database | CreateAuthOptions) {
     emailAndPassword: {
       enabled: true,
       disableSignUp: true,
-      requireEmailVerification: true,
+      requireEmailVerification: false,
       minPasswordLength: PASSWORD_MIN_LENGTH,
       maxPasswordLength: PASSWORD_MAX_LENGTH,
     },

@@ -4,6 +4,7 @@
     "addButton": "Add item",
     "empty": "Add product photos, swatches or extracts to place them in renders.",
     "removingBackground": "Removing background…",
+    "cutoutDelayed": "Background removal is taking longer than expected",
     "cutoutFailed": "Background removal failed",
     "retry": "Retry",
     "edit": "Edit",

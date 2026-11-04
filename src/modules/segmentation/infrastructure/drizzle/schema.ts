@@ -45,5 +45,7 @@ export const activeDetection = pgTable('active_detection', {
   imageId: text('imageId')
     .primaryKey()
     .references(() => image.id, { onDelete: 'cascade' }),
+  // Null identifies leases acquired before run IDs were introduced.
+  runId: text('runId'),
   expiresAt: timestamp('expiresAt', { precision: 3, mode: 'date' }).notNull(),
 });

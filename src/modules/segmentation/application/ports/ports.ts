@@ -27,6 +27,11 @@ export type NewRegion = {
   carriedFromRegionId: RegionId | null;
 };
 
+export type DetectionRun = { imageId: ImageId; runId: string | null };
+type WriteRegionsOutcome =
+  | { type: 'regions_saved' }
+  | { type: 'detection_superseded' };
+
 export interface RegionRepository {
   listByImage(imageId: ImageId): Promise<
     ApplicationResult<{
@@ -37,6 +42,8 @@ export interface RegionRepository {
   >;
   startDetection(input: {
     imageId: ImageId;
+    runId: string;
+    now: Date;
     expiresAt: Date;
   }): Promise<
     ApplicationResult<
@@ -44,7 +51,7 @@ export interface RegionRepository {
     >
   >;
   finishDetection(
-    imageId: ImageId
+    run: DetectionRun
   ): Promise<ApplicationResult<{ type: 'detection_finished' }>>;
   findById(
     regionId: RegionId
@@ -54,14 +61,16 @@ export interface RegionRepository {
     >
   >;
   insertMany(
-    regions: NewRegion[]
-  ): Promise<ApplicationResult<{ type: 'regions_saved' }>>;
+    regions: NewRegion[],
+    run?: DetectionRun
+  ): Promise<ApplicationResult<WriteRegionsOutcome>>;
   /** Replace automatic detections of one concept on an image (idempotent re-runs). */
   replaceDetections(input: {
     imageId: ImageId;
     concept: string;
     regions: NewRegion[];
-  }): Promise<ApplicationResult<{ type: 'regions_saved' }>>;
+    runId?: string | null;
+  }): Promise<ApplicationResult<WriteRegionsOutcome>>;
   update(input: {
     regionId: RegionId;
     label?: string;

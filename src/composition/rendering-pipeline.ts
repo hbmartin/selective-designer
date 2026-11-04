@@ -32,7 +32,7 @@ import type { AutoDetectionScheduler } from '@/modules/segmentation';
 import { createRegionRepository } from '@/modules/segmentation/backend';
 
 import { getPipelineKernel, type PipelineKernel } from './pipeline-kernel';
-import { workflowAutoDetectionScheduler } from './segmentation-scheduler';
+import { createAutoDetectionScheduler } from './segmentation-scheduler';
 import { createCachedFactory } from './shared/singleton';
 
 /**
@@ -136,8 +136,8 @@ export const createRenderInputs = (kernel: InputsKernel): RenderInputs => ({
 
 /** Copied outputs become design images (native size), then get detection. */
 export const createResultImages = (
-  kernel: InputsKernel,
-  scheduler: AutoDetectionScheduler = workflowAutoDetectionScheduler
+  kernel: InputsKernel & Pick<PipelineKernel, 'clock'>,
+  scheduler: AutoDetectionScheduler = createAutoDetectionScheduler(kernel)
 ): ResultImages => ({
   async register(input) {
     const object = await kernel.objectStorage.getObjectBytes(input.objectKey);

@@ -30,6 +30,7 @@ import type {
 import { zUserDisplayName } from '../../domain/user';
 
 const zRole = () => z.enum(['admin', 'user']);
+const zLoginEmail = () => z.string().trim().toLowerCase().pipe(zEmailAddress());
 
 export const zGetAllInput = () =>
   z
@@ -46,14 +47,14 @@ export const zUpdateByIdInput = () =>
   z.object({
     id: zUserId(),
     name: zUserDisplayName().nullish(),
-    email: zEmailAddress(),
+    email: zLoginEmail(),
     role: zRole().nullish(),
   });
 
 export const zCreateInput = () =>
   z.object({
     name: zUserDisplayName().nullish(),
-    email: zEmailAddress(),
+    email: zLoginEmail(),
     role: zRole().nullish(),
   });
 

@@ -25,6 +25,7 @@ import { moodboardQueries } from './wired-queries';
 import type { ItemView } from '../application/use-cases/item-view';
 
 const POLL_MS = 1500;
+const EXPIRED_ATTEMPT_POLL_MS = 15_000;
 
 const ItemCard = (props: { item: ItemView; designId: DesignId }) => {
   const { t } = useTranslation(['moodboard']);
@@ -40,7 +41,7 @@ const ItemCard = (props: { item: ItemView; designId: DesignId }) => {
   });
   const retry = useMutation({
     ...moodboardQueries.retryCutout(),
-    onSuccess: invalidate,
+    onSettled: invalidate,
   });
   const { item } = props;
   const status = item.currentVersion.cutoutStatus;
@@ -59,7 +60,7 @@ const ItemCard = (props: { item: ItemView; designId: DesignId }) => {
           draggable={false}
           className="size-full object-contain"
         />
-        {status === 'pending' && (
+        {status === 'pending' && !item.cutoutRetryable && (
           <div className="absolute inset-0 flex items-center justify-center gap-1 bg-background/70 text-xs">
             <Spinner />
             {t('moodboard:panel.removingBackground')}
@@ -79,10 +80,12 @@ const ItemCard = (props: { item: ItemView; designId: DesignId }) => {
           {item.vendor}
         </span>
       )}
-      {status === 'failed' && (
+      {item.cutoutRetryable && (
         <div className="flex items-center gap-1 text-[11px] text-destructive">
           <AlertTriangleIcon className="size-3" />
-          {t('moodboard:panel.cutoutFailed')}
+          {status === 'pending'
+            ? t('moodboard:panel.cutoutDelayed')
+            : t('moodboard:panel.cutoutFailed')}
           <Button
             size="xs"
             variant="ghost"
@@ -136,12 +139,15 @@ export const MoodboardPanel = (props: { designId: DesignId }) => {
   const scopeKey = useCurrentScopeKey();
   const itemsQuery = useQuery({
     ...moodboardQueries.byDesign({ scopeKey, designId: props.designId }),
-    refetchInterval: (query) =>
-      query.state.data?.some(
+    refetchInterval: (query) => {
+      const pending = query.state.data?.filter(
         (item) => item.currentVersion.cutoutStatus === 'pending'
-      )
-        ? POLL_MS
-        : false,
+      );
+      if (!pending?.length) return false;
+      return pending.every((item) => item.cutoutRetryable)
+        ? EXPIRED_ATTEMPT_POLL_MS
+        : POLL_MS;
+    },
   });
   const groups = groupByCategory(itemsQuery.data ?? []);
 

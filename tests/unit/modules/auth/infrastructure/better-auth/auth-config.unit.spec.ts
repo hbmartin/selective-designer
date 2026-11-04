@@ -126,7 +126,7 @@ describe('Better Auth security configuration', () => {
     expect(options.emailAndPassword).toMatchObject({
       enabled: true,
       disableSignUp: true,
-      requireEmailVerification: true,
+      requireEmailVerification: false,
       minPasswordLength: 12,
     });
     expect(options.socialProviders).toBeUndefined();

@@ -73,12 +73,14 @@ describe('RegionRepositoryDrizzle', () => {
   });
 
   it('returns pending detection on an empty image and clears it after the last regions commit', async () => {
+    const now = new Date('2026-12-31T23:30:00.000Z');
     const expiresAt = new Date('2027-01-01T00:00:00.000Z');
+    const run = { imageId, runId: 'first' };
     expect(
-      okValue(await repository.startDetection({ imageId, expiresAt }))
+      okValue(await repository.startDetection({ ...run, now, expiresAt }))
     ).toEqual({ type: 'detection_started' });
     expect(
-      okValue(await repository.startDetection({ imageId, expiresAt }))
+      okValue(await repository.startDetection({ ...run, now, expiresAt }))
     ).toEqual({ type: 'detection_already_started' });
     expect(okValue(await repository.listByImage(imageId))).toEqual({
       type: 'regions_listed',
@@ -86,10 +88,72 @@ describe('RegionRepositoryDrizzle', () => {
       detectionExpiresAt: expiresAt,
     });
     await repository.insertMany([region('last-region', 'window')]);
-    await repository.finishDetection(imageId);
+    await repository.finishDetection(run);
     expect(okValue(await repository.listByImage(imageId))).toMatchObject({
       detectionExpiresAt: null,
       regions: [{ id: 'last-region' }],
+    });
+  });
+
+  it('reclaims an expired lease and fences the old workflow’s writes and cleanup', async () => {
+    const now = new Date('2027-01-01T00:00:00.000Z');
+    const expiresAt = new Date('2027-01-01T00:30:00.000Z');
+    const nextExpiry = new Date('2027-01-01T01:00:00.000Z');
+    const oldRun = { imageId, runId: 'old' };
+    const newRun = { imageId, runId: 'new' };
+    await repository.startDetection({ ...oldRun, now, expiresAt });
+    const claims = await Promise.all([
+      repository.startDetection({
+        ...newRun,
+        now: expiresAt,
+        expiresAt: nextExpiry,
+      }),
+      repository.startDetection({
+        ...newRun,
+        runId: 'other',
+        now: expiresAt,
+        expiresAt: nextExpiry,
+      }),
+    ]);
+    expect(claims.map((claim) => okValue(claim).type).sort()).toEqual([
+      'detection_already_started',
+      'detection_started',
+    ]);
+    const winner =
+      okValue(claims[0]!).type === 'detection_started'
+        ? newRun
+        : { ...newRun, runId: 'other' };
+    await repository.finishDetection(oldRun);
+    expect(
+      okValue(await repository.listByImage(imageId)).detectionExpiresAt
+    ).toEqual(nextExpiry);
+    expect(
+      okValue(
+        await repository.replaceDetections({
+          ...oldRun,
+          concept: 'window',
+          regions: [region('old-result', 'window')],
+        })
+      ).type
+    ).toBe('detection_superseded');
+    expect(
+      okValue(
+        await repository.insertMany([region('stale-copy', 'window')], oldRun)
+      ).type
+    ).toBe('detection_superseded');
+    expect(
+      okValue(
+        await repository.replaceDetections({
+          ...winner,
+          concept: 'window',
+          regions: [region('new-result', 'window')],
+        })
+      ).type
+    ).toBe('regions_saved');
+    await repository.finishDetection(winner);
+    expect(okValue(await repository.listByImage(imageId))).toMatchObject({
+      detectionExpiresAt: null,
+      regions: [{ id: 'new-result' }],
     });
   });
 

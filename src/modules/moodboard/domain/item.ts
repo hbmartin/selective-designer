@@ -77,6 +77,7 @@ export type ItemVersion = {
   cutoutKey: ObjectKey | null;
   maskKey: ObjectKey | null;
   cutoutStatus: CutoutStatus;
+  cutoutAttemptStartedAt: Date | null;
   createdAt: Date;
 };
 

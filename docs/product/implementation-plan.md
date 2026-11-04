@@ -156,6 +156,6 @@ Decisions come from two planning interviews held on the same day. Conflicts betw
 - **Unit tests:** render-plan skip matrix, FLUX prompt-grid golden strings, mask polarity, step-result mapper, webhook verifier, recipe immutability.
 - **Integration tests (PGlite):** repositories and the upload intent.
 - **Workflow tests:** orchestration tested with `vi.mock('workflow')`.
-- **UI:** `pnpm dev` with MinIO and `PROVIDER_MODE=fake`, then walk through: create a design → upload → mood board → place → render → retry a failed model → prefer a result → compare (side, swipe, onion) → download. Check console errors and layout at desktop and mobile sizes, then run `pnpm test:e2e --project=chromium` and `pnpm test:e2e:visual`.
+- **UI:** `pnpm dev` with MinIO and `PROVIDER_MODE=fake`, then walk through: create a design → upload → mood board → place → render → retry a failed model → prefer a result → compare (side, swipe, onion) → download. Check console errors and layout at desktop and mobile sizes, then run `pnpm test:e2e --project=chromium` and `pnpm test:e2e:visual` when the phase includes E2E and visual work. P8 defers those runs.
 - **Deploy:** Vercel preview with real keys, using one real render per model.
 - **Before merge:** `pnpm verify`.

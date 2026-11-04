@@ -1,4 +1,7 @@
-import { getAiProvidersConfig } from './ai-providers';
+import {
+  getAiProvidersConfig,
+  validateAiProvidersBuildConfig,
+} from './ai-providers';
 import { getAuthConfig } from './auth';
 import { getDatabaseConfig } from './database';
 import { getEmailConfig } from './email';
@@ -9,9 +12,7 @@ import { getRedisConfig } from './redis';
 import { getStorageConfig } from './storage';
 import { getTelemetryConfig } from './telemetry';
 
-export function validateServerConfig() {
-  if (shouldSkipEnvValidation()) return;
-
+function validateInfrastructureConfig() {
   getAuthConfig();
   getDatabaseConfig();
   getEmailConfig();
@@ -20,6 +21,16 @@ export function validateServerConfig() {
   getRedisConfig();
   getStorageConfig();
   getTelemetryConfig();
-  // Last, so infrastructure secrets (auth, database, storage) fail first.
+}
+
+export function validateServerConfig() {
+  if (shouldSkipEnvValidation()) return;
+  validateInfrastructureConfig();
   getAiProvidersConfig();
+}
+
+export function validateServerBuildConfig() {
+  if (shouldSkipEnvValidation()) return;
+  validateInfrastructureConfig();
+  validateAiProvidersBuildConfig();
 }

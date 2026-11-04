@@ -1,7 +1,6 @@
 import { type Result as BoxedResult, Result } from '@bloodyowl/boxed';
-import { and, asc, eq } from 'drizzle-orm';
+import { and, asc, eq, isNull, lte } from 'drizzle-orm';
 
-import { image } from '@/modules/design/infrastructure/drizzle/schema';
 import { AppError } from '@/modules/kernel/domain/errors/app-error';
 import {
   toDesignId,
@@ -10,8 +9,10 @@ import {
   toRegionId,
 } from '@/modules/kernel/domain/ids';
 import { observeRepository } from '@/modules/kernel/infrastructure/db/observability';
+import { image } from '@/modules/kernel/infrastructure/db/schema';
 import type { DbLike } from '@/modules/kernel/infrastructure/db/types';
 import type {
+  DetectionRun,
   NewRegion,
   RegionRepository,
 } from '@/modules/segmentation/application/ports/ports';
@@ -93,6 +94,24 @@ const toValues = (input: NewRegion) => ({
   carriedFromRegionId: input.carriedFromRegionId,
 });
 
+const ownedDetection = (run: DetectionRun) =>
+  and(
+    eq(activeDetection.imageId, run.imageId),
+    run.runId === null
+      ? isNull(activeDetection.runId)
+      : eq(activeDetection.runId, run.runId)
+  );
+
+/** Lock the lease row in the same transaction as publishing region changes. */
+const lockDetection = async (db: DbLike, run: DetectionRun) => {
+  const [row] = await db
+    .select({ imageId: activeDetection.imageId })
+    .from(activeDetection)
+    .where(ownedDetection(run))
+    .for('update');
+  return row;
+};
+
 export const createRegionRepository = ({
   db,
 }: {
@@ -138,8 +157,16 @@ export const createRegionRepository = ({
       try {
         const [started] = await db
           .insert(activeDetection)
-          .values(input)
-          .onConflictDoNothing()
+          .values({
+            imageId: input.imageId,
+            runId: input.runId,
+            expiresAt: input.expiresAt,
+          })
+          .onConflictDoUpdate({
+            target: activeDetection.imageId,
+            set: { runId: input.runId, expiresAt: input.expiresAt },
+            setWhere: lte(activeDetection.expiresAt, input.now),
+          })
           .returning({ imageId: activeDetection.imageId });
         return Result.Ok(
           started
@@ -150,11 +177,9 @@ export const createRegionRepository = ({
         return Result.Error(dbError(error));
       }
     },
-    async finishDetection(imageId) {
+    async finishDetection(run) {
       try {
-        await db
-          .delete(activeDetection)
-          .where(eq(activeDetection.imageId, imageId));
+        await db.delete(activeDetection).where(ownedDetection(run));
         return Result.Ok({ type: 'detection_finished' });
       } catch (error) {
         return Result.Error(dbError(error));
@@ -175,11 +200,18 @@ export const createRegionRepository = ({
         return Result.Error(dbError(error));
       }
     },
-    async insertMany(regions) {
+    async insertMany(regions, run) {
       try {
-        if (regions.length > 0) {
-          await db.insert(regionTable).values(regions.map(toValues));
+        if (regions.length === 0) return Result.Ok({ type: 'regions_saved' });
+        if (run) {
+          return await db.transaction(async (tx) => {
+            if (!(await lockDetection(tx, run)))
+              return Result.Ok({ type: 'detection_superseded' } as const);
+            await tx.insert(regionTable).values(regions.map(toValues));
+            return Result.Ok({ type: 'regions_saved' } as const);
+          });
         }
+        await db.insert(regionTable).values(regions.map(toValues));
         return Result.Ok({ type: 'regions_saved' });
       } catch (error) {
         return Result.Error(dbError(error));
@@ -187,7 +219,16 @@ export const createRegionRepository = ({
     },
     async replaceDetections(input) {
       try {
-        await db.transaction(async (tx) => {
+        return await db.transaction(async (tx) => {
+          if (
+            input.runId !== undefined &&
+            !(await lockDetection(tx, {
+              imageId: input.imageId,
+              runId: input.runId,
+            }))
+          ) {
+            return Result.Ok({ type: 'detection_superseded' } as const);
+          }
           await tx
             .delete(regionTable)
             .where(
@@ -200,8 +241,8 @@ export const createRegionRepository = ({
           if (input.regions.length > 0) {
             await tx.insert(regionTable).values(input.regions.map(toValues));
           }
+          return Result.Ok({ type: 'regions_saved' } as const);
         });
-        return Result.Ok({ type: 'regions_saved' });
       } catch (error) {
         return Result.Error(dbError(error));
       }

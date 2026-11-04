@@ -45,9 +45,9 @@ const logger = {
   error: () => {},
 };
 
-const setup = () => {
+const setup = (clock = { now: () => now }) => {
   let counter = 0;
-  const items = createFakeItemRepository(() => now);
+  const items = createFakeItemRepository(clock.now);
   const intents = createFakeUploadIntentStore();
   const storage = createFakeObjectStorage();
   const calls = createFakeProviderCallLog();
@@ -79,7 +79,7 @@ const setup = () => {
     },
     backgroundRemovalScheduler: { schedule },
     idGenerator,
-    clock: { now: () => now },
+    clock,
     logger,
   });
   const pipeline = (backgroundRemover: BackgroundRemover) =>
@@ -90,7 +90,7 @@ const setup = () => {
       backgroundRemover,
       providerCallLog: calls.log,
       idGenerator,
-      clock: { now: () => now },
+      clock,
       logger,
     });
   return { useCases, pipeline, items, intents, storage, calls, schedule };
@@ -257,7 +257,7 @@ describe('moodboard use cases', () => {
     expect(ctx.items.versions.get(item.currentVersion.id)?.number).toBe(1);
   });
 
-  it('only retries failed cut-outs', async () => {
+  it('retries failed cut-outs immediately, but not fresh pending cut-outs', async () => {
     const ctx = setup();
     const item = await createProduct(ctx);
     expect(
@@ -284,6 +284,40 @@ describe('moodboard use cases', () => {
     ).toMatchObject({
       type: 'item_updated',
       item: { currentVersion: { cutoutStatus: 'pending' } },
+    });
+    expect(ctx.schedule).toHaveBeenCalledTimes(2);
+  });
+  it('offers a retry to the owner after a pending cut-out expires', async () => {
+    let time = now;
+    const ctx = setup({ now: () => time });
+    const item = await createProduct(ctx);
+    expect(item.cutoutRetryable).toBe(false);
+    time = new Date(now.getTime() + 30 * 60_000);
+
+    expect(
+      okValue(await ctx.useCases.list({ currentUserId: ownerId, designId }))
+    ).toMatchObject({
+      type: 'moodboard_listed',
+      items: [{ id: item.id, cutoutRetryable: true }],
+    });
+    expect(
+      okValue(
+        await ctx.useCases.retryCutout({
+          currentUserId: strangerId,
+          itemId: item.id,
+        })
+      ).type
+    ).toBe('item_not_found');
+    expect(
+      okValue(
+        await ctx.useCases.retryCutout({
+          currentUserId: ownerId,
+          itemId: item.id,
+        })
+      )
+    ).toMatchObject({
+      type: 'item_updated',
+      item: { id: item.id, cutoutRetryable: false },
     });
     expect(ctx.schedule).toHaveBeenCalledTimes(2);
   });

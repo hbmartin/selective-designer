@@ -98,15 +98,14 @@ export async function removeBackgroundForVersion(
       cutoutKey: null,
     });
     if (saved.isError()) return Result.Error(saved.getError());
+    if (saved.get().type !== 'cutout_result_saved') {
+      return Result.Ok({ type: 'cutout_skipped' as const });
+    }
     deps.logger.warn({
       event: 'moodboard.cutout.failed',
       details: { ...input, reason },
     });
-    return Result.Ok(
-      saved.get().type === 'cutout_result_saved'
-        ? { type: 'cutout_failed' as const, reason }
-        : { type: 'cutout_skipped' as const }
-    );
+    return Result.Ok({ type: 'cutout_failed' as const, reason });
   };
 
   if (removal.type === 'background_removal_failed') {
@@ -188,19 +187,19 @@ export async function removeBackgroundForVersion(
  */
 export async function markCutoutFailed(
   deps: Pick<MoodboardPipelineDeps, 'itemRepository' | 'logger'>,
-  input: CutoutAttempt
+  { failureCode, ...attempt }: CutoutAttempt & { failureCode?: string }
 ): Promise<
   MoodboardResult<{ type: 'cutout_marked_failed' } | { type: 'cutout_skipped' }>
 > {
   const saved = await deps.itemRepository.finishCutoutAttempt({
-    ...input,
+    ...attempt,
     cutoutStatus: 'failed',
     cutoutKey: null,
   });
   if (saved.isError()) return Result.Error(saved.getError());
   deps.logger.warn({
     event: 'moodboard.cutout.workflow_failed',
-    details: { ...input, outcome: saved.get().type },
+    details: { ...attempt, failureCode, outcome: saved.get().type },
   });
   return Result.Ok({
     type:

@@ -66,7 +66,7 @@ export async function writeOperatorPassword(
           email: input.email,
           name: input.name,
           role: input.role,
-          emailVerified: true,
+          emailVerified: false,
         })
         .onConflictDoNothing()
         .returning({ id: user.id });

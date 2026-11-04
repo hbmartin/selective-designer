@@ -1,3 +1,4 @@
+import type { DetectionRun } from './application/ports/ports';
 import {
   carryOverRegions,
   detectConcept,
@@ -37,8 +38,17 @@ export function createSegmentationPipelineUseCases(
   deps: SegmentationPipelineDeps
 ) {
   return {
-    finishDetection: (imageId: Input<typeof detectionConceptsFor>) =>
-      deps.regionRepository.finishDetection(imageId),
+    async finishDetection(run: DetectionRun) {
+      const finished = await deps.regionRepository.finishDetection(run);
+      if (finished.isError()) {
+        deps.logger.warn({
+          event: 'segmentation.detection.cleanup_failed',
+          details: run,
+          exception: finished.getError(),
+        });
+      }
+      return finished;
+    },
     concepts: (imageId: Input<typeof detectionConceptsFor>) =>
       detectionConceptsFor(deps, imageId),
     detectConcept: (input: Input<typeof detectConcept>) =>

@@ -1,3 +1,3 @@
-import { validateServerConfig } from '@/modules/kernel/backend';
+import { validateServerBuildConfig } from '@/modules/kernel/backend';
 
-validateServerConfig();
+validateServerBuildConfig();

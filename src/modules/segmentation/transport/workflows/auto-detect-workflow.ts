@@ -14,7 +14,11 @@ const pipeline = async () =>
     await import('@/composition/segmentation-pipeline')
   ).getSegmentationPipelineUseCases();
 
-async function carryOverStep(fromImageId: string, toImageId: string) {
+async function carryOverStep(
+  fromImageId: string,
+  toImageId: string,
+  runId: string | null = null
+) {
   'use step';
   return unwrapStepResult(
     await (
@@ -22,6 +26,7 @@ async function carryOverStep(fromImageId: string, toImageId: string) {
     ).carryOver({
       fromImageId: imageIdOrFail(fromImageId),
       toImageId: imageIdOrFail(toImageId),
+      runId,
     })
   );
 }
@@ -33,19 +38,28 @@ async function conceptsStep(imageId: string) {
   );
 }
 
-async function detectConceptStep(imageId: string, concept: string) {
+async function detectConceptStep(
+  imageId: string,
+  concept: string,
+  runId: string | null = null
+) {
   'use step';
   return unwrapStepResult(
     await (
       await pipeline()
-    ).detectConcept({ imageId: imageIdOrFail(imageId), concept })
+    ).detectConcept({ imageId: imageIdOrFail(imageId), concept, runId })
   );
 }
 
-async function finishDetectionStep(imageId: string) {
+async function finishDetectionStep(
+  imageId: string,
+  runId: string | null = null
+) {
   'use step';
   return unwrapStepResult(
-    await (await pipeline()).finishDetection(imageIdOrFail(imageId))
+    await (
+      await pipeline()
+    ).finishDetection({ imageId: imageIdOrFail(imageId), runId })
   );
 }
 
@@ -57,25 +71,42 @@ async function finishDetectionStep(imageId: string) {
 export async function autoDetectWorkflow(input: {
   imageId: string;
   carryFromImageId: string | null;
+  runId?: string;
 }) {
   'use workflow';
   try {
     if (input.carryFromImageId) {
-      await carryOverStep(input.carryFromImageId, input.imageId);
+      if (input.runId === undefined)
+        await carryOverStep(input.carryFromImageId, input.imageId);
+      else
+        await carryOverStep(input.carryFromImageId, input.imageId, input.runId);
     }
     const concepts = await conceptsStep(input.imageId);
     if (concepts.type === 'image_missing') return { detected: 0 };
     const results = await Promise.allSettled(
       concepts.concepts.map((concept) =>
-        detectConceptStep(input.imageId, concept)
+        input.runId === undefined
+          ? detectConceptStep(input.imageId, concept)
+          : detectConceptStep(input.imageId, concept, input.runId)
       )
     );
     return {
-      detected: results.filter((result) => result.status === 'fulfilled')
-        .length,
-      failed: results.filter((result) => result.status === 'rejected').length,
+      detected: results.filter(
+        (result) =>
+          result.status === 'fulfilled' &&
+          result.value.type === 'concept_detected'
+      ).length,
+      failed: results.filter(
+        (result) =>
+          result.status === 'rejected' || result.value.type === 'concept_failed'
+      ).length,
     };
   } finally {
-    await finishDetectionStep(input.imageId);
+    try {
+      if (input.runId === undefined) await finishDetectionStep(input.imageId);
+      else await finishDetectionStep(input.imageId, input.runId);
+    } catch {
+      // The cleanup step logs persistence errors. Preserve the detection outcome.
+    }
   }
 }

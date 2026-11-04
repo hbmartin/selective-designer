@@ -366,6 +366,8 @@ jobs:
           } >> "$GITHUB_ENV"
 
       - name: Build app
+        env:
+          CI_PROVIDER_KEY_PLACEHOLDERS: 'true'
         run: |
           mkdir -p test-results/build
           set -o pipefail

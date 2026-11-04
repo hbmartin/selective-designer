@@ -87,7 +87,12 @@ export const createSegmentationHandlers = ({
         regions_listed: ({
           regions,
           detection,
-        }: RegionListView): RegionListView => ({ regions, detection }),
+          detectionRemainingMs,
+        }: RegionListView): RegionListView => ({
+          regions,
+          detection,
+          detectionRemainingMs,
+        }),
       }
     ),
   segment: (

@@ -85,7 +85,7 @@ Authenticated route guards live in TanStack Router `beforeLoad` hooks on the pro
 Freshness differs by route:
 
 * `/manager` passes `requireFresh: true` to `requireAuthenticatedRouteOrForbidden`. Client navigations always refetch the current session before allowing the manager shell, so revocation, sign-out, and role changes are observed before privileged manager UI renders.
-* `/app`, `/login`, and `/onboarding` use the default session freshness. On SSR they fetch from the request context; on the client they may reuse the current-session query cache when it already has a value, and fetch when it does not. Auth boundary actions such as sign-in verification, onboarding completion, and sign-out clear or refresh the session cache and invalidate the router so the relevant `beforeLoad` hook reruns.
+* `/app`, `/login`, and `/onboarding` use the default session freshness. On SSR they fetch from the request context; on the client they may reuse the current-session query cache when it already has a value, and fetch when it does not. Auth boundary actions such as sign-in, onboarding completion, and sign-out clear or refresh the session cache and invalidate the router so the relevant `beforeLoad` hook reruns.
 
 Use `requireFresh: true` for protected routes whose UI or loaders must observe authorization changes before render. The default cached session path is acceptable for lower-risk route transitions where avoiding an extra client fetch is preferred.
 
@@ -193,7 +193,7 @@ To submit one paid request, configure `PROVIDER_MODE=live`, provider keys, and p
 
 This app is a TanStack Start app with Nitro already enabled in `vite.config.ts`. `pnpm build` creates the production `.output` directory, and `pnpm start` runs `.output/server/index.mjs`.
 
-Sign-in uses email and password. The local seed creates a development admin and user with the same password. Set `SEED_ACCOUNT_PASSWORD` for both the seed and browser tests if you override the local default, `local-development-only-password`.
+Sign-in uses email and password. Public signup is disabled. An operator can change the login email in the user manager; the existing password works with the new address without an email verification or confirmation step. The local seed creates a development admin and user with the same password. Set `SEED_ACCOUNT_PASSWORD` for both the seed and browser tests if you override the local default, `local-development-only-password`. Rerunning the seed preserves existing passwords. Use the operator reset command if you change the value for an existing local account.
 
 Use the operator command to create accounts and recover access. Point the command at the intended database and supply the password on standard input so it stays out of command history and arguments. In Bash or Zsh:
 
