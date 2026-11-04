@@ -14,7 +14,10 @@ import {
   idColumn,
 } from '@/modules/kernel/infrastructure/db/schema/common';
 
-import type { DetectionProgress } from '../../application/ports/ports';
+import type {
+  DetectionPhase,
+  DetectionProgress,
+} from '../../application/ports/ports';
 
 export const region = pgTable(
   'region',
@@ -49,6 +52,8 @@ export const activeDetection = pgTable('active_detection', {
     .references(() => image.id, { onDelete: 'cascade' }),
   // Null identifies leases acquired before run IDs were introduced.
   runId: text('runId'),
+  phase: text('phase').$type<DetectionPhase>(),
+  workerId: text('workerId'),
   failed: boolean('failed').default(false).notNull(),
   progress: jsonb('progress').$type<DetectionProgress>(),
   expiresAt: timestamp('expiresAt', { precision: 3, mode: 'date' }).notNull(),

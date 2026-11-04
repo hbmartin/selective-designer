@@ -4,6 +4,8 @@ import { ArrowLeftIcon } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import { toast } from 'sonner';
 
+import { useHydrated } from '@/platform/hooks/use-hydrated';
+
 import {
   AppPageLayout as PageLayout,
   AppPageLayoutContent as PageLayoutContent,
@@ -49,6 +51,8 @@ export const DesignEditor = (props: {
     imageId: props.sourceImageId,
   });
   const regions = useQuery(regionsOptions);
+  // The regions prefetch is secondary and can settle after SSR has rendered.
+  const regionData = useHydrated() ? regions.data : undefined;
   const retryDetection = useMutation({
     ...segmentationQueries.retryDetection(),
     onSettled: () =>
@@ -82,7 +86,7 @@ export const DesignEditor = (props: {
     ready:
       item.kind === 'swatch' || item.currentVersion.cutoutStatus === 'ready',
   }));
-  const editorRegions: EditorRegion[] = (regions.data?.regions ?? []).map(
+  const editorRegions: EditorRegion[] = (regionData?.regions ?? []).map(
     (region) => ({
       id: region.id,
       label: region.label,
@@ -91,6 +95,7 @@ export const DesignEditor = (props: {
     })
   );
   const isBaseImage = design.data?.baseImage.id === props.sourceImageId;
+  const detection = regionData?.detection;
 
   return (
     <PageLayout>
@@ -131,7 +136,29 @@ export const DesignEditor = (props: {
                   {t('rendering:editor.fromResult')}
                 </p>
               )}
-              {(regions.data?.detection === 'retryable' ||
+              {detection?.type === 'waiting' && (
+                <p role="status" className="text-xs text-muted-foreground">
+                  {t('segmentation:list.waitingForDetection')}
+                </p>
+              )}
+              {detection?.type === 'running' && (
+                <p role="status" className="text-xs text-muted-foreground">
+                  {t('segmentation:list.detectingRegions')}
+                </p>
+              )}
+              {detection && detection.omissions.length > 0 && (
+                <ul
+                  aria-label={t('segmentation:list.detectionOmissions')}
+                  className="min-w-0 text-xs break-words text-muted-foreground"
+                >
+                  {detection.omissions.map(({ concept, reason }) => (
+                    <li key={concept}>
+                      {t(`segmentation:list.omissions.${reason}`, { concept })}
+                    </li>
+                  ))}
+                </ul>
+              )}
+              {(detection?.type === 'retryable' ||
                 retryDetection.isPending) && (
                 <Button
                   size="sm"

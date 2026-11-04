@@ -49,7 +49,12 @@ export const itemVersion = pgTable(
       mode: 'date',
     }),
   },
-  (table) => [index('item_version_item_idx').on(table.itemId)]
+  (table) => [
+    index('item_version_item_idx').on(table.itemId),
+    index('item_version_cutout_key_idx').on(table.cutoutKey),
+    index('item_version_photo_key_idx').on(table.photoKey),
+    index('item_version_mask_key_idx').on(table.maskKey),
+  ]
 );
 
 export type ItemRow = typeof item.$inferSelect;

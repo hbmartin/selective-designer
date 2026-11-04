@@ -255,12 +255,12 @@ module.exports = {
       },
     },
     {
-      name: 'composition-uses-segmentation-workflow-public-gate',
+      name: 'composition-uses-workflow-public-gate',
       severity: 'error',
       comment:
-        'Composition imports segmentation workflows through segmentation/workflows/backend.',
+        'Composition imports durable workflow entry points through the module workflows/backend gate.',
       from: { path: '^src/composition/' },
-      to: { path: '^src/modules/segmentation/transport/workflows/' },
+      to: { path: '^src/modules/[^/]+/transport/workflows/' },
     },
     {
       name: 'composition-uses-kernel-storage-public-gate',

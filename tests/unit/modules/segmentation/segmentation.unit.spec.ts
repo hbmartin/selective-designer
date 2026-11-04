@@ -50,6 +50,29 @@ const fakeRegions = () => {
     createdAt: now,
   });
   const repository: RegionRepository = {
+    async findDetection() {
+      return Result.Ok({
+        type: 'detection_lease',
+        runId: 'run-1',
+        workerId: null,
+        phase: null,
+        failed: false,
+        expiresAt: new Date(now.getTime() + 1000),
+        progress: null,
+      });
+    },
+    async detectionLabels() {
+      return Result.Ok([]);
+    },
+    async claimDetection() {
+      return Result.Ok({ type: 'detection_started' });
+    },
+    async failDispatch() {
+      return Result.Ok({ type: 'dispatch_failure_recorded' });
+    },
+    async omitConcept() {
+      return Result.Ok({ type: 'regions_saved' });
+    },
     async startDetection() {
       return Result.Ok({ type: 'detection_started' });
     },
@@ -68,7 +91,7 @@ const fakeRegions = () => {
     async listByImage(imageId) {
       return Result.Ok({
         type: 'regions_listed',
-        detectionExpiresAt: null,
+        detection: { type: 'no_detection' },
         regions: rows.filter((r) => r.imageId === imageId),
       });
     },
@@ -318,6 +341,131 @@ describe('interactive segmentation', () => {
 });
 
 describe('segmentation pipeline', () => {
+  it('avoids paid calls for superseded and completed concepts', async () => {
+    const segment = vi.fn(createFakeSegmenter().segment);
+    const ctx = setup({ segment });
+    const input = {
+      imageId: baseImageId,
+      concept: 'window',
+      runId: 'current',
+      workerId: 'worker',
+    };
+    expect(okValue(await ctx.pipeline.detectConcept(input)).type).toBe(
+      'detection_superseded'
+    );
+    vi.spyOn(ctx.regions.repository, 'findDetection').mockResolvedValue(
+      Result.Ok({
+        type: 'detection_lease',
+        phase: 'running',
+        runId: input.runId,
+        workerId: input.workerId,
+        expiresAt: new Date(now.getTime() + 1000),
+        failed: false,
+        progress: {
+          concepts: ['window'],
+          completedConcepts: ['window'],
+          carryFromImageId: null,
+          carryOverCompleted: true,
+        },
+      })
+    );
+    expect(okValue(await ctx.pipeline.detectConcept(input)).type).toBe(
+      'detection_concept_already_completed'
+    );
+    expect(segment).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    {
+      rejection: 'prompt',
+      expected: { type: 'concept_omitted' },
+      reason: 'prompt_rejected',
+    },
+    {
+      rejection: 'invalid mask',
+      expected: { type: 'concept_omitted' },
+      reason: 'invalid_mask',
+    },
+    {
+      rejection: 'missing mask',
+      expected: { type: 'concept_failed', reason: 'mask_unavailable' },
+      reason: undefined,
+    },
+  ] as const)(
+    'handles $rejection without publishing a partial concept',
+    async ({ rejection, expected, reason }) => {
+      const ctx = setup({
+        async segment() {
+          if (rejection === 'prompt')
+            return Result.Ok({
+              type: 'segmentation_failed',
+              reason: 'provider_rejected_422',
+              terminal: true,
+              provider: 'fake',
+              endpoint: 'fake/segmentation',
+            });
+          return Result.Ok({
+            type: 'segmented',
+            provider: 'fake',
+            endpoint: 'fake/segmentation',
+            providerRequestId: undefined,
+            costUsdMicros: 0,
+            costSource: 'price_table',
+            masks: [
+              {
+                mask: { kind: 'bytes', bytes: Uint8Array.of(1) },
+                box: [0, 0, 10, 10],
+                score: 1,
+              },
+              {
+                mask: { kind: 'url', url: 'https://provider.test/mask.png' },
+                box: [10, 0, 20, 10],
+                score: 1,
+              },
+            ],
+          });
+        },
+      });
+      if (rejection === 'invalid mask') {
+        vi.spyOn(ctx.storage.storage, 'copyFromUrl').mockResolvedValue(
+          Result.Ok({ type: 'copy_source_rejected', reason: 'content_type' })
+        );
+      }
+      const omit = vi.spyOn(ctx.regions.repository, 'omitConcept');
+      vi.spyOn(ctx.regions.repository, 'findDetection').mockResolvedValue(
+        Result.Ok({
+          type: 'detection_lease',
+          phase: 'running',
+          runId: 'current',
+          workerId: 'worker',
+          expiresAt: new Date(now.getTime() + 1000),
+          failed: false,
+          progress: {
+            concepts: ['window'],
+            completedConcepts: [],
+            carryFromImageId: null,
+            carryOverCompleted: true,
+          },
+        })
+      );
+      expect(
+        okValue(
+          await ctx.pipeline.detectConcept({
+            imageId: baseImageId,
+            concept: 'window',
+            runId: 'current',
+            workerId: 'worker',
+          })
+        )
+      ).toEqual(expected);
+      expect(omit.mock.calls.map(([input]) => input.reason)).toEqual(
+        reason ? [reason] : []
+      );
+      expect(ctx.storage.objects.size).toBe(0);
+      expect(ctx.regions.rows).toHaveLength(0);
+    }
+  );
+
   it('detects each concept and replaces earlier detections on re-run', async () => {
     const ctx = setup();
     const concepts = okValue(await ctx.pipeline.concepts(baseImageId));

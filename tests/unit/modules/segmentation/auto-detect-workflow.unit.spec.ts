@@ -4,10 +4,12 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { AppError } from '@/modules/kernel';
 import {
   autoDetectWorkflow,
+  claimedAutoDetectWorkflow,
   recoverableAutoDetectWorkflow,
 } from '@/modules/segmentation/testing';
 
 const pipeline = vi.hoisted(() => ({
+  claimDetection: vi.fn(),
   carryOver: vi.fn(),
   prepareDetection: vi.fn(),
   finalizeDetection: vi.fn(),
@@ -19,6 +21,7 @@ const pipeline = vi.hoisted(() => ({
 vi.mock('workflow', () => ({
   FatalError: class FatalError extends Error {},
   RetryableError: class RetryableError extends Error {},
+  getWorkflowMetadata: () => ({ workflowRunId: 'workflow-run' }),
 }));
 vi.mock('@/composition/segmentation-pipeline', () => ({
   getSegmentationPipelineUseCases: () => pipeline,
@@ -70,6 +73,71 @@ describe('automatic detection workflow cleanup', () => {
       imageId: run.imageId,
       runId: run.runId,
     });
+  });
+
+  it('keeps omitted run IDs compatible with queued legacy jobs', async () => {
+    pipeline.concepts.mockResolvedValue(
+      Result.Ok({ type: 'concepts', concepts: ['door'] })
+    );
+    pipeline.detectConcept.mockResolvedValue(
+      Result.Ok({ type: 'concept_detected', count: 1 })
+    );
+    const { imageId, carryFromImageId } = run;
+    await autoDetectWorkflow({ imageId, carryFromImageId });
+    expect(pipeline.detectConcept).toHaveBeenCalledExactlyOnceWith({
+      imageId,
+      concept: 'door',
+      runId: null,
+    });
+    expect(pipeline.finishDetection).toHaveBeenCalledExactlyOnceWith({
+      imageId,
+      runId: null,
+    });
+  });
+
+  it('skips duplicate delivery before preparing or finalizing the run', async () => {
+    pipeline.claimDetection.mockResolvedValue(
+      Result.Ok({ type: 'detection_already_started' })
+    );
+    await claimedAutoDetectWorkflow(run);
+    expect(pipeline.prepareDetection).not.toHaveBeenCalled();
+    expect(pipeline.finalizeDetection).not.toHaveBeenCalled();
+  });
+
+  it('passes its worker identity through and processes only unfinished work', async () => {
+    const claimed = {
+      imageId: run.imageId,
+      runId: run.runId,
+      workerId: 'workflow-run',
+    };
+    pipeline.claimDetection.mockResolvedValue(
+      Result.Ok({ type: 'detection_started' })
+    );
+    pipeline.prepareDetection.mockResolvedValue(
+      Result.Ok({
+        type: 'detection_prepared',
+        progress: {
+          carryFromImageId: null,
+          carryOverCompleted: true,
+          concepts: ['chair', 'window', 'door'],
+          completedConcepts: ['chair'],
+          omissions: [{ concept: 'door', reason: 'invalid_mask' }],
+        },
+      })
+    );
+    pipeline.detectConcept.mockResolvedValue(
+      Result.Ok({ type: 'concept_detected', count: 1 })
+    );
+    pipeline.finalizeDetection.mockResolvedValue(
+      Result.Ok({ type: 'detection_finished' })
+    );
+    await claimedAutoDetectWorkflow({ imageId: run.imageId, runId: run.runId });
+    expect(pipeline.claimDetection).toHaveBeenCalledExactlyOnceWith(claimed);
+    expect(pipeline.detectConcept).toHaveBeenCalledExactlyOnceWith({
+      ...claimed,
+      concept: 'window',
+    });
+    expect(pipeline.finalizeDetection).toHaveBeenCalledExactlyOnceWith(claimed);
   });
 
   it('keeps the original error if the lease release also fails', async () => {

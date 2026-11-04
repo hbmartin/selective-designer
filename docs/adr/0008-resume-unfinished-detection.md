@@ -1,9 +1,13 @@
 # Resume unfinished automatic detection
 
-The queue can accept a run even when the application gets an error back. Keep the run active until the worker reports an outcome or its lease expires so accepted work can still publish. After failure or expiry, the image owner can retry without creating a new design or render result.
+Persist the detection intent with the image. An interrupted request can leave an intent that the image owner can recover in the editor. A confirmed dispatch failure is immediately retryable. When queue acceptance is uncertain, give the worker two minutes to claim the attempt. A claimed attempt has 30 minutes to finish. The owner can retry after failure or expiry, and a delayed worker cannot publish for the replacement attempt.
 
 Record progress with the resulting regions so a retry runs only unfinished work. Restarting the whole detection would spend more provider calls and could replace regions already used in the editor. A replacement attempt owns future writes while completed regions and manual regions keep their identities.
 
-For a revised design, attempt the mood board copy before taking the concept snapshot. If the copy fails, detect using the categories saved so far. A concept is complete when all returned masks are saved, including when the provider returns zero masks. Cleanup is limited to fresh uploads that definitively never published because a database error can arrive after commit.
+For a revised design, attempt the mood board copy before taking the concept snapshot. A reported copy failure releases detection using the categories saved so far. If the copy never reports back, the owner can retry after two minutes and freeze the categories saved at that point. A late copy cannot change that run's snapshot.
+
+A concept is complete when all returned masks are saved, including when the provider returns zero masks. A definitive prompt rejection or invalid mask leaves a visible omission. Temporary failures remain retryable. Cleanup is limited to fresh uploads that definitively never published because a database error can arrive after commit.
 
 Older runs have no checkpoints. Their automatic region labels are the available evidence of completion, so retry may repeat a concept that returned no masks or whose regions were renamed.
+
+Apply the additive migration before deploying the new worker. On an existing deployment, verify that legacy workers without run ownership checks have drained before enabling the new reclaim behavior. Keep the previous workflow entry points available for replay. A historical image without a detection record may have completed successfully, so it is not automatically retried.

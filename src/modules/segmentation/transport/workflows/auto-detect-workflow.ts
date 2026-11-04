@@ -1,4 +1,4 @@
-import { FatalError } from 'workflow';
+import { FatalError, getWorkflowMetadata } from 'workflow';
 
 import { toImageId } from '@/modules/kernel/domain/ids';
 import { unwrapStepResult } from '@/modules/kernel/transport/workflow/step-result-mapper';
@@ -161,6 +161,95 @@ export async function recoverableAutoDetectWorkflow(input: {
       await finalizeDetectionStep(imageId, runId);
     } catch {
       // The step logs persistence errors and preserves the primary outcome.
+    }
+  }
+}
+
+type ClaimedAttempt = { imageId: string; runId: string; workerId: string };
+
+const attemptRun = ({ imageId, ...attempt }: ClaimedAttempt) => ({
+  ...attempt,
+  imageId: imageIdOrFail(imageId),
+});
+
+async function claimAttemptStep(attempt: ClaimedAttempt) {
+  'use step';
+  return unwrapStepResult(
+    await (await pipeline()).claimDetection(attemptRun(attempt))
+  );
+}
+
+async function prepareAttemptStep(attempt: ClaimedAttempt) {
+  'use step';
+  return unwrapStepResult(
+    await (await pipeline()).prepareDetection(attemptRun(attempt))
+  );
+}
+
+async function carryAttemptStep(attempt: ClaimedAttempt, fromImageId: string) {
+  'use step';
+  const { imageId, ...owner } = attemptRun(attempt);
+  return unwrapStepResult(
+    await (
+      await pipeline()
+    ).carryOver({
+      ...owner,
+      fromImageId: imageIdOrFail(fromImageId),
+      toImageId: imageId,
+    })
+  );
+}
+
+async function detectAttemptConceptStep(
+  attempt: ClaimedAttempt,
+  concept: string
+) {
+  'use step';
+  return unwrapStepResult(
+    await (await pipeline()).detectConcept({ ...attemptRun(attempt), concept })
+  );
+}
+
+async function finalizeAttemptStep(attempt: ClaimedAttempt) {
+  'use step';
+  return unwrapStepResult(
+    await (await pipeline()).finalizeDetection(attemptRun(attempt))
+  );
+}
+
+/** New queue deliveries claim an attempt before doing provider or storage work. */
+export async function claimedAutoDetectWorkflow(input: {
+  imageId: string;
+  runId: string;
+}) {
+  'use workflow';
+  const attempt = { ...input, workerId: getWorkflowMetadata().workflowRunId };
+  const claim = await claimAttemptStep(attempt);
+  if (claim.type !== 'detection_started') return;
+  try {
+    const prepared = await prepareAttemptStep(attempt);
+    if (prepared.type === 'detection_superseded') return;
+    const progress = prepared.progress;
+    if (!progress.carryOverCompleted && progress.carryFromImageId) {
+      const carried = await carryAttemptStep(
+        attempt,
+        progress.carryFromImageId
+      );
+      if (carried.type !== 'regions_carried_over') return;
+    }
+    const remaining = (progress.concepts ?? []).filter(
+      (concept) =>
+        !progress.completedConcepts.includes(concept) &&
+        !progress.omissions?.some((omission) => omission.concept === concept)
+    );
+    await Promise.allSettled(
+      remaining.map((concept) => detectAttemptConceptStep(attempt, concept))
+    );
+  } finally {
+    try {
+      await finalizeAttemptStep(attempt);
+    } catch {
+      // Finalization logs persistence errors. A failed write remains recoverable on expiry.
     }
   }
 }

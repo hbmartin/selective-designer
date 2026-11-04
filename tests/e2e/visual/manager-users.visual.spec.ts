@@ -85,8 +85,8 @@ test.describe('Manager users visual regression', () => {
       const deleteDialog = page.getByRole('dialog', { name: /delete user/i });
       const deleteButton = page.getByRole('button', { name: /^delete$/i });
 
-      await deleteButton.click();
       await expect(async () => {
+        if (!(await deleteDialog.isVisible())) await deleteButton.click();
         await expect(deleteDialog).toBeVisible({ timeout: 1000 });
       }).toPass({ timeout: 10_000 });
 

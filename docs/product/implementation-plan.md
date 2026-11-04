@@ -103,7 +103,7 @@ Decisions come from two planning interviews held on the same day. Conflicts betw
 - **Storage:** extend `kernel/application/ports/object-storage.ts` with `putObject`, `getObjectBytes`, `createSignedReadUrl` and `copyFromUrl`, implemented in `kernel/infrastructure/storage/better-upload.ts` with aws4fetch signing. Remove `VITE_S3_BUCKET_PUBLIC_URL` and fix CSP `img-src`.
 - **Uploads:** add a DB-backed `upload_intent` table to replace the in-memory `SecondaryStore` binding, which breaks across Vercel instances. Generalise `book-policy.ts` into a kernel `upload-policy.ts`.
 - **Cost log:** a `provider_call` table.
-- **fal:** a shared client and an ED25519 webhook verifier, plus `kernel/transport/workflow/step-result-mapper.ts` (`Ok` → value; `AppError` → `RetryableError` or `FatalError`).
+- **fal:** a shared polling client and `kernel/transport/workflow/step-result-mapper.ts` (`Ok` → value; `AppError` → `RetryableError` or `FatalError`).
 - **Spike:** a throwaway workflow plus a fal call on a Vercel preview, to check the Workflow SDK against the pinned TanStack Start 1.168, `nitro-nightly`, Vite 8, `src/start.ts` middleware and deployment protection.
 
 **P2: `design`**
@@ -153,7 +153,7 @@ Decisions come from two planning interviews held on the same day. Conflicts betw
 
 ## Verification
 - **Per phase:** run `pnpm format:changed && pnpm check && pnpm test:affected`. Run `pnpm check:migrations` whenever schema files change.
-- **Unit tests:** render-plan skip matrix, FLUX prompt-grid golden strings, mask polarity, step-result mapper, webhook verifier, recipe immutability.
+- **Unit tests:** render-plan skip matrix, FLUX prompt-grid golden strings, mask polarity, step-result mapper, recipe immutability.
 - **Integration tests (PGlite):** repositories and the upload intent.
 - **Workflow tests:** orchestration tested with `vi.mock('workflow')`.
 - **UI:** `pnpm dev` with MinIO and `PROVIDER_MODE=fake`, then walk through: create a design → upload → mood board → place → render → retry a failed model → prefer a result → compare (side, swipe, onion) → download. Check console errors and layout at desktop and mobile sizes, then run `pnpm test:e2e --project=chromium` and `pnpm test:e2e:visual` when the phase includes E2E and visual work. P8 defers those runs.

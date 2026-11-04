@@ -26,7 +26,6 @@ import {
 import type { DbLike } from '@/modules/kernel/infrastructure/db/types';
 import type {
   User,
-  UserCreateInput,
   UserRepository,
   UserSession,
   UserUpdatePersistenceInput,
@@ -269,40 +268,6 @@ export class UserRepositoryDrizzle implements UserRepository {
 
       return Result.Ok({ type: 'user_found', user: user.get() });
     } catch (error) {
-      return Result.Error(mapDbError(error));
-    }
-  }
-
-  async create(input: UserCreateInput): ReturnType<UserRepository['create']> {
-    try {
-      const [created] = await this.db
-        .insert(userTable)
-        .values({
-          email: input.email,
-          emailVerified: false,
-          name: input.name ?? '',
-          role: input.role ?? 'user',
-        })
-        .returning();
-
-      if (!created) {
-        return Result.Error(
-          new AppError({
-            code: 'USER_CREATE_EMPTY_RESULT',
-            category: 'system',
-            status: 500,
-            message: 'User create returned no row',
-          })
-        );
-      }
-
-      const user = toDomainUser(created);
-      if (user.isError()) return Result.Error(user.getError());
-
-      return Result.Ok({ type: 'user_created', user: user.get() });
-    } catch (error) {
-      if (isUserDuplicateError(error))
-        return Result.Ok({ type: 'user_duplicate' });
       return Result.Error(mapDbError(error));
     }
   }

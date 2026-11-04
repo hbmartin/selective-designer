@@ -7,7 +7,7 @@ export const unsafeMutation = createServerFn({ method: 'POST' }).handler(
 
 const runMutation = async (_data: unknown, fn: () => unknown) => fn();
 
-export const safeMutation = createServerFn({ method: 'POST' }).handler(
+export const unsafeNamedMutation = createServerFn({ method: 'POST' }).handler(
   async ({ data }) => runMutation(data, () => data)
 );
 

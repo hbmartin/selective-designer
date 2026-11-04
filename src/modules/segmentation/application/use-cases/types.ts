@@ -42,3 +42,4 @@ export type SegmentationResultOf<T> = ApplicationResult<T>;
 export const SIGNED_MASK_URL_SECONDS = 60 * 60;
 
 export const DETECTION_LEASE_MS = 30 * 60 * 1000;
+export const DETECTION_START_WINDOW_MS = 2 * 60 * 1000;

@@ -31,9 +31,12 @@ describe('operator passwords', () => {
   });
 
   afterAll(async () => {
-    await database?.reset();
-    vi.unstubAllEnvs();
-    await database?.close();
+    try {
+      await database?.reset();
+    } finally {
+      vi.unstubAllEnvs();
+      await database?.close();
+    }
   });
 
   it('signs in without verification after an operator changes the email or resets the password', async () => {

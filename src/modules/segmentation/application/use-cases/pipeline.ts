@@ -43,16 +43,70 @@ export async function detectionConceptsFor(
  */
 export async function detectConcept(
   deps: SegmentationPipelineDeps,
-  input: { imageId: ImageId; concept: string; runId?: string | null }
+  input: {
+    imageId: ImageId;
+    concept: string;
+    runId?: string | null;
+    workerId?: string;
+  }
 ): Promise<
   SegmentationResultOf<
     | { type: 'concept_detected'; count: number }
     | { type: 'concept_failed'; reason: string }
+    | { type: 'concept_omitted' }
     | { type: 'detection_concept_already_completed' }
     | { type: 'detection_superseded' }
     | { type: 'image_missing' }
   >
 > {
+  const run =
+    input.runId === undefined
+      ? undefined
+      : {
+          imageId: input.imageId,
+          runId: input.runId,
+          workerId: input.workerId,
+        };
+  if (run) {
+    const found = await deps.regionRepository.findDetection(run.imageId);
+    if (found.isError()) return Result.Error(found.getError());
+    const lease = found.get();
+    if (
+      lease.type !== 'detection_lease' ||
+      lease.phase !== (run.workerId === undefined ? null : 'running') ||
+      lease.runId !== run.runId ||
+      lease.workerId !== (run.workerId ?? null) ||
+      lease.failed ||
+      lease.expiresAt <= deps.clock.now()
+    ) {
+      return Result.Ok({ type: 'detection_superseded' });
+    }
+    if (
+      lease.progress?.completedConcepts.includes(input.concept) ||
+      lease.progress?.omissions?.some(
+        ({ concept }) => concept === input.concept
+      )
+    ) {
+      return Result.Ok({ type: 'detection_concept_already_completed' });
+    }
+  }
+  const omit = async (reason: 'prompt_rejected' | 'invalid_mask') => {
+    if (!run) return Result.Ok({ type: 'concept_failed' as const, reason });
+    const saved = await deps.regionRepository.omitConcept({
+      ...run,
+      now: deps.clock.now(),
+      concept: input.concept,
+      reason,
+    });
+    if (saved.isError()) return Result.Error(saved.getError());
+    const outcome = saved.get();
+    return Result.Ok(
+      outcome.type === 'regions_saved'
+        ? { type: 'concept_omitted' as const }
+        : outcome
+    );
+  };
+
   const found = await deps.imageAccess.find(input.imageId);
   if (found.isError()) return Result.Error(found.getError());
   const outcome = found.get();
@@ -104,6 +158,7 @@ export async function detectConcept(
   });
   if (logged.isError()) return Result.Error(logged.getError());
   if (result.type === 'segmentation_failed') {
+    if (result.terminal && run?.workerId) return omit('prompt_rejected');
     return Result.Ok({ type: 'concept_failed', reason: result.reason });
   }
 
@@ -116,6 +171,8 @@ export async function detectConcept(
   if (regions.isError()) return Result.Error(regions.getError());
   const stored = regions.get();
   if (stored.type === 'detection_mask_unavailable') {
+    if (stored.reason === 'invalid_mask' && run?.workerId)
+      return omit('invalid_mask');
     return Result.Ok({ type: 'concept_failed', reason: 'mask_unavailable' });
   }
   const saved = await deps.regionRepository.replaceDetections({
@@ -123,6 +180,7 @@ export async function detectConcept(
     concept: input.concept,
     regions: stored.regions,
     runId: input.runId,
+    workerId: input.workerId,
     now: deps.clock.now(),
   });
   // A persistence error may have arrived after the commit.
@@ -145,7 +203,12 @@ export async function detectConcept(
  */
 export async function carryOverRegions(
   deps: SegmentationPipelineDeps,
-  input: { fromImageId: ImageId; toImageId: ImageId; runId?: string | null }
+  input: {
+    fromImageId: ImageId;
+    toImageId: ImageId;
+    runId?: string | null;
+    workerId?: string;
+  }
 ): Promise<
   SegmentationResultOf<
     | { type: 'regions_carried_over'; count: number }
@@ -200,6 +263,7 @@ export async function carryOverRegions(
         : {
             imageId: input.toImageId,
             runId: input.runId,
+            workerId: input.workerId,
             now: deps.clock.now(),
           }
     );

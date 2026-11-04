@@ -3,7 +3,10 @@ import { join } from 'node:path';
 
 import { readLimitedBody } from '@/modules/kernel/backend';
 import type { ModelId } from '@/modules/rendering';
-import { readImageDimensions } from '@/modules/rendering/backend';
+import {
+  contentTypeForFormat,
+  readImageDimensions,
+} from '@/modules/rendering/backend';
 
 export const MAX_OUTPUT_BYTES = 40 * 1024 * 1024;
 
@@ -42,19 +45,6 @@ export async function downloadSmokeOutput(
     : { type: 'image', bytes };
 }
 
-function resultFilename(format: string) {
-  switch (format) {
-    case 'png':
-      return 'output.png';
-    case 'jpg':
-      return 'output.jpg';
-    case 'webp':
-      return 'output.webp';
-    default:
-      return undefined;
-  }
-}
-
 export async function writeSmokeOutput(
   directory: string,
   image: SmokeImage,
@@ -77,8 +67,8 @@ export async function writeSmokeOutput(
 
   const dimensions = readImageDimensions(bytes);
   const filename =
-    dimensions.type === 'dimensions'
-      ? resultFilename(dimensions.format)
+    dimensions.type === 'dimensions' && contentTypeForFormat(dimensions.format)
+      ? `output.${dimensions.format}`
       : undefined;
   if (!filename) return reject('unsupported_format', { dimensions });
 
