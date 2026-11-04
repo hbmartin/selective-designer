@@ -409,11 +409,13 @@ describe('segmentation pipeline', () => {
       expected: { type: 'concept_omitted' },
       reason: 'invalid_mask',
     },
-    {
-      rejection: 'missing mask',
-      expected: { type: 'concept_failed', reason: 'mask_unavailable' },
-      reason: undefined,
-    },
+    ...(['missing mask', 'content_type', 'declared_too_large'] as const).map(
+      (rejection) => ({
+        rejection,
+        expected: { type: 'concept_failed', reason: 'mask_unavailable' },
+        reason: undefined,
+      })
+    ),
   ] as const)(
     'handles $rejection without publishing a partial concept',
     async ({ rejection, expected, reason }) => {
@@ -449,9 +451,12 @@ describe('segmentation pipeline', () => {
           });
         },
       });
-      if (rejection === 'invalid mask') {
+      if (rejection !== 'prompt' && rejection !== 'missing mask') {
         vi.spyOn(ctx.storage.storage, 'copyFromUrl').mockResolvedValue(
-          Result.Ok({ type: 'copy_source_rejected', reason: 'content_type' })
+          Result.Ok({
+            type: 'copy_source_rejected',
+            reason: rejection === 'invalid mask' ? 'too_large' : rejection,
+          })
         );
       }
       const omit = vi.spyOn(ctx.regions.repository, 'omitConcept');
@@ -660,3 +665,47 @@ describe('segmentation pipeline', () => {
     ]);
   });
 });
+
+it.each([
+  { count: 0, expected: { type: 'regions_created', regions: [] } },
+  {
+    count: 1,
+    expected: { type: 'segmentation_failed', reason: 'mask_unavailable' },
+  },
+])(
+  'distinguishes $count unavailable masks from a genuine empty result',
+  async ({ count, expected }) => {
+    const ctx = setup({
+      async segment() {
+        return Result.Ok({
+          type: 'segmented',
+          provider: 'fake',
+          endpoint: 'fake/segmentation',
+          providerRequestId: undefined,
+          costUsdMicros: 0,
+          costSource: 'price_table',
+          masks: Array.from({ length: count }, () => ({
+            mask: {
+              kind: 'url' as const,
+              url: 'https://provider.test/missing.png',
+            },
+            box: [0, 0, 10, 10] as [number, number, number, number],
+            score: 1,
+          })),
+        });
+      },
+    });
+    expect(
+      okValue(
+        await ctx.useCases.segment({
+          currentUserId: ownerId,
+          imageId: baseImageId,
+          prompt: { type: 'text', text: 'chair' },
+          label: 'Chair',
+        })
+      )
+    ).toEqual(expected);
+    expect(ctx.calls.calls.size).toBe(1);
+    expect(ctx.regions.rows).toHaveLength(0);
+  }
+);

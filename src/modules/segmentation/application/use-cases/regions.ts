@@ -246,6 +246,12 @@ export async function segmentByPrompt(
   });
   if (regions.isError()) return Result.Error(regions.getError());
   const stored = regions.get();
+  if (result.masks.length > 0 && stored.regions.length === 0) {
+    return Result.Ok({
+      type: 'segmentation_failed',
+      reason: 'mask_unavailable',
+    });
+  }
   const saved = await deps.regionRepository.insertMany(stored.regions);
   if (saved.isError()) return Result.Error(saved.getError());
   const views = await toViews(

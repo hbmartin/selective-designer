@@ -299,7 +299,10 @@ export class BetterUploadObjectStorage implements ObjectStoragePort {
       }
       const declaredLength = Number(response.headers.get('content-length'));
       if (Number.isFinite(declaredLength) && declaredLength > input.maxBytes) {
-        return Result.Ok({ type: 'copy_source_rejected', reason: 'too_large' });
+        return Result.Ok({
+          type: 'copy_source_rejected',
+          reason: 'declared_too_large',
+        });
       }
       const bytes = await readLimitedBody(response, input.maxBytes);
       if (!bytes) {

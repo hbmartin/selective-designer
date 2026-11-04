@@ -46,10 +46,10 @@ export const DesignEditor = (props: {
   const items = useQuery(
     moodboardQueries.byDesign({ scopeKey, designId: props.designId })
   );
-  const regionsOptions = segmentationQueries.regions({
-    scopeKey,
-    imageId: props.sourceImageId,
-  });
+  const regionsOptions = segmentationQueries.regions(
+    { scopeKey, imageId: props.sourceImageId },
+    { refreshIdleOnMount: false }
+  );
   const regions = useQuery(regionsOptions);
   // The regions prefetch is secondary and can settle after SSR has rendered.
   const regionData = useHydrated() ? regions.data : undefined;
@@ -60,6 +60,10 @@ export const DesignEditor = (props: {
         queryKey: regionsOptions.queryKey,
         exact: true,
       }),
+    onSuccess: (outcome) => {
+      if (outcome.type === 'detection_queue_rejected')
+        toast.error(t('segmentation:errors.retryDetectionFailed'));
+    },
     onError: () => toast.error(t('segmentation:errors.retryDetectionFailed')),
   });
   const invalidateRegions = () =>

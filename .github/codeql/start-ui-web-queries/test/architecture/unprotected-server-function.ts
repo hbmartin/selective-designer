@@ -1,4 +1,9 @@
-import { createServerFn } from '@tanstack/react-start';
+import {
+  createServerFn,
+  createServerFn as makeServerFunction,
+  createServerOnlyFn,
+} from '@tanstack/react-start';
+import { withProtectedMutation as directMutation } from '@/modules/auth/backend';
 import { createServerFunctionInvoker } from '@/platform/lib/tanstack-start/server-function-handler';
 
 export const unsafeMutation = createServerFn({ method: 'POST' }).handler(
@@ -22,10 +27,12 @@ export const currentSession = createServerFn({ method: 'GET' }).handler(
   async () => null
 );
 
-declare const getDeps: () => {
-  withProtectedMutation: (fn: () => unknown) => unknown;
-  withPublicContext: (fn: () => unknown) => unknown;
-};
+const getDeps = createServerOnlyFn(async () => {
+  const [{ withProtectedMutation, withPublicContext }] = await Promise.all([
+    import('@/modules/auth/backend'),
+  ]);
+  return { withProtectedMutation, withPublicContext };
+});
 
 const protectedMutation = createServerFunctionInvoker({
   getDeps,
@@ -81,3 +88,65 @@ export const unsafeMixedConditional = createServerFn({
 }).handler(async ({ data }) =>
   mixedConditional.withOperation('test')(data, () => data)
 );
+
+let reassigned = createServerFunctionInvoker({
+  getDeps,
+  selectRunner: (deps) => deps.withProtectedMutation,
+});
+reassigned = createServerFunctionInvoker({
+  getDeps,
+  selectRunner: (deps) => deps.withPublicContext,
+});
+export const unsafeReassignment = createServerFn({ method: 'POST' }).handler(
+  async ({ data }) => reassigned.withOperation('test')(data, () => data)
+);
+
+export const unsafeMixedHandler = createServerFn({ method: 'POST' }).handler(
+  async ({ data }) => {
+    if (data) return publicMutation.withOperation('test')(data, () => data);
+    return protectedMutation.withOperation('test')(data, () => data);
+  }
+);
+
+const spoofedDeps = createServerOnlyFn(async () => {
+  const withProtectedMutation = (fn: () => unknown) => fn();
+  return { withProtectedMutation };
+});
+const spoofed = createServerFunctionInvoker({
+  getDeps: spoofedDeps,
+  selectRunner: (deps) => deps.withProtectedMutation,
+});
+export const unsafeSpoofed = createServerFn({ method: 'POST' }).handler(
+  async ({ data }) => spoofed.withOperation('test')(data, () => data)
+);
+
+const withProtectedMutation = (fn: () => unknown) => fn();
+export const unsafeDirect = createServerFn({ method: 'POST' }).handler(
+  async ({ data }) => withProtectedMutation(() => data)
+);
+
+export const safeDirect = createServerFn({ method: 'POST' }).handler(
+  async ({ data }) => {
+    return await directMutation(() => data);
+  }
+);
+
+function spoofFactory() {
+  const createServerFunctionInvoker = (_options: unknown) => ({
+    withOperation: (_operation: string) => (data: unknown) => data,
+  });
+  return createServerFunctionInvoker;
+}
+const fakeFactory = spoofFactory();
+const fakeInvoker = fakeFactory({
+  getDeps,
+  selectRunner: (deps: Awaited<ReturnType<typeof getDeps>>) =>
+    deps.withProtectedMutation,
+});
+export const unsafeFactory = createServerFn({ method: 'POST' }).handler(
+  async ({ data }) => fakeInvoker.withOperation('test')(data)
+);
+
+export const unsafeAliasedBuilder = makeServerFunction({
+  method: 'POST',
+}).handler(async ({ data }) => data);

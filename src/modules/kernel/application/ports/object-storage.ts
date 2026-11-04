@@ -69,7 +69,11 @@ export type ObjectCopyOutcome =
   /** The source answered, but its type or size breaks the given limits. */
   | {
       type: 'copy_source_rejected';
-      reason: 'content_type' | 'too_large' | 'insecure_url';
+      reason:
+        | 'content_type'
+        | 'declared_too_large'
+        | 'too_large'
+        | 'insecure_url';
     };
 
 export type ObjectStoragePort = {

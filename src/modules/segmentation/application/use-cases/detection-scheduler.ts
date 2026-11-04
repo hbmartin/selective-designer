@@ -106,10 +106,10 @@ export const createDetectionScheduler = (deps: {
       const found = await deps.regionRepository.findDetection(imageId);
       if (found.isError()) return Result.Error(found.getError());
       const lease = found.get();
-      if (
-        lease.type === 'no_detection' ||
-        (lease.phase !== 'ready' && lease.phase !== 'copying')
-      ) {
+      if (lease.type === 'no_detection') {
+        return Result.Ok({ type: 'detection_intent_missing' });
+      }
+      if (lease.phase !== 'ready' && lease.phase !== 'copying') {
         return Result.Ok({ type: 'auto_detection_scheduled' });
       }
       const dispatch = await claimDispatch(imageId, lease, true);

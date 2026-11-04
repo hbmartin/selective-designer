@@ -25,7 +25,7 @@ export const Route = createFileRoute('/app/designs/$designId/edit')({
   component: RouteComponent,
   loader: observedLoader(
     '/app/designs/$designId/edit',
-    async ({ context, params, deps }) => {
+    async ({ context, params, deps, cause }) => {
       const scopeKey = parseRouteScopeKey(context.scopeKey);
       const designId = parseRouteDesignId(params.designId);
       // Secondary data starts first and does not block.
@@ -35,21 +35,19 @@ export const Route = createFileRoute('/app/designs/$designId/edit')({
       const knownSource = deps.sourceImageId
         ? parseRouteImageId(deps.sourceImageId)
         : null;
-      if (knownSource) {
-        void context.queryClient.prefetchQuery(
-          segmentationQueries.regions({ scopeKey, imageId: knownSource })
+      const prefetchRegions = (imageId: NonNullable<typeof knownSource>) =>
+        void segmentationQueries.prefetchEditorRegions(
+          context.queryClient,
+          { scopeKey, imageId },
+          cause !== 'preload'
         );
-      }
+      if (knownSource) prefetchRegions(knownSource);
       // Critical: the design, then the render source and its draft.
       const design = await context.queryClient.ensureQueryData(
         designQueries.getById({ scopeKey, id: designId })
       );
       const imageId = knownSource ?? design.baseImage.id;
-      if (!knownSource) {
-        void context.queryClient.prefetchQuery(
-          segmentationQueries.regions({ scopeKey, imageId })
-        );
-      }
+      if (!knownSource) prefetchRegions(imageId);
       const [source] = await Promise.all([
         context.queryClient.ensureQueryData(
           renderingQueries.source({ scopeKey, imageId })

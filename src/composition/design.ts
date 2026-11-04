@@ -35,6 +35,12 @@ const segmentationOnArrival = (kernel: Kernel): ImageArrivedListener => {
         imageId: input.imageId,
       });
       if (scheduled.isError()) return Result.Error(scheduled.getError());
+      if (scheduled.get().type === 'detection_intent_missing') {
+        kernel.logger.warn({
+          event: 'segmentation.detection.intent_missing',
+          details: { imageId: input.imageId },
+        });
+      }
       return Result.Ok({ type: 'image_arrival_handled' });
     },
   };

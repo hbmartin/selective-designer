@@ -1,4 +1,4 @@
-import { replaceEqualDeep } from '@tanstack/react-query';
+import { type QueryClient, replaceEqualDeep } from '@tanstack/react-query';
 
 import {
   scopedEntityQueryOptions,
@@ -48,40 +48,56 @@ export const createSegmentationQueries = <
   facade: TFacade
 ) => {
   const all = () => ['segmentation', 'v2'] as const;
+  const regions = (
+    input: { imageId: ImageId } & ScopedQueryInput<ScopeKey>,
+    { refreshIdleOnMount = true } = {}
+  ) => ({
+    ...scopedEntityQueryOptions({
+      baseKey: (scopeKey: ScopeKey) =>
+        [...all(), { scopeKey }, 'regions'] as const,
+      input,
+      queryFn: (data) => facade.regionsGet({ data }),
+    }),
+    staleTime: 5000,
+    // An idle cached response cannot start polling on its own.
+    refetchOnMount: (query: { state: { data: RegionListView | undefined } }) =>
+      refreshIdleOnMount && query.state.data?.detection.type === 'idle'
+        ? ('always' as const)
+        : true,
+    structuralSharing: (previous: unknown, next: unknown) =>
+      shareRegionMasks(previous, next as RegionListView),
+    refetchInterval: (query: {
+      state: { data: RegionListView | undefined };
+    }) => {
+      const detection = query.state.data?.detection;
+      if (detection?.type !== 'waiting' && detection?.type !== 'running')
+        return false;
+      const window =
+        detection.type === 'waiting'
+          ? DETECTION_START_WINDOW_MS
+          : DETECTION_LEASE_MS;
+      const interval = window - detection.remainingMs < 60_000 ? 3000 : 15_000;
+      return Math.min(interval, Math.max(250, detection.remainingMs));
+    },
+  });
   return {
     all,
-    regions: (input: { imageId: ImageId } & ScopedQueryInput<ScopeKey>) => ({
-      ...scopedEntityQueryOptions({
-        baseKey: (scopeKey: ScopeKey) =>
-          [...all(), { scopeKey }, 'regions'] as const,
-        input,
-        queryFn: (data) => facade.regionsGet({ data }),
-      }),
-      staleTime: 5000,
-      // An idle cached response cannot start polling on its own.
-      refetchOnMount: (query: {
-        state: { data: RegionListView | undefined };
-      }) =>
-        query.state.data?.detection.type === 'idle'
-          ? ('always' as const)
-          : true,
-      structuralSharing: (previous: unknown, next: unknown) =>
-        shareRegionMasks(previous, next as RegionListView),
-      refetchInterval: (query: {
-        state: { data: RegionListView | undefined };
-      }) => {
-        const detection = query.state.data?.detection;
-        if (detection?.type !== 'waiting' && detection?.type !== 'running')
-          return false;
-        const window =
-          detection.type === 'waiting'
-            ? DETECTION_START_WINDOW_MS
-            : DETECTION_LEASE_MS;
-        const interval =
-          window - detection.remainingMs < 60_000 ? 3000 : 15_000;
-        return Math.min(interval, Math.max(250, detection.remainingMs));
-      },
-    }),
+    regions,
+    prefetchEditorRegions: (
+      client: QueryClient,
+      input: Parameters<typeof regions>[0],
+      revalidateIdle: boolean
+    ) => {
+      const options = regions(input);
+      const idle =
+        client.getQueryData<RegionListView>(options.queryKey)?.detection
+          .type === 'idle';
+      // Idle data cannot start polling. Refresh it on entry.
+      return client.prefetchQuery({
+        ...options,
+        staleTime: idle && revalidateIdle ? 0 : options.staleTime,
+      });
+    },
     retryDetection: () =>
       serverMutationOptions({
         mutationKey: [...all(), 'retryDetection'],

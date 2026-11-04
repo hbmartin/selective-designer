@@ -237,7 +237,9 @@ export interface Segmenter {
 export interface AutoDetectionScheduler {
   schedule(input: {
     imageId: ImageId;
-  }): Promise<ApplicationResult<DetectionDispatch>>;
+  }): Promise<
+    ApplicationResult<DetectionDispatch | { type: 'detection_intent_missing' }>
+  >;
 }
 
 export type DetectionDispatch =
