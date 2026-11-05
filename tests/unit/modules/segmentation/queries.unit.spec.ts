@@ -23,7 +23,7 @@ const input = {
   imageId: okValue(toImageId('base')),
 };
 
-it('revalidates a fresh idle result when the editor mounts', async () => {
+it('revalidates a fresh idle result for observers using the default mount policy', async () => {
   const regionsGet = vi
     .fn<SegmentationQueryFacade['regionsGet']>()
     .mockResolvedValue({

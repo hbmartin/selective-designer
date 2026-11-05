@@ -66,6 +66,11 @@ export type ObjectCopyOutcome =
     }
   /** The source answered with a non-success status (e.g. expired link). */
   | { type: 'copy_source_unavailable'; status: number }
+  | {
+      type: 'copy_source_unavailable';
+      reason: 'timeout' | 'network';
+      status?: never;
+    }
   /** The source answered, but its type or size breaks the given limits. */
   | {
       type: 'copy_source_rejected';
@@ -75,6 +80,26 @@ export type ObjectCopyOutcome =
         | 'too_large'
         | 'insecure_url';
     };
+
+export type ObjectWriteInput = {
+  objectKey: string;
+  body: Uint8Array;
+  contentType: string;
+  cacheControl?: string;
+};
+export type ObjectCopyInput = {
+  sourceUrl: string;
+  objectKey: string;
+  acceptedContentTypes: readonly string[];
+  maxBytes: number;
+  cacheControl?: string;
+};
+export type ObjectCreateOutcome =
+  | { type: 'object_created'; objectKey: string }
+  | { type: 'object_already_exists' };
+export type ObjectCopyNewOutcome =
+  | Exclude<ObjectCopyOutcome, { type: 'object_copied' }>
+  | ObjectCreateOutcome;
 
 export type ObjectStoragePort = {
   /**
@@ -92,6 +117,16 @@ export type ObjectStoragePort = {
   deleteObject: (
     objectKey: string
   ) => Promise<ApplicationResult<ObjectDeleteOutcome>>;
+  /** Atomic create-only writes. Success proves this call created the key.
+   * Conflicts never change the object. Errors give no ownership proof.
+   */
+  createObject: (
+    input: ObjectWriteInput
+  ) => Promise<ApplicationResult<ObjectCreateOutcome>>;
+  /** Source failures are tagged and guarantee no destination write was attempted. */
+  copyNewObjectFromUrl: (
+    input: ObjectCopyInput
+  ) => Promise<ApplicationResult<ObjectCopyNewOutcome>>;
   /** Server-side write (e.g. a mask rewritten for a provider's polarity). */
   putObject: (input: {
     objectKey: string;

@@ -89,7 +89,7 @@ describe('RegionRepositoryDrizzle', () => {
     carriedFromRegionId: null,
   });
 
-  it('returns pending detection on an empty image and clears it after the last regions commit', async () => {
+  it('retains completion on an empty image after the last regions commit', async () => {
     const expiresAt = new Date('2027-01-01T00:00:00.000Z');
     const run = { imageId, runId: 'first' };
     expect(
@@ -120,9 +120,12 @@ describe('RegionRepositoryDrizzle', () => {
       },
     });
     await repository.insertMany([region('last-region', 'window')]);
-    await repository.finishDetection(run);
+    await repository.finishDetection({
+      ...run,
+      now: new Date('2026-12-31T23:59:59.999Z'),
+    });
     expect(okValue(await repository.listByImage(imageId))).toMatchObject({
-      detection: { type: 'no_detection' },
+      detection: { type: 'detection_recorded', phase: 'completed' },
       regions: [{ id: 'last-region' }],
     });
   });
@@ -169,9 +172,14 @@ describe('RegionRepositoryDrizzle', () => {
                   })
                 ).type
               ).toBe('regions_saved');
-              expect(okValue(await repository.finishDetection(run)).type).toBe(
-                'detection_finished'
-              );
+              expect(
+                okValue(
+                  await repository.finishDetection({
+                    ...run,
+                    now: new Date('2026-12-31T23:59:59.999Z'),
+                  })
+                ).type
+              ).toBe('detection_finished');
             } finally {
               published.resolve();
             }
@@ -192,7 +200,7 @@ describe('RegionRepositoryDrizzle', () => {
       expect(
         okValue(await readerRepository.listByImage(imageId))
       ).toMatchObject({
-        detection: { type: 'no_detection' },
+        detection: { type: 'detection_recorded', phase: 'completed' },
         regions: [{ id: 'last-region' }],
       });
     } finally {
@@ -422,7 +430,10 @@ describe('RegionRepositoryDrizzle', () => {
       okValue(await repository.finalizeDetection({ ...second, now })).type
     ).toBe('detection_finished');
     const listed = okValue(await repository.listByImage(imageId));
-    expect(listed.detection.type).toBe('no_detection');
+    expect(listed.detection).toMatchObject({
+      type: 'detection_recorded',
+      phase: 'completed',
+    });
     expect(listed.regions.map(({ id }) => id).sort()).toEqual([
       'chair-original',
       'lamp-result',
@@ -460,7 +471,16 @@ describe('RegionRepositoryDrizzle', () => {
     });
     const failed = await writeImageWithDetection(kernel, {
       ...options,
-      imageId: () => imageId,
+      image: {
+        id: imageId,
+        designId,
+        kind: 'result',
+        originalKey: key('results/generated.png'),
+        originalContentType: 'image/png',
+        original: { width: 100, height: 100 },
+        workingKey: key('results/generated.png'),
+        working: { width: 100, height: 100 },
+      },
     });
     expect(failed.isError()).toBe(true);
     const designs = createDesignRepository({ db: database.db });
@@ -469,7 +489,16 @@ describe('RegionRepositoryDrizzle', () => {
     );
     const saved = await writeImageWithDetection(kernel, {
       ...options,
-      imageId: () => resultId,
+      image: {
+        id: resultId,
+        designId,
+        kind: 'result',
+        originalKey: key('results/generated.png'),
+        originalContentType: 'image/png',
+        original: { width: 100, height: 100 },
+        workingKey: key('results/generated.png'),
+        working: { width: 100, height: 100 },
+      },
     });
     expect(saved.isOk()).toBe(true);
     expect(okValue(await repository.findDetection(resultId))).toMatchObject({
@@ -658,7 +687,10 @@ describe('RegionRepositoryDrizzle', () => {
         })
       ).type
     ).toBe('detection_started');
-    await repository.finishDetection(oldRun);
+    await repository.finishDetection({
+      ...oldRun,
+      now: new Date('2026-12-31T23:59:59.999Z'),
+    });
     expect(
       okValue(await repository.listByImage(imageId)).detection
     ).toMatchObject({ type: 'detection_recorded', expiresAt: nextExpiry });
@@ -687,7 +719,7 @@ describe('RegionRepositoryDrizzle', () => {
     ).toBe('regions_saved');
     await repository.finalizeDetection({ ...winner, now: expiresAt });
     expect(okValue(await repository.listByImage(imageId))).toMatchObject({
-      detection: { type: 'no_detection' },
+      detection: { type: 'detection_recorded', phase: 'completed' },
       regions: [{ id: 'new-result' }],
     });
   });
@@ -702,7 +734,7 @@ describe('RegionRepositoryDrizzle', () => {
       existing,
     ]);
     expect(duplicate.isError() && duplicate.getError().code).toBe(
-      'REGION_INSERT_REJECTED'
+      'REGION_WRITE_FAILED'
     );
     expect(
       okValue(await repository.listByImage(imageId)).regions.map(({ id }) => id)
@@ -744,5 +776,116 @@ describe('RegionRepositoryDrizzle', () => {
     expect(okValue(await repository.findById(regionId('u1'))).type).toBe(
       'region_not_found'
     );
+  });
+  it('retains terminal completion and never dispatches or reclaims it after expiry', async () => {
+    let now = new Date('2027-01-01T00:00:00Z');
+    const queue = {
+      enqueue: vi.fn(async () =>
+        Result.Ok({ type: 'detection_enqueued' as const })
+      ),
+    };
+    const warn = vi.fn();
+    const scheduler = createDetectionScheduler({
+      regionRepository: repository,
+      queue,
+      imageAccess: { find: async () => Result.Ok({ type: 'image_missing' }) },
+      conceptSource: { categoriesOf: async () => Result.Ok([]) },
+      findCarrySource: async () => Result.Ok({ type: 'no_carry_source' }),
+      idGenerator: { createId: () => toGeneratedId('queued-run') },
+      clock: { now: () => now },
+      logger: { debug: () => {}, info: () => {}, warn, error: () => {} },
+    });
+    await repository.startDetection({
+      imageId,
+      runId: 'initial',
+      imageWriteId: 'stable-write',
+      phase: 'ready',
+      expiresAtMs: now.getTime() + 120_000,
+      progress: newDetectionProgress(null),
+    });
+    expect(okValue(await scheduler.schedule({ imageId })).type).toBe(
+      'auto_detection_scheduled'
+    );
+    const run = { imageId, runId: 'queued-run', workerId: 'worker', now };
+    await repository.claimDetection({
+      ...run,
+      expiresAt: new Date(now.getTime() + 1_800_000),
+    });
+    await repository.prepareDetection({ ...run, concepts: [] });
+    expect(okValue(await repository.finalizeDetection(run)).type).toBe(
+      'detection_finished'
+    );
+    const completed = await database.db.$client.query(
+      `SELECT to_char("completedAt", 'YYYY-MM-DD"T"HH24:MI:SS.MS') AS completed_at FROM active_detection WHERE "imageId" = $1`,
+      [imageId]
+    );
+    expect(completed.rows[0]?.completed_at).toBe(
+      now.toISOString().slice(0, -1)
+    );
+    now = new Date(now.getTime() + 7_200_000);
+    expect(okValue(await scheduler.schedule({ imageId })).type).toBe(
+      'detection_already_finished'
+    );
+    expect(okValue(await scheduler.retry(imageId)).type).toBe(
+      'detection_not_retryable'
+    );
+    expect(
+      okValue(
+        await repository.resumeDetection({
+          previous: { imageId, runId: run.runId },
+          runId: 'replacement',
+          now,
+          expiresAtMs: now.getTime() + 120_000,
+          dispatch: { initial: false, previousPhase: 'completed' },
+        })
+      ).type
+    ).toBe('detection_already_started');
+    expect(
+      okValue(await repository.matchImageWrite(imageId, 'stable-write')).type
+    ).toBe('image_write_matched');
+    expect(queue.enqueue).toHaveBeenCalledOnce();
+    expect(warn).not.toHaveBeenCalled();
+    await database.db.$client.query('DELETE FROM image WHERE id = $1', [
+      imageId,
+    ]);
+    expect(okValue(await repository.findDetection(imageId)).type).toBe(
+      'no_detection'
+    );
+  });
+
+  it('checks mask references across images and copied regions', async () => {
+    const otherImage = okValue(toImageId('other-image'));
+    await createDesignRepository({ db: database.db }).addImage({
+      designId,
+      image: {
+        id: otherImage,
+        kind: 'result',
+        originalKey: key('renders/other.png'),
+        originalContentType: 'image/png',
+        original: { width: 100, height: 100 },
+        workingKey: key('renders/other.png'),
+        working: { width: 100, height: 100 },
+      },
+    });
+    const shared = key('region-masks/shared.png');
+    await repository.insertMany([
+      {
+        ...region('copy', 'chair', 'click'),
+        imageId: otherImage,
+        maskKey: shared,
+        carriedFromRegionId: regionId('original'),
+      },
+    ]);
+    expect(
+      okValue(
+        await repository.unreferencedMaskKeys([
+          shared,
+          key('region-masks/fresh.png'),
+        ])
+      )
+    ).toEqual({
+      type: 'unreferenced_mask_keys',
+      keys: [key('region-masks/fresh.png')],
+    });
   });
 });

@@ -151,7 +151,7 @@ export async function recoverableAutoDetectWorkflow(input: {
       if (carried.type !== 'regions_carried_over') return;
     }
     const remaining = (progress.concepts ?? []).filter(
-      (concept) => !progress.completedConcepts.includes(concept)
+      (concept) => !isDetectionConceptSettled(progress, concept)
     );
     await Promise.allSettled(
       remaining.map((concept) => detectConceptStep(imageId, concept, runId))

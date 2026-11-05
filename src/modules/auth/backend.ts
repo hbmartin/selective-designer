@@ -68,7 +68,6 @@ export const withFreshProtectedMutation =
 export const withProtectedContext = serverContextTools.withProtectedContext;
 export const withProtectedMutation = serverContextTools.withProtectedMutation;
 export const withPublicContext = serverContextTools.withPublicContext;
-export { operatorPasswordSchema } from './domain/password-policy';
 export {
   addSeedCredentials,
   writeOperatorPassword,

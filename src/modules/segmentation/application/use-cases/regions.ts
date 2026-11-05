@@ -32,6 +32,7 @@ import {
   REGION_LABEL_MAX_LENGTH,
   type SegmentationPrompt,
 } from '../../domain/region';
+import { RegionWriteError } from '../../domain/region-write-error';
 
 export type RegionView = Region & { maskUrl: string; maskUrlExpiresAt: number };
 
@@ -116,6 +117,7 @@ type DetectionView = (
 const detectionView = (summary: DetectionSummary, now: Date): DetectionView => {
   if (summary.type === 'no_detection') return { type: 'idle', omissions: [] };
   const { phase, omissions, expiresAt, failed } = summary;
+  if (phase === 'completed') return { type: 'idle', omissions: [] };
   if (phase === 'omissions')
     return { type: 'finished_with_omissions', omissions };
   const remainingMs = expiresAt.getTime() - now.getTime();
@@ -259,7 +261,7 @@ export async function segmentByPrompt(
   const saved = await deps.regionRepository.insertMany(stored.regions);
   if (saved.isError()) {
     const error = saved.getError();
-    if (error.code === 'REGION_INSERT_REJECTED') {
+    if (error instanceof RegionWriteError && error.publication === 'rejected') {
       await discardUnpublishedMasks(
         deps,
         stored.regions.map(({ maskKey }) => maskKey)

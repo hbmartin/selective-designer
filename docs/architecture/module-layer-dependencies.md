@@ -200,10 +200,10 @@ node_rendering_transport --> node_kernel_transport
 node_rendering_transport --> node_rendering_domain
 node_segmentation_application --> node_kernel_domain
 node_segmentation_application --> node_segmentation_domain
+node_segmentation_domain --> node_kernel_domain
 node_segmentation_infrastructure --> node_design_infrastructure
 node_segmentation_infrastructure --> node_kernel_domain
 node_segmentation_infrastructure --> node_kernel_infrastructure
-node_segmentation_infrastructure --> node_segmentation_application
 node_segmentation_infrastructure --> node_segmentation_domain
 node_segmentation_presentation --> node_auth_public
 node_segmentation_presentation --> node_segmentation_application
@@ -259,7 +259,6 @@ linkStyle 108 stroke-dasharray: 1 4
 linkStyle 110 stroke-dasharray: 1 4
 linkStyle 111 stroke-dasharray: 1 4
 linkStyle 112 stroke-dasharray: 6 4
-linkStyle 127 stroke-dasharray: 1 4
 linkStyle 129 stroke-dasharray: 1 4
 linkStyle 130 stroke-dasharray: 1 4
 linkStyle 131 stroke-dasharray: 6 4

@@ -107,8 +107,14 @@ export const createDetectionScheduler = (deps: {
       if (found.isError()) return Result.Error(found.getError());
       const lease = found.get();
       if (lease.type === 'no_detection') {
+        deps.logger.warn({
+          event: 'segmentation.detection.intent_missing',
+          details: { imageId },
+        });
         return Result.Ok({ type: 'detection_intent_missing' });
       }
+      if (lease.phase === 'completed' || lease.phase === 'omissions')
+        return Result.Ok({ type: 'detection_already_finished' });
       if (lease.phase !== 'ready' && lease.phase !== 'copying') {
         return Result.Ok({ type: 'auto_detection_scheduled' });
       }
@@ -127,6 +133,7 @@ export const createDetectionScheduler = (deps: {
       if (
         lease.type === 'no_detection' ||
         lease.phase === 'omissions' ||
+        lease.phase === 'completed' ||
         (lease.phase !== 'ready' &&
           !lease.failed &&
           lease.expiresAt > deps.clock.now())

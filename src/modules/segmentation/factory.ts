@@ -1,6 +1,5 @@
 import { Result } from '@bloodyowl/boxed';
 
-import { ownsDetectionLease } from './application/detection-run';
 import type {
   ClaimedDetectionRun,
   DetectionRun,
@@ -23,6 +22,7 @@ import type {
   SegmentationUseCaseDeps,
 } from './application/use-cases/types';
 import { DETECTION_LEASE_MS } from './application/use-cases/types';
+import { ownsDetectionLease } from './domain/detection-run';
 
 type Input<TFn extends (deps: never, input: never) => unknown> =
   Parameters<TFn>[1];

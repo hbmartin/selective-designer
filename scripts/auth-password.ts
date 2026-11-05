@@ -4,10 +4,8 @@ import { match } from 'ts-pattern';
 import { z } from 'zod';
 
 import { getAuth } from '@/composition/auth';
-import {
-  operatorPasswordSchema,
-  writeOperatorPassword,
-} from '@/modules/auth/backend';
+import { operatorPasswordSchema } from '@/modules/auth';
+import { writeOperatorPassword } from '@/modules/auth/backend';
 import { getDefaultDbClient, getRedisConfig } from '@/modules/kernel/backend';
 
 const email = z.string().trim().toLowerCase().pipe(z.email());

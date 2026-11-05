@@ -27,6 +27,24 @@ export const createFakeObjectStorage = () => {
       });
       return Result.Ok({ type: 'object_stored', objectKey: input.objectKey });
     },
+    async createObject(input) {
+      if (objects.has(input.objectKey))
+        return Result.Ok({ type: 'object_already_exists' });
+      const written = await storage.putObject(input);
+      return written.map(() => ({
+        type: 'object_created' as const,
+        objectKey: input.objectKey,
+      }));
+    },
+    async copyNewObjectFromUrl(input) {
+      if (objects.has(input.objectKey))
+        return Result.Ok({ type: 'object_already_exists' });
+      return (await storage.copyFromUrl(input)).map((outcome) =>
+        outcome.type === 'object_copied'
+          ? { type: 'object_created' as const, objectKey: input.objectKey }
+          : outcome
+      );
+    },
     async getObjectBytes(objectKey) {
       const object = objects.get(objectKey);
       return Result.Ok(

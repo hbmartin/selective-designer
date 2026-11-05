@@ -8,6 +8,18 @@ import type {
 } from '@/modules/kernel/domain/ids';
 
 import type {
+  ClaimedDetectionRun,
+  DetectionIdentity,
+  DetectionLease,
+  DetectionOmission,
+  DetectionPhase,
+  DetectionProgress,
+  DetectionRun,
+  DetectionSummary,
+} from '../../domain/detection-run';
+export type * from '../../domain/detection-run';
+
+import type {
   FractionalBox,
   Region,
   RegionSource,
@@ -27,49 +39,6 @@ export type NewRegion = {
   carriedFromRegionId: RegionId | null;
 };
 
-export type DetectionIdentity =
-  | { runId?: string | null; workerId?: never }
-  | { runId: string; workerId: string };
-export type DetectionRun = DetectionIdentity & {
-  imageId: ImageId;
-  runId: string | null;
-  now?: Date;
-};
-export type ClaimedDetectionRun = Extract<DetectionRun, { workerId: string }>;
-export type DetectionOmission = {
-  concept: string;
-  reason: 'prompt_rejected' | 'invalid_mask';
-};
-export type DetectionPhase =
-  | 'copying'
-  | 'ready'
-  | 'queued'
-  | 'running'
-  | 'omissions';
-export type DetectionProgress = {
-  concepts: string[] | null;
-  completedConcepts: string[];
-  carryFromImageId: string | null;
-  carryOverCompleted: boolean;
-  omissions?: DetectionOmission[];
-};
-type DetectionStatus = {
-  phase: DetectionPhase | null;
-  expiresAt: Date;
-  failed: boolean;
-};
-export type DetectionSummary =
-  | { type: 'no_detection' }
-  | (DetectionStatus & {
-      type: 'detection_recorded';
-      omissions: DetectionOmission[];
-    });
-export type DetectionLease = DetectionStatus & {
-  type: 'detection_lease';
-  runId: string | null;
-  workerId: string | null;
-  progress: DetectionProgress | null;
-};
 type DetectionClaim =
   | { type: 'detection_started' }
   | { type: 'detection_already_started' };
@@ -91,6 +60,7 @@ export interface RegionRepository {
     expiresAtMs: number;
     progress?: DetectionProgress;
     phase?: 'copying' | 'ready';
+    imageWriteId?: string;
   }): Promise<ApplicationResult<DetectionClaim>>;
   resumeDetection(input: {
     previous: DetectionRun;
@@ -100,6 +70,14 @@ export interface RegionRepository {
     progress?: DetectionProgress;
     dispatch: { previousPhase: DetectionPhase | null; initial: boolean };
   }): Promise<ApplicationResult<DetectionClaim>>;
+  matchImageWrite(
+    imageId: ImageId,
+    imageWriteId: string
+  ): Promise<
+    ApplicationResult<{
+      type: 'image_write_matched' | 'image_write_not_matched';
+    }>
+  >;
   findDetection(
     imageId: ImageId
   ): Promise<ApplicationResult<DetectionLease | { type: 'no_detection' }>>;
@@ -125,13 +103,13 @@ export interface RegionRepository {
       | { type: 'detection_superseded' }
     >
   >;
-  finalizeDetection(run: DetectionRun): Promise<
+  finalizeDetection(run: DetectionRun & { now: Date }): Promise<
     ApplicationResult<{
       type: 'detection_finished' | 'detection_failed' | 'detection_superseded';
     }>
   >;
   finishDetection(
-    run: DetectionRun
+    run: DetectionRun & { now: Date }
   ): Promise<ApplicationResult<{ type: 'detection_finished' }>>;
   findById(
     regionId: RegionId
@@ -140,11 +118,17 @@ export interface RegionRepository {
       { type: 'region_found'; region: Region } | { type: 'region_not_found' }
     >
   >;
+  unreferencedMaskKeys(
+    keys: readonly ObjectKey[]
+  ): Promise<
+    ApplicationResult<{ type: 'unreferenced_mask_keys'; keys: ObjectKey[] }>
+  >;
+  /** Errors use RegionWriteError: publication is rejected only when rollback is confirmed; otherwise unknown. */
   insertMany(
     regions: NewRegion[],
     run?: DetectionRun
   ): Promise<ApplicationResult<WriteRegionsOutcome>>;
-  /** Replace automatic detections of one concept on an image (idempotent re-runs). */
+  /** Replace one concept atomically. Failures carry the same RegionWriteError publication proof as insertMany. */
   replaceDetections(
     input: DetectionIdentity & {
       imageId: ImageId;
@@ -238,7 +222,11 @@ export interface AutoDetectionScheduler {
   schedule(input: {
     imageId: ImageId;
   }): Promise<
-    ApplicationResult<DetectionDispatch | { type: 'detection_intent_missing' }>
+    ApplicationResult<
+      | DetectionDispatch
+      | { type: 'detection_intent_missing' }
+      | { type: 'detection_already_finished' }
+    >
   >;
 }
 

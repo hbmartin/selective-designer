@@ -1,5 +1,5 @@
 import { type Result as BoxedResult, Result } from '@bloodyowl/boxed';
-import { and, asc, eq, gt, isNull, lte, or, sql } from 'drizzle-orm';
+import { and, asc, eq, gt, inArray, isNull, lte, or, sql } from 'drizzle-orm';
 
 import { AppError } from '@/modules/kernel/domain/errors/app-error';
 import {
@@ -16,13 +16,13 @@ import {
   type DbTransaction,
   isRootDatabase,
 } from '@/modules/kernel/infrastructure/db/types';
-import { detectionRunFor } from '@/modules/segmentation/application/detection-run';
 import type {
   DetectionOmission,
   DetectionRun,
   NewRegion,
   RegionRepository,
 } from '@/modules/segmentation/application/ports/ports';
+import { detectionRunFor } from '@/modules/segmentation/domain/detection-run';
 import {
   isDetectionConceptSettled,
   type Region,
@@ -35,6 +35,7 @@ import {
   region as regionTable,
   type RegionRow,
 } from './schema';
+import { RegionWriteError } from '../../domain/region-write-error';
 
 const rowError = (cause: unknown) =>
   new AppError({
@@ -52,6 +53,16 @@ const dbError = (cause: unknown) =>
     message: 'Region persistence failed',
     cause,
   });
+
+const regionWriteError = (cause: unknown) =>
+  new RegionWriteError(
+    ['23502', '23503', '23505', '23514'].includes(
+      getDatabaseErrorCode(cause) ?? ''
+    )
+      ? 'rejected'
+      : 'unknown',
+    cause
+  );
 
 const isSource = (value: string): value is RegionSource =>
   (regionSources as readonly string[]).includes(value);
@@ -165,9 +176,7 @@ export const createRegionRepository = ({
             failed: activeDetection.failed,
             phase: activeDetection.phase,
             omissions: sql<DetectionOmission[] | null>`
-              case when row_number() over (order by ${regionTable.createdAt}, ${regionTable.id}) = 1
-                then ${activeDetection.progress}->'omissions'
-              end
+              ${activeDetection.progress}->'omissions'
             `,
           })
           .from(sql`(select 1) as requested_image`)
@@ -192,6 +201,25 @@ export const createRegionRepository = ({
                   omissions: lease.omissions ?? [],
                 }
               : { type: 'no_detection' },
+        });
+      } catch (error) {
+        return Result.Error(dbError(error));
+      }
+    },
+    async matchImageWrite(imageId, imageWriteId) {
+      try {
+        const [row] = await db
+          .select({ id: activeDetection.imageId })
+          .from(activeDetection)
+          .where(
+            and(
+              eq(activeDetection.imageId, imageId),
+              eq(activeDetection.imageWriteId, imageWriteId)
+            )
+          )
+          .limit(1);
+        return Result.Ok({
+          type: row ? 'image_write_matched' : 'image_write_not_matched',
         });
       } catch (error) {
         return Result.Error(dbError(error));
@@ -234,6 +262,7 @@ export const createRegionRepository = ({
         const [started] = await db
           .insert(activeDetection)
           .values({
+            imageWriteId: input.imageWriteId,
             imageId: input.imageId,
             runId: input.runId,
             expiresAt: new Date(input.expiresAtMs),
@@ -266,6 +295,15 @@ export const createRegionRepository = ({
           .where(
             and(
               ownedDetection(input.previous),
+              or(
+                isNull(activeDetection.phase),
+                inArray(activeDetection.phase, [
+                  'copying',
+                  'ready',
+                  'queued',
+                  'running',
+                ])
+              ),
               input.dispatch.previousPhase === null
                 ? isNull(activeDetection.phase)
                 : eq(activeDetection.phase, input.dispatch.previousPhase),
@@ -399,9 +437,23 @@ export const createRegionRepository = ({
             if (omissions?.length)
               await tx
                 .update(activeDetection)
-                .set({ phase: 'omissions', workerId: null })
+                .set({
+                  phase: 'omissions',
+                  workerId: null,
+                  completedAt: run.now,
+                  failed: false,
+                })
                 .where(ownedDetection(run));
-            else await tx.delete(activeDetection).where(ownedDetection(run));
+            else
+              await tx
+                .update(activeDetection)
+                .set({
+                  phase: 'completed',
+                  workerId: null,
+                  completedAt: run.now,
+                  failed: false,
+                })
+                .where(ownedDetection(run));
             return Result.Ok({ type: 'detection_finished' } as const);
           }
           await tx
@@ -418,7 +470,13 @@ export const createRegionRepository = ({
     async finishDetection(run) {
       try {
         await db
-          .delete(activeDetection)
+          .update(activeDetection)
+          .set({
+            phase: 'completed',
+            workerId: null,
+            completedAt: run.now,
+            failed: false,
+          })
           .where(
             and(
               ownedDetection(run),
@@ -442,6 +500,23 @@ export const createRegionRepository = ({
         const parsed = toRegion(row);
         if (parsed.isError()) return Result.Error(parsed.getError());
         return Result.Ok({ type: 'region_found', region: parsed.get() });
+      } catch (error) {
+        return Result.Error(dbError(error));
+      }
+    },
+    async unreferencedMaskKeys(keys) {
+      if (keys.length === 0)
+        return Result.Ok({ type: 'unreferenced_mask_keys', keys: [] });
+      try {
+        const rows = await db
+          .selectDistinct({ key: regionTable.maskKey })
+          .from(regionTable)
+          .where(inArray(regionTable.maskKey, [...keys]));
+        const referenced = new Set(rows.map(({ key }) => key));
+        return Result.Ok({
+          type: 'unreferenced_mask_keys',
+          keys: keys.filter((key) => !referenced.has(key)),
+        });
       } catch (error) {
         return Result.Error(dbError(error));
       }
@@ -473,25 +548,7 @@ export const createRegionRepository = ({
           await db.insert(regionTable).values(regions.map(toValues));
         return Result.Ok({ type: 'regions_saved' });
       } catch (error) {
-        // PostgreSQL rejected the single unfenced INSERT. Transport errors can
-        // arrive after it commits and do not prove the fresh masks are unused.
-        if (
-          !run &&
-          ['23502', '23503', '23505', '23514'].includes(
-            getDatabaseErrorCode(error) ?? ''
-          )
-        ) {
-          return Result.Error(
-            new AppError({
-              code: 'REGION_INSERT_REJECTED',
-              category: 'system',
-              status: 500,
-              message: 'Region persistence failed',
-              cause: error,
-            })
-          );
-        }
-        return Result.Error(dbError(error));
+        return Result.Error(regionWriteError(error));
       }
     },
     async replaceDetections(input) {
@@ -538,7 +595,7 @@ export const createRegionRepository = ({
           return Result.Ok({ type: 'regions_saved' } as const);
         });
       } catch (error) {
-        return Result.Error(dbError(error));
+        return Result.Error(regionWriteError(error));
       }
     },
     async update(input) {
