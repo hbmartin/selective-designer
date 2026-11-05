@@ -7,6 +7,7 @@ import type {
   UserId,
 } from '@/modules/kernel/domain/ids';
 
+import type { CutoutOutputCheckpoint } from '../../domain/cutout-output';
 import type {
   CutoutStatus,
   Item,
@@ -39,6 +40,7 @@ export type VersionFound = {
   type: 'item_version_found';
   version: ItemVersion;
   cutoutAttemptId: string | null;
+  cutoutOutput: CutoutOutputCheckpoint | null;
   designId: DesignId;
 };
 export type VersionNotFound = { type: 'item_version_not_found' };
@@ -90,6 +92,16 @@ export interface ItemRepository {
   }): Promise<
     ApplicationResult<
       { type: 'cutout_attempt_claimed' } | { type: 'cutout_attempt_skipped' }
+    >
+  >;
+  saveCutoutOutput(input: {
+    versionId: ItemVersionId;
+    attemptId: string;
+    checkpoint: CutoutOutputCheckpoint;
+  }): Promise<
+    ApplicationResult<
+      | { type: 'cutout_output_saved'; checkpoint: CutoutOutputCheckpoint }
+      | { type: 'cutout_attempt_skipped' }
     >
   >;
   finishCutoutAttempt(

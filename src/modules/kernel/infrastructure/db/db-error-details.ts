@@ -1,5 +1,7 @@
 import { z } from 'zod';
 
+import { errorCauses } from '@/modules/kernel/domain/errors/error-causes';
+
 type DatabaseErrorDetailValue = string | number;
 
 export interface DatabaseErrorDetails {
@@ -228,22 +230,12 @@ export function buildDatabaseErrorLogFields(params: {
   };
 }
 
-function* databaseErrorCauses(error: unknown) {
-  const seen = new Set<unknown>();
-  let current = error;
-  while (isRecord(current) && !seen.has(current)) {
-    seen.add(current);
-    yield current;
-    current = current.cause;
-  }
-}
-
 function extractFromErrorOrCause<T, R>(
   error: unknown,
   schema: z.ZodType<T>,
   extract: (data: T) => R
 ): R | undefined {
-  for (const cause of databaseErrorCauses(error)) {
+  for (const cause of errorCauses(error)) {
     const parsed = schema.safeParse(cause);
     if (parsed.success) return extract(parsed.data);
   }
@@ -251,7 +243,7 @@ function extractFromErrorOrCause<T, R>(
 }
 
 export function getDatabaseErrorCode(error: unknown): string | undefined {
-  for (const current of databaseErrorCauses(error)) {
+  for (const current of errorCauses(error)) {
     // PostgreSQL classes include 2B, 3D, F0, HV, P0 and XX. Application
     // codes and transport codes such as EPIPE are not SQLSTATEs.
     if (
@@ -266,13 +258,14 @@ export function getDatabaseErrorCode(error: unknown): string | undefined {
 /** Certainty is separate from retryability: 40003 explicitly means unknown. */
 export function classifyDatabaseFailure(error: unknown) {
   const sqlState = getDatabaseErrorCode(error);
-  const uncertain =
-    !sqlState ||
-    sqlState.startsWith('08') ||
-    ['40003', '57P01', '57P02', '57P03'].includes(sqlState);
+  const rejected =
+    !!sqlState &&
+    ['23502', '23503', '23505', '23514', '40001', '40P01', '55P03'].includes(
+      sqlState
+    );
   return {
     sqlState,
-    publication: uncertain ? ('unknown' as const) : ('rejected' as const),
+    publication: rejected ? ('rejected' as const) : ('unknown' as const),
     retryableRollback:
       !!sqlState && ['40001', '40P01', '55P03'].includes(sqlState),
   };

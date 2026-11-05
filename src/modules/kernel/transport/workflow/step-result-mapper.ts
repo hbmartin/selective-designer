@@ -2,12 +2,15 @@ import { FatalError, RetryableError } from 'workflow';
 
 import type { ApplicationResult } from '@/modules/kernel/application/result';
 import type { AppError } from '@/modules/kernel/domain/errors/app-error';
+import { ObjectCopySourceError } from '@/modules/kernel/domain/errors/object-copy-source-error';
 
 /** Failures worth retrying: provider/system faults, throttling and 5xx. */
 export const isRetryableAppError = (error: AppError) =>
-  error.category === 'system' ||
-  error.category === 'rate_limit' ||
-  error.status >= 500;
+  error instanceof ObjectCopySourceError
+    ? error.retryable
+    : error.category === 'system' ||
+      error.category === 'rate_limit' ||
+      error.status >= 500;
 
 /**
  * Unwrap a use-case result inside a Workflow SDK step. Expected business
@@ -24,7 +27,13 @@ export const unwrapStepResult = <TOutcome>(
   const message = `${error.code}: ${error.message}`;
   if (isRetryableAppError(error)) {
     throw new RetryableError(message, {
-      retryAfter: error.category === 'rate_limit' ? '30s' : '5s',
+      retryAfter:
+        error instanceof ObjectCopySourceError &&
+        error.retryAfterMs !== undefined
+          ? `${Math.max(1, Math.ceil(error.retryAfterMs / 1000))}s`
+          : error.category === 'rate_limit'
+            ? '30s'
+            : '5s',
     });
   }
   throw new FatalError(message);

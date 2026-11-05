@@ -1,4 +1,11 @@
-import { index, integer, pgTable, text, timestamp } from 'drizzle-orm/pg-core';
+import {
+  index,
+  integer,
+  jsonb,
+  pgTable,
+  text,
+  timestamp,
+} from 'drizzle-orm/pg-core';
 
 import { design } from '@/modules/design/infrastructure/drizzle/schema';
 import {
@@ -6,6 +13,7 @@ import {
   idColumn,
   updatedAtColumn,
 } from '@/modules/kernel/infrastructure/db/schema/common';
+import type { CutoutOutputCheckpoint } from '@/modules/moodboard/domain/cutout-output';
 
 export const item = pgTable(
   'item',
@@ -44,6 +52,7 @@ export const itemVersion = pgTable(
     maskKey: text('maskKey'),
     cutoutStatus: text('cutoutStatus').notNull(),
     cutoutAttemptId: text('cutoutAttemptId'),
+    cutoutOutput: jsonb('cutoutOutput').$type<CutoutOutputCheckpoint>(),
     cutoutAttemptStartedAt: timestamp('cutoutAttemptStartedAt', {
       precision: 3,
       mode: 'date',

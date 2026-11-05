@@ -342,6 +342,7 @@ export const createItemRepository = ({
           type: 'item_version_found',
           version: version.get(),
           cutoutAttemptId: row.version.cutoutAttemptId,
+          cutoutOutput: row.version.cutoutOutput,
           designId: designId.get(),
         });
       } catch (error) {
@@ -356,6 +357,7 @@ export const createItemRepository = ({
           .update(versionTable)
           .set({
             cutoutStatus: 'pending',
+            cutoutOutput: null,
             cutoutKey: null,
             cutoutAttemptId: input.attemptId,
             cutoutAttemptStartedAt: input.startedAt,
@@ -399,6 +401,43 @@ export const createItemRepository = ({
       }
     },
 
+    async saveCutoutOutput(input) {
+      try {
+        const rows = await db
+          .update(versionTable)
+          .set({ cutoutOutput: input.checkpoint })
+          .where(
+            and(
+              eq(versionTable.id, input.versionId),
+              eq(versionTable.cutoutStatus, 'pending'),
+              eq(versionTable.cutoutAttemptId, input.attemptId),
+              isNull(versionTable.cutoutOutput)
+            )
+          )
+          .returning({ checkpoint: versionTable.cutoutOutput });
+        if (rows[0]?.checkpoint)
+          return Result.Ok({
+            type: 'cutout_output_saved',
+            checkpoint: rows[0].checkpoint,
+          });
+        const found = await repository.findVersion(input.versionId);
+        if (found.isError()) return Result.Error(found.getError());
+        const value = found.get();
+        if (
+          value.type === 'item_version_found' &&
+          value.cutoutAttemptId === input.attemptId &&
+          value.version.cutoutStatus === 'pending' &&
+          value.cutoutOutput
+        )
+          return Result.Ok({
+            type: 'cutout_output_saved',
+            checkpoint: value.cutoutOutput,
+          });
+        return Result.Ok({ type: 'cutout_attempt_skipped' });
+      } catch (error) {
+        return Result.Error(dbError(error));
+      }
+    },
     async finishCutoutAttempt(input) {
       try {
         const [saved] = await db

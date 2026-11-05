@@ -5,9 +5,9 @@ import { expect, it, vi } from 'vitest';
 
 import { getDesignUseCases } from '@/composition/design';
 import {
+  findRegisteredRenderImage,
   writeImageWithDetection,
   writeRenderImageWithDetection,
-  findRegisteredRenderImage,
 } from '@/composition/image-detection-intent';
 import { createResultImages } from '@/composition/rendering-pipeline';
 import { toDesignName } from '@/modules/design';
@@ -16,8 +16,8 @@ import {
   toDesignId,
   toImageId,
   toObjectKey,
-  toUserId,
   toRenderResultId,
+  toUserId,
 } from '@/modules/kernel';
 
 vi.mock('@/composition/image-detection-intent', async (original) => ({
@@ -109,7 +109,7 @@ it('allocates a render image before handing its write to transaction recovery', 
       modelVersion: null,
       costUsdMicros: null,
       costSource: 'unavailable',
-      completedAt: new Date(),
+      completedAt: new Date().toISOString(),
     },
     sourceSize: { width: 1, height: 1 },
     designId: okValue(toDesignId('design')),
@@ -128,4 +128,31 @@ it('allocates a render image before handing its write to transaction recovery', 
     })
   );
   expect(scheduler.schedule).not.toHaveBeenCalled();
+});
+
+it('uses paired rendering persistence overrides without touching the kernel database', async () => {
+  const { getRenderingPipelineUseCases } =
+    await import('@/composition/rendering-pipeline');
+  const { createFakeRenderRepository } =
+    await import('@tests/support/fake-render-repository');
+  const kernel = makeTestKernel();
+  const renders = createFakeRenderRepository(kernel.clock.now);
+  const publicationContext = vi.spyOn(renders.repository, 'publicationContext');
+  const resultImages = { findRegistered: vi.fn(), register: vi.fn() };
+  const pipeline = getRenderingPipelineUseCases({
+    kernel,
+    persistence: { renderRepository: renders.repository, resultImages },
+  });
+  expect(
+    okValue(
+      await pipeline.poll({
+        resultId: okValue(toRenderResultId('missing')),
+        attempt: 1,
+        workflowRunId: 'workflow',
+        providerRequestId: 'request',
+      })
+    )
+  ).toEqual({ type: 'result_not_runnable' });
+  expect(publicationContext).toHaveBeenCalledExactlyOnceWith('missing');
+  expect(resultImages.register).not.toHaveBeenCalled();
 });

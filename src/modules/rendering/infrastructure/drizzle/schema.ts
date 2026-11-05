@@ -19,6 +19,7 @@ import {
 import type { EditSet } from '@/modules/rendering/domain/edit-set';
 import type { RenderRecipe } from '@/modules/rendering/domain/recipe';
 import type { ModelSettings } from '@/modules/rendering/domain/render';
+import type { RenderOutputCheckpoint } from '@/modules/rendering/domain/render-output';
 
 /** Autosaved unfinished edits, one per render source. */
 export const renderDraft = pgTable(
@@ -73,6 +74,8 @@ export const renderResult = pgTable(
     skipReason: text('skipReason'),
     attempt: integer('attempt').default(1).notNull(),
     providerRequestId: text('providerRequestId'),
+    workflowRunId: text('workflowRunId'),
+    outputCheckpoint: jsonb('outputCheckpoint').$type<RenderOutputCheckpoint>(),
     modelVersion: text('modelVersion'),
     settings: jsonb('settings').$type<ModelSettings>().default({}).notNull(),
     prompt: text('prompt'),

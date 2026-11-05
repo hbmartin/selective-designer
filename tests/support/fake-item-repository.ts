@@ -1,12 +1,18 @@
 import { Result } from '@bloodyowl/boxed';
 
-import type { Item, ItemRepository, ItemVersion } from '@/modules/moodboard';
+import type {
+  CutoutOutputCheckpoint,
+  Item,
+  ItemRepository,
+  ItemVersion,
+} from '@/modules/moodboard';
 
 /** In-memory {@link ItemRepository} for use-case tests. */
 export const createFakeItemRepository = (now: () => Date) => {
   const items = new Map<string, Item & { removed: boolean }>();
   const versions = new Map<string, ItemVersion>();
   const attempts = new Map<string, string>();
+  const checkpoints = new Map<string, CutoutOutputCheckpoint>();
 
   const visible = (id: string) => {
     const item = items.get(id);
@@ -101,6 +107,7 @@ export const createFakeItemRepository = (now: () => Date) => {
               version,
               designId: item.designId,
               cutoutAttemptId: attempts.get(version.id) ?? null,
+              cutoutOutput: checkpoints.get(version.id) ?? null,
             }
           : { type: 'item_version_not_found' }
       );
@@ -121,7 +128,22 @@ export const createFakeItemRepository = (now: () => Date) => {
       version.cutoutKey = null;
       version.cutoutAttemptStartedAt = input.startedAt;
       attempts.set(version.id, input.attemptId);
+      checkpoints.delete(version.id);
       return Result.Ok({ type: 'cutout_attempt_claimed' });
+    },
+    async saveCutoutOutput(input) {
+      const version = versions.get(input.versionId);
+      if (
+        version?.cutoutStatus !== 'pending' ||
+        attempts.get(input.versionId) !== input.attemptId
+      )
+        return Result.Ok({ type: 'cutout_attempt_skipped' });
+      if (!checkpoints.has(input.versionId))
+        checkpoints.set(input.versionId, input.checkpoint);
+      return Result.Ok({
+        type: 'cutout_output_saved',
+        checkpoint: checkpoints.get(input.versionId)!,
+      });
     },
     async finishCutoutAttempt(input) {
       const version = versions.get(input.versionId);
@@ -164,5 +186,5 @@ export const createFakeItemRepository = (now: () => Date) => {
       });
     },
   };
-  return { repository, items, versions };
+  return { repository, items, versions, checkpoints };
 };

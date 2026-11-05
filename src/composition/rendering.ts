@@ -41,17 +41,17 @@ const startFailed = (cause: unknown) =>
 
 /** Durable Workflow SDK runs: one per render, or one per retried result. */
 export const workflowRenderScheduler: RenderScheduler = {
-  async scheduleRender(renderId) {
+  async scheduleRender(input) {
     try {
-      await start(renderWorkflow, [{ renderId }]);
+      await start(renderWorkflow, [input]);
       return Result.Ok({ type: 'render_scheduled' });
     } catch (error) {
       return Result.Error(startFailed(error));
     }
   },
-  async scheduleResult(resultId) {
+  async scheduleResult(input) {
     try {
-      await start(renderResultWorkflow, [{ resultId }]);
+      await start(renderResultWorkflow, [input]);
       return Result.Ok({ type: 'render_scheduled' });
     } catch (error) {
       return Result.Error(startFailed(error));

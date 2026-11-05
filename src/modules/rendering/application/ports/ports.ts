@@ -19,6 +19,7 @@ import type {
   RenderResult,
   RenderResultStatus,
 } from '../../domain/render';
+import type { RenderOutputCheckpoint } from '../../domain/render-output';
 
 // ---- Persistence -------------------------------------------------------
 
@@ -43,24 +44,76 @@ export type RenderCompletion = Pick<
   | 'framingChanged'
 >;
 
+export type RenderExecution = {
+  resultId: RenderResultId;
+  attempt: number;
+  workflowRunId: string;
+};
+export type RenderPublicationContext = {
+  result: RenderResult;
+  designId: DesignId;
+  renderSourceImageId: ImageId;
+  workflowRunId: string | null;
+  checkpoint: RenderOutputCheckpoint | null;
+  sourceSize: { width: number; height: number };
+};
+
 export interface RenderRepository {
-  failResultAttempt(input: {
+  claimExecution(
+    input: RenderExecution
+  ): Promise<
+    ApplicationResult<
+      | { type: 'result_execution_claimed' }
+      | { type: 'result_attempt_superseded' }
+    >
+  >;
+  saveSubmission(
+    input: RenderExecution & {
+      providerRequestId: string;
+      settings: ModelSettings;
+      prompt: string;
+      submittedAt: Date;
+    }
+  ): Promise<
+    ApplicationResult<
+      { type: 'result_submitted' } | { type: 'result_attempt_superseded' }
+    >
+  >;
+  saveOutput(
+    input: RenderAttemptIdentity & { checkpoint: RenderOutputCheckpoint }
+  ): Promise<
+    ApplicationResult<
+      | { type: 'result_output_saved'; checkpoint: RenderOutputCheckpoint }
+      | { type: 'result_attempt_superseded' }
+    >
+  >;
+  retryAttempt(input: {
     resultId: RenderResultId;
-    attempt?: number;
-    providerRequestId?: string | null;
-    reason: string;
-    now: Date;
+    expectedAttempt: number;
   }): Promise<
+    ApplicationResult<
+      | { type: 'result_retry_claimed'; attempt: number }
+      | { type: 'result_attempt_superseded' }
+    >
+  >;
+  failResultAttempt(
+    input: RenderExecution & {
+      providerRequestId?: string;
+      reason: string;
+      now: Date;
+    }
+  ): Promise<
     ApplicationResult<
       { type: 'result_marked_failed' } | { type: 'result_attempt_superseded' }
     >
   >;
-  /** Transaction-scoped row lock held through image publication. */
-  lockResultForCompletion(
-    resultId: RenderResultId
+  /** Focused result and parent metadata; lock is held through publication. */
+  publicationContext(
+    resultId: RenderResultId,
+    lock?: 'update'
   ): Promise<
     ApplicationResult<
-      | { type: 'result_locked'; result: RenderResult }
+      | { type: 'publication_context'; context: RenderPublicationContext }
       | { type: 'result_not_found' }
     >
   >;
@@ -224,8 +277,9 @@ export interface RenderInputs {
 }
 
 /**
- * Stores a copied model output as a design image (reading its dimensions) and
- * starts eager detection with region carry-over from the render source.
+ * Atomically publishes the image, detection intent, render completion and link.
+ * Completion is fenced by attempt/request; replay reuses the committed image.
+ * Detection is dispatched after commit, including on reconciled replay.
  */
 export interface ResultImages {
   findRegistered(
@@ -243,7 +297,9 @@ export interface ResultImages {
       renderSourceImageId: ImageId;
       objectKey: ObjectKey;
       contentType: string;
-      completion: Omit<RenderCompletion, 'framingChanged'>;
+      completion: Omit<RenderCompletion, 'framingChanged' | 'completedAt'> & {
+        completedAt: string;
+      };
       sourceSize: { width: number; height: number };
     }
   ): Promise<
@@ -332,10 +388,12 @@ export interface ImageModels {
 // ---- Scheduling -------------------------------------------------------
 
 export interface RenderScheduler {
-  scheduleRender(
-    renderId: RenderId
-  ): Promise<ApplicationResult<{ type: 'render_scheduled' }>>;
-  scheduleResult(
-    resultId: RenderResultId
-  ): Promise<ApplicationResult<{ type: 'render_scheduled' }>>;
+  scheduleRender(input: {
+    renderId: RenderId;
+    attempts: { resultId: RenderResultId; attempt: number }[];
+  }): Promise<ApplicationResult<{ type: 'render_scheduled' }>>;
+  scheduleResult(input: {
+    resultId: RenderResultId;
+    attempt: number;
+  }): Promise<ApplicationResult<{ type: 'render_scheduled' }>>;
 }

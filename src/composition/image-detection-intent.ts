@@ -229,14 +229,14 @@ export async function findRegisteredRenderImage(
   kernel: { db: DbLike },
   input: RenderAttemptIdentity
 ): Promise<ApplicationResult<Registered>> {
-  const found = await createRenderRepository({ db: kernel.db }).findResult(
-    input.resultId
-  );
+  const found = await createRenderRepository({
+    db: kernel.db,
+  }).publicationContext(input.resultId);
   if (found.isError()) return Result.Error(found.getError());
   const outcome = found.get();
   if (outcome.type === 'result_not_found')
     return Result.Ok({ type: 'result_attempt_superseded' });
-  const { result, render } = outcome;
+  const { result, designId } = outcome.context;
   if (
     result.attempt !== input.attempt ||
     result.providerRequestId !== input.providerRequestId
@@ -253,7 +253,7 @@ export async function findRegisteredRenderImage(
   if (
     saved.type !== 'image_found' ||
     saved.image.kind !== 'result' ||
-    saved.image.designId !== render.designId
+    saved.image.designId !== designId
   )
     return Result.Error(integrityError());
   const identity = renderImageIdentity(input);
@@ -301,26 +301,31 @@ export function writeRenderImageWithDetection(
       image,
       writeId: identity.writeId,
       verify: async (tx) => {
-        const saved = await createRenderRepository({ db: tx }).findResult(
-          input.resultId
-        );
+        const saved = await createRenderRepository({
+          db: tx,
+        }).publicationContext(input.resultId);
         if (saved.isError()) throw saved.getError();
         const value = saved.get();
         return (
-          value.type === 'result_found' &&
-          value.result.attempt === input.attempt &&
-          value.result.providerRequestId === input.providerRequestId &&
-          value.result.status === 'succeeded' &&
-          value.result.outputImageId === image.id
+          value.type === 'publication_context' &&
+          value.context.result.attempt === input.attempt &&
+          value.context.result.providerRequestId === input.providerRequestId &&
+          value.context.result.status === 'succeeded' &&
+          value.context.result.outputImageId === image.id
         );
       },
       work: async (tx) => {
         const renders = createRenderRepository({ db: tx });
-        const locked = await renders.lockResultForCompletion(input.resultId);
+        const locked = await renders.publicationContext(
+          input.resultId,
+          'update'
+        );
         if (locked.isError()) return Result.Error(locked.getError());
-        const row = locked.get();
+        const lockedValue = locked.get();
+        if (lockedValue.type === 'result_not_found')
+          return Result.Ok({ type: 'result_attempt_superseded' });
+        const row = lockedValue.context;
         if (
-          row.type === 'result_not_found' ||
           row.result.attempt !== input.attempt ||
           row.result.providerRequestId !== input.providerRequestId
         )
@@ -335,13 +340,9 @@ export function writeRenderImageWithDetection(
         }
         if (row.result.status !== 'submitted')
           return Result.Ok({ type: 'result_attempt_superseded' });
-        const source = await renders.findResult(input.resultId);
-        if (source.isError()) return Result.Error(source.getError());
-        const render = source.get();
         if (
-          render.type !== 'result_found' ||
-          render.render.designId !== input.designId ||
-          render.render.renderSourceImageId !== input.carryFromImageId
+          row.designId !== input.designId ||
+          row.renderSourceImageId !== input.carryFromImageId
         )
           return Result.Error(integrityError());
         const added = await createDesignRepository({ db: tx }).addImage({

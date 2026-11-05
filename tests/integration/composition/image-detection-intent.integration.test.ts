@@ -1,6 +1,7 @@
 import { Result } from '@bloodyowl/boxed';
 import { makeUserRow } from '@tests/server/db-fixtures';
 import { createPgliteTestDatabase } from '@tests/server/pglite';
+import { createFakeObjectStorage } from '@tests/support/fake-kernel-ports';
 import { okValue } from '@tests/support/result';
 import {
   afterAll,
@@ -12,43 +13,51 @@ import {
   vi,
 } from 'vitest';
 
-import { createFakeObjectStorage } from '@tests/support/fake-kernel-ports';
-import * as designBackend from '@/modules/design/backend';
-import { createProviderCallLog } from '@/modules/kernel/backend';
-import { createResultImages } from '@/composition/rendering-pipeline';
 import {
-  createRenderingPipelineUseCases,
-  type MaskCompositor,
-  type ImageModelAdapter,
-} from '@/modules/rendering';
-import { createRenderRepository } from '@/modules/rendering/testing';
-import {
-  writeRenderImageWithDetection,
   renderImageIdentity,
   writeImageWithDetection,
+  writeRenderImageWithDetection,
 } from '@/composition/image-detection-intent';
+import { createResultImages } from '@/composition/rendering-pipeline';
 import { toDesignName } from '@/modules/design';
+import * as designBackend from '@/modules/design/backend';
 import { createDesignRepository } from '@/modules/design/testing';
 import {
   AppError,
   toDesignId,
   toGeneratedId,
   toImageId,
+  toItemId,
+  toItemVersionId,
   toObjectKey,
-  toUserId,
   toRenderId,
   toRenderResultId,
+  toUserId,
 } from '@/modules/kernel';
+import { createProviderCallLog } from '@/modules/kernel/backend';
 import {
   createMigrationDbClient,
   migrateDatabase,
 } from '@/modules/kernel/infrastructure/db/migrate';
 import { user as userTable } from '@/modules/kernel/infrastructure/db/schema';
-import { createRegionRepository } from '@/modules/segmentation/testing';
+import {
+  type BackgroundRemover,
+  createMoodboardPipelineUseCases,
+  toItemCategory,
+  toItemName,
+} from '@/modules/moodboard';
+import { createItemRepository } from '@/modules/moodboard/testing';
+import {
+  createRenderingPipelineUseCases,
+  type ImageModelAdapter,
+  type MaskCompositor,
+} from '@/modules/rendering';
+import { createRenderRepository } from '@/modules/rendering/testing';
 import {
   createSegmentationUseCases,
   RegionWriteError,
 } from '@/modules/segmentation';
+import { createRegionRepository } from '@/modules/segmentation/testing';
 
 const ownerId = okValue(toUserId('owner'));
 const designId = okValue(toDesignId('design'));
@@ -360,7 +369,7 @@ describe('atomic image and detection writes', () => {
   const renderSetup = async () => {
     const ctx = setup();
     okValue(await writeImageWithDetection(ctx.kernel, ctx.input));
-    const renders = createRenderRepository({ db: database.db });
+    const renders = { ...createRenderRepository({ db: database.db }) };
     const resultId = okValue(toRenderResultId('render-result'));
     const sourceId = image().id;
     okValue(
@@ -441,7 +450,9 @@ describe('atomic image and detection writes', () => {
       resultId,
       attempt: 1,
       providerRequestId: 'paid-request',
+      workflowRunId: 'workflow-1',
     };
+    okValue(await renders.claimExecution(identity));
     return {
       ...ctx,
       kernel,
@@ -455,6 +466,268 @@ describe('atomic image and detection writes', () => {
       identity,
     };
   };
+
+  it('recovers a stored URL render after publication failed and the provider URL expired', async () => {
+    const ctx = await renderSetup();
+    const url = 'https://provider.test/raw';
+    ctx.storage.addRemoteSource(url, {
+      bytes: ctx.bytes,
+      contentType: 'image/png',
+    });
+    ctx.poll.mockResolvedValue(
+      Result.Ok({
+        type: 'model_completed',
+        outputUrl: url,
+        outputBytes: null,
+        modelVersion: 'v1',
+        costUsdMicros: 123,
+        costSource: 'reported',
+      })
+    );
+    const cleanup = await installIntentFault(database.db, '23514', 1);
+    try {
+      expect((await ctx.pipeline.poll(ctx.identity)).isError()).toBe(true);
+    } finally {
+      await cleanup();
+    }
+    const context = okValue(
+      await ctx.renders.publicationContext(ctx.identity.resultId)
+    );
+    expect(context).toMatchObject({
+      type: 'publication_context',
+      context: {
+        checkpoint: { source: { kind: 'url', url } },
+        result: { status: 'submitted' },
+      },
+    });
+    ctx.poll.mockRejectedValue(new Error('provider result expired'));
+    const copy = vi
+      .spyOn(ctx.storage.storage, 'copyNewObjectFromUrl')
+      .mockRejectedValue(new Error('source URL expired'));
+    expect(okValue(await ctx.pipeline.poll(ctx.identity))).toEqual({
+      type: 'result_succeeded',
+    });
+    expect(copy).not.toHaveBeenCalled();
+    expect(ctx.poll).toHaveBeenCalledOnce();
+    expect(
+      ctx.storage.objects.get(`results/${ctx.identity.resultId}/1/raw.img`)
+        ?.bytes
+    ).toEqual(ctx.bytes);
+    expect(
+      (await database.db.$client.query('SELECT id FROM provider_call')).rows
+    ).toHaveLength(1);
+  });
+
+  it('recovers a checkpoint whose successful database reply was lost', async () => {
+    const ctx = await renderSetup();
+    const save = ctx.renders.saveOutput;
+    const lost = new AppError({
+      code: 'REPLY_LOST',
+      category: 'system',
+      status: 502,
+      cause: { code: 'EPIPE' },
+    });
+    const spy = vi
+      .spyOn(ctx.renders, 'saveOutput')
+      .mockImplementationOnce(async (input) => {
+        okValue(await save(input));
+        return Result.Error(lost);
+      });
+    try {
+      expect((await ctx.pipeline.poll(ctx.identity)).isError()).toBe(true);
+    } finally {
+      spy.mockRestore();
+    }
+    ctx.poll.mockRejectedValue(new Error('must load the durable checkpoint'));
+    expect(okValue(await ctx.pipeline.poll(ctx.identity))).toEqual({
+      type: 'result_succeeded',
+    });
+    expect(ctx.poll).toHaveBeenCalledOnce();
+  });
+
+  it('atomically claims retries, clears recovery state, and fences stale execution failures', async () => {
+    const ctx = await renderSetup();
+    const duplicate = okValue(
+      await ctx.renders.claimExecution({
+        ...ctx.identity,
+        workflowRunId: 'duplicate',
+      })
+    );
+    expect(duplicate.type).toBe('result_attempt_superseded');
+    okValue(
+      await ctx.renders.saveOutput({
+        ...ctx.identity,
+        checkpoint: {
+          source: { kind: 'url', url: 'https://provider.test/old' },
+          objectKey: okValue(toObjectKey('results/old.img')),
+          contentType: null,
+          modelVersion: null,
+          costUsdMicros: 1,
+          costSource: 'reported',
+          completedAt: new Date().toISOString(),
+        },
+      })
+    );
+    okValue(
+      await ctx.renders.failResultAttempt({
+        ...ctx.identity,
+        reason: 'failed',
+        now: new Date(),
+      })
+    );
+    const claims = await Promise.all(
+      [1, 2].map(() =>
+        ctx.renders.retryAttempt({
+          resultId: ctx.identity.resultId,
+          expectedAttempt: 1,
+        })
+      )
+    );
+    expect(claims.map((value) => okValue(value).type).sort()).toEqual([
+      'result_attempt_superseded',
+      'result_retry_claimed',
+    ]);
+    const current = okValue(
+      await ctx.renders.publicationContext(ctx.identity.resultId)
+    );
+    expect(current).toMatchObject({
+      type: 'publication_context',
+      context: {
+        checkpoint: null,
+        workflowRunId: null,
+        result: { attempt: 2, status: 'pending' },
+      },
+    });
+    expect(
+      okValue(
+        await ctx.renders.failResultAttempt({
+          ...ctx.identity,
+          reason: 'old timeout',
+          now: new Date(),
+        })
+      ).type
+    ).toBe('result_attempt_superseded');
+    expect(
+      okValue(
+        await ctx.renders.saveSubmission({
+          ...ctx.identity,
+          providerRequestId: 'stale',
+          settings: {},
+          prompt: '',
+          submittedAt: new Date(),
+        })
+      ).type
+    ).toBe('result_attempt_superseded');
+  });
+
+  it.each(['source read', 'publication', 'checkpoint reply'] as const)(
+    'recovers cutout %s against persisted PostgreSQL checkpoints',
+    async (phase) => {
+      const ctx = await renderSetup();
+      const items = { ...createItemRepository({ db: database.db }) };
+      const versionId = okValue(toItemVersionId('cutout-version'));
+      const attempt = { versionId, attemptId: 'cutout-attempt' };
+      okValue(
+        await items.create({
+          id: okValue(toItemId('cutout-item')),
+          designId,
+          kind: 'product',
+          name: okValue(toItemName('Chair')),
+          category: okValue(toItemCategory('Furniture')),
+          vendor: null,
+          productUrl: null,
+          version: {
+            id: versionId,
+            photo: {
+              key: image().workingKey,
+              contentType: 'image/png',
+              width: 100,
+              height: 100,
+            },
+            cutoutKey: null,
+            maskKey: null,
+            cutoutStatus: 'pending',
+            cutoutAttempt: { id: attempt.attemptId, startedAt: new Date() },
+          },
+        })
+      );
+      const url = 'https://provider.test/cutout';
+      ctx.storage.addRemoteSource(url, {
+        bytes: ctx.bytes,
+        contentType: 'image/png',
+      });
+      const remove = vi
+        .fn<BackgroundRemover['removeBackground']>()
+        .mockResolvedValue(
+          Result.Ok({
+            type: 'background_removed',
+            result: { kind: 'url', url },
+            provider: 'fal',
+            endpoint: 'birefnet',
+            providerRequestId: 'paid-cutout',
+            costUsdMicros: 321,
+            costSource: 'reported',
+          })
+        );
+      const pipeline = createMoodboardPipelineUseCases({
+        ...ctx.kernel,
+        itemRepository: items,
+        designAccess: {
+          ownerOf: async () => Result.Ok({ type: 'owner', userId: ownerId }),
+          isOwnedBy: vi.fn(),
+        },
+        backgroundRemover: { removeBackground: remove },
+      });
+      const error = new AppError({
+        code: 'REPLY_LOST',
+        category: 'system',
+        status: 502,
+        cause: { code: 'EPIPE' },
+      });
+      const copy = vi.spyOn(ctx.storage.storage, 'copyNewObjectFromUrl');
+      if (phase === 'source read')
+        copy.mockResolvedValueOnce(Result.Error(error));
+      if (phase === 'publication')
+        vi.spyOn(items, 'finishCutoutAttempt').mockResolvedValueOnce(
+          Result.Error(error)
+        );
+      if (phase === 'checkpoint reply') {
+        const save = items.saveCutoutOutput;
+        vi.spyOn(items, 'saveCutoutOutput').mockImplementationOnce(
+          async (input) => {
+            okValue(await save(input));
+            return Result.Error(error);
+          }
+        );
+      }
+      const failed = await pipeline.removeBackground(attempt);
+      expect(failed.isError() && failed.getError()).toBe(error);
+      expect(okValue(await items.findVersion(versionId))).toMatchObject({
+        cutoutOutput: { source: { kind: 'url', url } },
+      });
+      remove.mockRejectedValue(
+        new Error('must never purchase the checkpointed work again')
+      );
+      if (phase === 'publication')
+        copy.mockRejectedValue(new Error('source URL expired'));
+      expect(okValue(await pipeline.removeBackground(attempt))).toEqual({
+        type: 'cutout_ready',
+      });
+      expect(remove).toHaveBeenCalledOnce();
+      expect(
+        (
+          await database.db.$client.query(
+            'SELECT status, "costUsdMicros" FROM provider_call WHERE purpose = \'background_removal\''
+          )
+        ).rows
+      ).toEqual([{ status: 'succeeded', costUsdMicros: '321' }]);
+      expect(
+        ctx.storage.objects.get(
+          `item-cutouts/${versionId}/${attempt.attemptId}.png`
+        )?.bytes
+      ).toEqual(ctx.bytes);
+    }
+  );
 
   it('reuses a committed render after every immediate reconciliation read failed', async () => {
     const ctx = await renderSetup();
@@ -470,7 +743,7 @@ describe('atomic image and detection writes', () => {
         throw lost;
       });
     try {
-      const outcome = await ctx.pipeline.poll(ctx.identity.resultId);
+      const outcome = await ctx.pipeline.poll(ctx.identity);
       expect(outcome.isError() && outcome.getError().cause).toBe(lost);
       expect(ctx.scheduler.schedule).not.toHaveBeenCalled();
       expect(ctx.kernel.logger.warn).toHaveBeenCalledWith(
@@ -480,7 +753,7 @@ describe('atomic image and detection writes', () => {
       spy.mockRestore();
     }
     const copy = vi.spyOn(ctx.storage.storage, 'createObject');
-    expect(okValue(await ctx.pipeline.poll(ctx.identity.resultId))).toEqual({
+    expect(okValue(await ctx.pipeline.poll(ctx.identity))).toEqual({
       type: 'result_succeeded',
     });
     expect(ctx.poll).toHaveBeenCalledOnce();
@@ -507,8 +780,8 @@ describe('atomic image and detection writes', () => {
     async () => {
       const ctx = await renderSetup();
       const results = await Promise.all([
-        ctx.pipeline.poll(ctx.identity.resultId),
-        ctx.pipeline.poll(ctx.identity.resultId),
+        ctx.pipeline.poll(ctx.identity),
+        ctx.pipeline.poll(ctx.identity),
       ]);
       expect(results.every((value) => value.isOk())).toBe(true);
       const images = okValue(
@@ -535,7 +808,7 @@ describe('atomic image and detection writes', () => {
 
   it('keeps separate images for explicitly retried attempts and rejects a stale completion', async () => {
     const ctx = await renderSetup();
-    okValue(await ctx.pipeline.poll(ctx.identity.resultId));
+    okValue(await ctx.pipeline.poll(ctx.identity));
     okValue(
       await ctx.renders.updateResult({
         resultId: ctx.identity.resultId,
@@ -564,7 +837,18 @@ describe('atomic image and detection writes', () => {
       },
     });
     expect(okValue(stale)).toEqual({ type: 'result_attempt_superseded' });
-    okValue(await ctx.pipeline.poll(ctx.identity.resultId));
+    const second = {
+      ...ctx.identity,
+      attempt: 2,
+      providerRequestId: 'second-paid-request',
+      workflowRunId: 'workflow-2',
+    };
+    await database.db.$client.query(
+      'UPDATE render_result SET "workflowRunId" = NULL, "outputCheckpoint" = NULL WHERE id = $1',
+      [ctx.identity.resultId]
+    );
+    okValue(await ctx.renders.claimExecution(second));
+    okValue(await ctx.pipeline.poll(second));
     const images = okValue(
       await createDesignRepository({ db: database.db }).listImages({
         designId,
@@ -592,9 +876,7 @@ describe('atomic image and detection writes', () => {
     const ctx = await renderSetup();
     const cleanup = await installIntentFault(database.db, '23514', 1);
     try {
-      expect((await ctx.pipeline.poll(ctx.identity.resultId)).isError()).toBe(
-        true
-      );
+      expect((await ctx.pipeline.poll(ctx.identity)).isError()).toBe(true);
       expect(
         okValue(await ctx.renders.findResult(ctx.identity.resultId))
       ).toMatchObject({ result: { status: 'submitted', outputImageId: null } });
@@ -655,8 +937,10 @@ describe('atomic image and detection writes', () => {
       spy.mockRestore();
     }
   });
-  it.skipIf(!nativeUrl).each(['40001', '40P01', '55P03'])(
-    'cleans fresh interactive masks after a server-confirmed %s rejection',
+  it
+    .skipIf(!nativeUrl)
+    .each(['40001', '40P01', '55P03', 'XX000', '53000', '58030'])(
+    'preserves cleanup certainty for server-reported %s',
     async (code) => {
       const ctx = await renderSetup();
       const regions = createRegionRepository({ db: database.db });
@@ -713,9 +997,13 @@ describe('atomic image and detection writes', () => {
           RegionWriteError
         );
         expect(result.isError() && result.getError()).toMatchObject({
-          publication: 'rejected',
+          publication: ['40001', '40P01', '55P03'].includes(code)
+            ? 'rejected'
+            : 'unknown',
         });
-        expect(ctx.storage.objects.size).toBe(0);
+        expect(ctx.storage.objects.size).toBe(
+          ['40001', '40P01', '55P03'].includes(code) ? 0 : 1
+        );
         expect(
           (await database.db.$client.query('SELECT id FROM region')).rows
         ).toEqual([]);

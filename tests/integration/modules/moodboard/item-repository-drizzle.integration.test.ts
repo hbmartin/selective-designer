@@ -84,6 +84,75 @@ describe('ItemRepositoryDrizzle', () => {
       },
     });
 
+  it('checkpoints the winning cutout output privately and clears it on a fresh attempt', async () => {
+    const startedAt = new Date();
+    await create('checkpoint', 'Lighting', { id: 'attempt-1', startedAt });
+    const attempt = {
+      versionId: versionId('checkpoint-v1'),
+      attemptId: 'attempt-1',
+    };
+    const checkpoint = {
+      source: {
+        kind: 'url' as const,
+        url: 'https://provider.test/private?token=secret',
+      },
+      objectKey: key('item-cutouts/checkpoint.png'),
+      contentType: null,
+      provider: 'fal',
+      endpoint: 'birefnet',
+      providerRequestId: 'request',
+      costUsdMicros: 123,
+      costSource: 'reported' as const,
+      completedAt: startedAt.toISOString(),
+    };
+    const saved = okValue(
+      await repository.saveCutoutOutput({ ...attempt, checkpoint })
+    );
+    expect(saved).toEqual({ type: 'cutout_output_saved', checkpoint });
+    expect(
+      okValue(
+        await repository.saveCutoutOutput({
+          ...attempt,
+          checkpoint: { ...checkpoint, providerRequestId: 'loser' },
+        })
+      )
+    ).toEqual(saved);
+    expect(
+      okValue(await repository.findVersion(attempt.versionId))
+    ).toMatchObject({ cutoutOutput: checkpoint });
+    const visible = okValue(
+      await repository.findById(unwrapParseResult(toItemId('checkpoint')))
+    );
+    expect(JSON.stringify(visible)).not.toContain('token=secret');
+    okValue(
+      await repository.finishCutoutAttempt({
+        ...attempt,
+        cutoutStatus: 'failed',
+        cutoutKey: null,
+      })
+    );
+    const claims = await Promise.all(
+      [1, 2].map((id) =>
+        repository.claimCutoutAttempt({
+          versionId: attempt.versionId,
+          attemptId: `new-${id}`,
+          startedAt,
+          expiredBeforeMs: 0,
+        })
+      )
+    );
+    expect(claims.map((value) => okValue(value).type).sort()).toEqual([
+      'cutout_attempt_claimed',
+      'cutout_attempt_skipped',
+    ]);
+    expect(
+      okValue(await repository.findVersion(attempt.versionId))
+    ).toMatchObject({ cutoutOutput: null });
+    expect(
+      okValue(await repository.saveCutoutOutput({ ...attempt, checkpoint }))
+    ).toEqual({ type: 'cutout_attempt_skipped' });
+  });
+
   it('creates, versions, lists and removes items', async () => {
     await create('i1', 'Lighting');
     await create('i2', 'Plants');

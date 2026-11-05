@@ -349,7 +349,13 @@ const createAndSchedule = async (
     results,
   });
   if (created.isError()) return Result.Error(created.getError());
-  const scheduled = await deps.renderScheduler.scheduleRender(renderId.get());
+  const scheduled = await deps.renderScheduler.scheduleRender({
+    renderId: renderId.get(),
+    attempts: created
+      .get()
+      .render.results.filter((r) => r.status === 'pending')
+      .map((r) => ({ resultId: r.id, attempt: r.attempt })),
+  });
   if (scheduled.isError()) return Result.Error(scheduled.getError());
   deps.logger.info({
     event: 'rendering.render.submitted',
@@ -624,19 +630,18 @@ export async function retryResult(
   if (ownedOutcome.type !== 'ok') return Result.Ok(ownedOutcome);
   if (ownedOutcome.result.status !== 'failed')
     return Result.Ok({ type: 'result_not_retryable' });
-  const reset = await deps.renderRepository.updateResult({
+  const reset = await deps.renderRepository.retryAttempt({
     resultId: input.resultId,
-    changes: {
-      status: 'pending',
-      attempt: ownedOutcome.result.attempt + 1,
-      providerRequestId: null,
-      errorMessage: null,
-      submittedAt: null,
-      completedAt: null,
-    },
+    expectedAttempt: ownedOutcome.result.attempt,
   });
   if (reset.isError()) return Result.Error(reset.getError());
-  const scheduled = await deps.renderScheduler.scheduleResult(input.resultId);
+  const claimed = reset.get();
+  if (claimed.type === 'result_attempt_superseded')
+    return Result.Ok({ type: 'result_not_retryable' });
+  const scheduled = await deps.renderScheduler.scheduleResult({
+    resultId: input.resultId,
+    attempt: claimed.attempt,
+  });
   if (scheduled.isError()) return Result.Error(scheduled.getError());
   return reloadView(deps, ownedOutcome.render.id);
 }
