@@ -6,6 +6,7 @@ export type {
   MoodboardPipelineDeps,
   MoodboardUseCaseDeps,
 } from './application/use-cases/types';
+export type { CutoutOutputCheckpoint } from './domain/cutout-output';
 export * from './domain/item';
 export {
   createMoodboardPipelineUseCases,

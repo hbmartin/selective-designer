@@ -5,12 +5,16 @@ export class ObjectCopySourceError extends AppError {
   readonly reason: 'network' | 'timeout' | 'http';
   readonly attempts: number;
   readonly sourceStatus?: number;
+  readonly retryable: boolean;
+  readonly retryAfterMs?: number;
 
   constructor(input: {
     reason: 'network' | 'timeout' | 'http';
     attempts: number;
     status?: number;
     cause: unknown;
+    retryable?: boolean;
+    retryAfterMs?: number;
   }) {
     super({
       code: 'OBJECT_COPY_SOURCE_FAILED',
@@ -22,5 +26,7 @@ export class ObjectCopySourceError extends AppError {
     this.reason = input.reason;
     this.attempts = input.attempts;
     this.sourceStatus = input.status;
+    this.retryable = input.retryable ?? true;
+    this.retryAfterMs = input.retryAfterMs;
   }
 }

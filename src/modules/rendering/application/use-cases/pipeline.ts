@@ -1,9 +1,10 @@
 import { Result } from '@bloodyowl/boxed';
 
+import { ObjectCopySourceError } from '@/modules/kernel/application/ports/object-storage';
+import { safeErrorDiagnostics } from '@/modules/kernel/domain/errors/safe-error-diagnostics';
 import {
   type DesignId,
   type ImageId,
-  type RenderId,
   type RenderResultId,
   toObjectKey,
   toProviderCallId,
@@ -15,12 +16,17 @@ import {
   type RenderingPipelineDeps,
   type RenderingResult,
 } from './types';
-import type { ModelRequest } from '../ports/ports';
+import type {
+  ModelRequest,
+  RenderExecution,
+  RenderPublicationContext,
+} from '../ports/ports';
 import type { Edit } from '../../domain/edit-set';
 import { MODEL_CATALOG } from '../../domain/model-catalog';
 import { buildPrompt } from '../../domain/prompt-builder';
 import { recipeReferences, targetBoxes } from '../../domain/recipe';
 import type { Render, RenderResult } from '../../domain/render';
+import type { RenderOutputCheckpoint } from '../../domain/render-output';
 
 const OUTPUT_MAX_BYTES = 40 * 1024 * 1024;
 const OUTPUT_TYPES = ['image/png', 'image/jpeg', 'image/webp'] as const;
@@ -32,26 +38,6 @@ const EXTENSION: Record<string, string> = {
 
 const loadResult = (deps: RenderingPipelineDeps, resultId: RenderResultId) =>
   deps.renderRepository.findResult(resultId);
-
-/** Results of a render that still need a model run. */
-export async function runnableResults(
-  deps: RenderingPipelineDeps,
-  renderId: RenderId
-): Promise<RenderingResult<{ type: 'runnable'; resultIds: string[] }>> {
-  const found = await deps.renderRepository.findRender(renderId);
-  if (found.isError()) return Result.Error(found.getError());
-  const outcome = found.get();
-  if (outcome.type === 'render_not_found')
-    return Result.Ok({ type: 'runnable', resultIds: [] });
-  return Result.Ok({
-    type: 'runnable',
-    resultIds: outcome.render.results
-      .filter(
-        (result) => result.status === 'pending' || result.status === 'submitted'
-      )
-      .map((result) => result.id),
-  });
-}
 
 const buildRequest = async (
   deps: RenderingPipelineDeps,
@@ -106,31 +92,39 @@ const buildRequest = async (
 };
 
 export type SubmitResultOutcome =
-  | { type: 'result_submitted' }
-  | { type: 'result_already_submitted' }
+  | { type: 'result_submitted'; providerRequestId: string }
+  | { type: 'result_already_submitted'; providerRequestId: string }
   | { type: 'result_failed'; reason: string }
-  | { type: 'result_not_runnable' };
+  | { type: 'result_not_runnable' }
+  | { type: 'result_attempt_superseded' };
 
-/**
- * Send one model its request. Idempotent: a retried step after a successful
- * submit finds the stored provider request id and does not pay twice.
- */
+/** Claim one workflow execution before submitting a paid request. */
 export async function submitResult(
   deps: RenderingPipelineDeps,
-  resultId: RenderResultId
+  input: RenderExecution
 ): Promise<RenderingResult<SubmitResultOutcome>> {
-  const loaded = await loadResult(deps, resultId);
+  const claimed = await deps.renderRepository.claimExecution(input);
+  if (claimed.isError()) return Result.Error(claimed.getError());
+  if (claimed.get().type === 'result_attempt_superseded')
+    return Result.Ok({ type: 'result_attempt_superseded' });
+  const loaded = await loadResult(deps, input.resultId);
   if (loaded.isError()) return Result.Error(loaded.getError());
   const outcome = loaded.get();
   if (outcome.type === 'result_not_found')
     return Result.Ok({ type: 'result_not_runnable' });
   const { result, render } = outcome;
-  if (result.status === 'submitted' && result.providerRequestId) {
-    return Result.Ok({ type: 'result_already_submitted' });
-  }
+  if (result.attempt !== input.attempt)
+    return Result.Ok({ type: 'result_attempt_superseded' });
+  if (
+    (result.status === 'submitted' || result.status === 'succeeded') &&
+    result.providerRequestId
+  )
+    return Result.Ok({
+      type: 'result_already_submitted',
+      providerRequestId: result.providerRequestId,
+    });
   if (result.status !== 'pending')
     return Result.Ok({ type: 'result_not_runnable' });
-
   const request = await buildRequest(deps, render, result);
   if (request.isError()) return Result.Error(request.getError());
   const submitted = await deps.imageModels
@@ -138,89 +132,73 @@ export async function submitResult(
     .submit(request.get());
   if (submitted.isError()) return Result.Error(submitted.getError());
   const submission = submitted.get();
-  if (submission.type === 'model_rejected') {
-    const failed = await markResultFailed(deps, {
-      resultId,
-      reason: submission.reason,
-    });
-    if (failed.isError()) return Result.Error(failed.getError());
-    return Result.Ok({ type: 'result_failed', reason: submission.reason });
-  }
-  const saved = await deps.renderRepository.updateResult({
-    resultId,
-    changes: {
-      status: 'submitted',
-      providerRequestId: submission.providerRequestId,
-      settings: submission.settings,
-      prompt: request.get().prompt,
-      submittedAt: deps.clock.now(),
-    },
+  if (submission.type === 'model_rejected')
+    return failPoll(deps, input, submission.reason);
+  const saved = await deps.renderRepository.saveSubmission({
+    ...input,
+    providerRequestId: submission.providerRequestId,
+    settings: submission.settings,
+    prompt: request.get().prompt,
+    submittedAt: deps.clock.now(),
   });
   if (saved.isError()) return Result.Error(saved.getError());
-  return Result.Ok({ type: 'result_submitted' });
+  if (saved.get().type === 'result_attempt_superseded')
+    return Result.Ok({ type: 'result_attempt_superseded' });
+  return Result.Ok({
+    type: 'result_submitted',
+    providerRequestId: submission.providerRequestId,
+  });
 }
 
 export type PollResultOutcome =
   | { type: 'result_pending' }
   | { type: 'result_succeeded' }
   | { type: 'result_failed'; reason: string }
-  | { type: 'result_not_runnable' };
+  | { type: 'result_not_runnable' }
+  | { type: 'result_attempt_superseded' };
 
-/**
- * Check a submitted model run. On completion the output is copied into owned
- * storage right away (provider links expire), registered as a design image
- * (which starts eager detection), and the cost is logged.
- */
-export async function pollResult(
+type PollExecution = RenderExecution & { providerRequestId: string };
+
+const failPoll = async (
   deps: RenderingPipelineDeps,
-  resultId: RenderResultId
-): Promise<RenderingResult<PollResultOutcome>> {
-  const loaded = await loadResult(deps, resultId);
-  if (loaded.isError()) return Result.Error(loaded.getError());
-  const outcome = loaded.get();
-  if (outcome.type === 'result_not_found')
-    return Result.Ok({ type: 'result_not_runnable' });
-  const { result, render } = outcome;
-  if (result.status === 'succeeded' && !result.providerRequestId)
-    return Result.Ok({ type: 'result_succeeded' });
-  if (
-    result.providerRequestId &&
-    (result.status === 'submitted' || result.status === 'succeeded')
-  ) {
-    const recovered = await deps.resultImages.findRegistered({
-      resultId,
-      attempt: result.attempt,
-      providerRequestId: result.providerRequestId,
-    });
-    if (recovered.isError()) return Result.Error(recovered.getError());
-    const registration = recovered.get();
-    if (registration.type === 'result_image_registered')
-      return Result.Ok({ type: 'result_succeeded' });
-    if (registration.type === 'result_attempt_superseded')
-      return Result.Ok({ type: 'result_not_runnable' });
-  }
-  if (result.status !== 'submitted' || !result.providerRequestId) {
-    return Result.Ok({ type: 'result_not_runnable' });
-  }
+  input: RenderExecution & { providerRequestId?: string },
+  reason: string
+): Promise<
+  RenderingResult<
+    | { type: 'result_failed'; reason: string }
+    | { type: 'result_attempt_superseded' }
+  >
+> => {
+  const saved = await markResultFailed(deps, { ...input, reason });
+  if (saved.isError()) return Result.Error(saved.getError());
+  return Result.Ok(
+    saved.get().type === 'result_marked_failed'
+      ? { type: 'result_failed', reason }
+      : { type: 'result_attempt_superseded' }
+  );
+};
 
+const checkpointProviderOutput = async (
+  deps: RenderingPipelineDeps,
+  input: PollExecution,
+  context: RenderPublicationContext
+): Promise<
+  RenderingResult<
+    | { type: 'output_checkpointed'; checkpoint: RenderOutputCheckpoint }
+    | { type: 'result_pending' }
+    | { type: 'result_failed'; reason: string }
+    | { type: 'result_attempt_superseded' }
+  >
+> => {
+  const { result } = context;
   const polled = await deps.imageModels
     .adapterFor(result.modelId)
-    .poll(result.providerRequestId);
+    .poll(input.providerRequestId);
   if (polled.isError()) return Result.Error(polled.getError());
   const poll = polled.get();
   if (poll.type === 'model_pending')
     return Result.Ok({ type: 'result_pending' });
-  if (poll.type === 'model_failed') {
-    const failed = await markResultFailed(deps, {
-      resultId,
-      attempt: result.attempt,
-      providerRequestId: result.providerRequestId,
-      reason: poll.reason,
-    });
-    if (failed.isError()) return Result.Error(failed.getError());
-    return Result.Ok({ type: 'result_failed', reason: poll.reason });
-  }
-
+  if (poll.type === 'model_failed') return failPoll(deps, input, poll.reason);
   const spec = MODEL_CATALOG[result.modelId];
   const costUsdMicros = poll.costUsdMicros ?? spec.estimatedCostUsdMicros;
   const costSource =
@@ -230,126 +208,172 @@ export async function pollResult(
         ? 'price_table'
         : 'unavailable';
   const now = deps.clock.now();
-  const callId = toProviderCallId(`render:${resultId}:${result.attempt}`);
+  const callId = toProviderCallId(`render:${input.resultId}:${input.attempt}`);
   if (callId.isError()) return Result.Error(callId.getError());
   const logged = await deps.providerCallLog.record({
     id: callId.get(),
     userId: undefined,
-    designId: render.designId,
+    designId: context.designId,
     purpose: 'render',
     provider: spec.provider,
     endpoint: spec.endpoint,
-    subjectId: resultId,
-    providerRequestId: result.providerRequestId,
+    subjectId: input.resultId,
+    providerRequestId: input.providerRequestId,
     status: 'succeeded',
     costUsdMicros: costUsdMicros ?? undefined,
     costSource,
-    details: { modelId: result.modelId, attempt: result.attempt },
+    details: { modelId: result.modelId, attempt: input.attempt },
     startedAt: result.submittedAt ?? now,
     completedAt: now,
   });
   if (logged.isError()) return Result.Error(logged.getError());
-
-  // Immutable attempt output: a concurrent execution cannot overwrite published bytes.
-  const rawKey = (extension: string) =>
-    toObjectKey(`results/${resultId}/${result.attempt}/raw.${extension}`);
-  let objectKey;
-  let contentType: string;
+  if (!poll.outputBytes && !poll.outputUrl)
+    return failPoll(deps, input, 'no_output');
+  const key = toObjectKey(
+    `results/${input.resultId}/${input.attempt}/raw.${poll.outputBytes ? (EXTENSION[poll.outputBytes.contentType] ?? 'png') : 'img'}`
+  );
+  if (key.isError()) return Result.Error(key.getError());
   if (poll.outputBytes) {
-    contentType = poll.outputBytes.contentType;
-    const key = rawKey(EXTENSION[contentType] ?? 'png');
-    if (key.isError()) return Result.Error(key.getError());
     const stored = await deps.objectStorage.createObject({
       objectKey: key.get(),
       body: poll.outputBytes.bytes,
-      contentType,
+      contentType: poll.outputBytes.contentType,
       cacheControl: IMMUTABLE_OBJECT_CACHE_CONTROL,
     });
     if (stored.isError()) return Result.Error(stored.getError());
-    objectKey = key.get();
-  } else if (poll.outputUrl) {
-    const key = rawKey('img');
-    if (key.isError()) return Result.Error(key.getError());
-    const copied = await deps.objectStorage.copyNewObjectFromUrl({
-      sourceUrl: poll.outputUrl,
+  }
+  const saved = await deps.renderRepository.saveOutput({
+    ...input,
+    checkpoint: {
+      source: poll.outputBytes
+        ? { kind: 'object' }
+        : { kind: 'url', url: poll.outputUrl! },
       objectKey: key.get(),
+      contentType: poll.outputBytes?.contentType ?? null,
+      modelVersion: poll.modelVersion,
+      costUsdMicros,
+      costSource,
+      completedAt: now.toISOString(),
+    },
+  });
+  if (saved.isError()) return Result.Error(saved.getError());
+  const savedValue = saved.get();
+  if (savedValue.type === 'result_attempt_superseded')
+    return Result.Ok(savedValue);
+  return Result.Ok({
+    type: 'output_checkpointed',
+    checkpoint: savedValue.checkpoint,
+  });
+};
+
+/** Recover checkpointed paid work, then atomically publish image/intent/completion.
+ * Provider success and cost are recorded before copying or publication.
+ */
+export async function pollResult(
+  deps: RenderingPipelineDeps,
+  input: PollExecution
+): Promise<RenderingResult<PollResultOutcome>> {
+  const loaded = await deps.renderRepository.publicationContext(input.resultId);
+  if (loaded.isError()) return Result.Error(loaded.getError());
+  const value = loaded.get();
+  if (value.type === 'result_not_found')
+    return Result.Ok({ type: 'result_not_runnable' });
+  const context = value.context;
+  const { result } = context;
+  if (
+    result.attempt !== input.attempt ||
+    result.providerRequestId !== input.providerRequestId ||
+    context.workflowRunId !== input.workflowRunId
+  )
+    return Result.Ok({ type: 'result_attempt_superseded' });
+  if (result.status === 'succeeded') {
+    const recovered = await deps.resultImages.findRegistered(input);
+    if (recovered.isError()) return Result.Error(recovered.getError());
+    return Result.Ok({
+      type:
+        recovered.get().type === 'result_image_registered'
+          ? 'result_succeeded'
+          : 'result_attempt_superseded',
+    });
+  }
+  if (result.status !== 'submitted')
+    return Result.Ok({ type: 'result_not_runnable' });
+
+  let checkpoint = context.checkpoint;
+  if (!checkpoint) {
+    const prepared = await checkpointProviderOutput(deps, input, context);
+    if (prepared.isError()) return Result.Error(prepared.getError());
+    const output = prepared.get();
+    if (output.type !== 'output_checkpointed') return Result.Ok(output);
+    checkpoint = output.checkpoint;
+  }
+
+  // An interrupted publication must never depend on the provider link again.
+  let object = await deps.objectStorage.getObjectBytes(checkpoint.objectKey);
+  if (object.isError()) return Result.Error(object.getError());
+  if (object.get().type === 'object_not_found') {
+    if (checkpoint.source.kind === 'object')
+      return failPoll(deps, input, 'output_unreadable');
+    const copied = await deps.objectStorage.copyNewObjectFromUrl({
+      sourceUrl: checkpoint.source.url,
+      objectKey: checkpoint.objectKey,
       acceptedContentTypes: OUTPUT_TYPES,
       maxBytes: OUTPUT_MAX_BYTES,
       cacheControl: IMMUTABLE_OBJECT_CACHE_CONTROL,
     });
-    if (copied.isError()) return Result.Error(copied.getError());
-    const copy = copied.get();
-    if (
-      copy.type !== 'object_created' &&
-      copy.type !== 'object_already_exists'
-    ) {
-      const failed = await markResultFailed(deps, {
-        resultId,
-        attempt: result.attempt,
-        providerRequestId: result.providerRequestId,
-        reason: `output_${copy.type}`,
+    if (copied.isError()) {
+      const error = copied.getError();
+      deps.logger.warn({
+        event: 'rendering.result.output_failed',
+        details: {
+          resultId: input.resultId,
+          attempt: input.attempt,
+          code: error.code,
+          ...safeErrorDiagnostics(error),
+          ...(error instanceof ObjectCopySourceError
+            ? { attempts: error.attempts, sourceStatus: error.sourceStatus }
+            : {}),
+        },
       });
-      if (failed.isError()) return Result.Error(failed.getError());
-      return Result.Ok({
-        type: 'result_failed',
-        reason: `output_${copy.type}`,
-      });
+      return Result.Error(error);
     }
-    contentType = 'application/octet-stream';
-    objectKey = key.get();
-  } else {
-    const failed = await markResultFailed(deps, {
-      resultId,
-      attempt: result.attempt,
-      providerRequestId: result.providerRequestId,
-      reason: 'no_output',
-    });
-    if (failed.isError()) return Result.Error(failed.getError());
-    return Result.Ok({ type: 'result_failed', reason: 'no_output' });
+    const copy = copied.get();
+    if (copy.type !== 'object_created' && copy.type !== 'object_already_exists')
+      return failPoll(deps, input, `output_${copy.type}`);
+    object = await deps.objectStorage.getObjectBytes(checkpoint.objectKey);
+    if (object.isError()) return Result.Error(object.getError());
   }
-
+  const stored = object.get();
+  if (stored.type !== 'object_found')
+    return failPoll(deps, input, 'output_unreadable');
+  const contentType = stored.contentType ?? checkpoint.contentType;
+  if (!contentType) return failPoll(deps, input, 'output_unreadable');
   const registered = await deps.resultImages.register({
-    resultId,
-    attempt: result.attempt,
-    providerRequestId: result.providerRequestId,
-    completion: {
-      modelVersion: poll.modelVersion,
-      costUsdMicros,
-      costSource,
-      completedAt: now,
-    },
-    sourceSize: render.recipe.source,
-    designId: render.designId,
-    renderSourceImageId: render.renderSourceImageId,
-    objectKey,
+    ...input,
+    designId: context.designId,
+    renderSourceImageId: context.renderSourceImageId,
+    sourceSize: context.sourceSize,
+    objectKey: checkpoint.objectKey,
     contentType,
+    completion: {
+      modelVersion: checkpoint.modelVersion,
+      costUsdMicros: checkpoint.costUsdMicros,
+      costSource: checkpoint.costSource,
+      completedAt: checkpoint.completedAt,
+    },
   });
   if (registered.isError()) return Result.Error(registered.getError());
-  const image = registered.get();
-  if (image.type === 'result_attempt_superseded')
-    return Result.Ok({ type: 'result_not_runnable' });
-  if (image.type === 'result_image_unreadable') {
-    const failed = await markResultFailed(deps, {
-      resultId,
-      attempt: result.attempt,
-      providerRequestId: result.providerRequestId,
-      reason: 'output_unreadable',
-    });
-    if (failed.isError()) return Result.Error(failed.getError());
-    return Result.Ok({ type: 'result_failed', reason: 'output_unreadable' });
-  }
-
+  const registration = registered.get();
+  if (registration.type === 'result_attempt_superseded')
+    return Result.Ok(registration);
+  if (registration.type === 'result_image_unreadable')
+    return failPoll(deps, input, 'output_unreadable');
   return Result.Ok({ type: 'result_succeeded' });
 }
 
 export async function markResultFailed(
   deps: Pick<RenderingPipelineDeps, 'renderRepository' | 'clock' | 'logger'>,
-  input: {
-    resultId: RenderResultId;
-    reason: string;
-    attempt?: number;
-    providerRequestId?: string | null;
-  }
+  input: RenderExecution & { reason: string; providerRequestId?: string }
 ): Promise<
   RenderingResult<
     { type: 'result_marked_failed' } | { type: 'result_attempt_superseded' }
@@ -360,7 +384,8 @@ export async function markResultFailed(
     now: deps.clock.now(),
   });
   if (saved.isError()) return Result.Error(saved.getError());
-  deps.logger.warn({ event: 'rendering.result.failed', details: input });
+  if (saved.get().type === 'result_marked_failed')
+    deps.logger.warn({ event: 'rendering.result.failed', details: input });
   return saved;
 }
 

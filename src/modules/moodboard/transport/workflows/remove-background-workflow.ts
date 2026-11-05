@@ -10,10 +10,7 @@ const versionIdOrFail = (value: string) => {
 };
 
 /** The step loads worker-only composition without request dependencies. */
-async function removeBackgroundStep(
-  itemVersionId: string,
-  attemptId: string | null = null
-) {
+async function removeBackgroundStep(itemVersionId: string, attemptId: string) {
   'use step';
   const { getMoodboardPipelineUseCases } =
     await import('@/composition/moodboard-pipeline');
@@ -27,7 +24,7 @@ async function removeBackgroundStep(
 
 async function markCutoutFailedStep(
   itemVersionId: string,
-  attemptId: string | null,
+  attemptId: string,
   failureCode: string
 ) {
   'use step';
@@ -44,14 +41,11 @@ async function markCutoutFailedStep(
 
 export async function removeBackgroundWorkflow(input: {
   itemVersionId: string;
-  attemptId?: string;
+  attemptId: string;
 }) {
   'use workflow';
   try {
-    // Preserve the original step arguments for in-flight legacy runs.
-    return input.attemptId === undefined
-      ? await removeBackgroundStep(input.itemVersionId)
-      : await removeBackgroundStep(input.itemVersionId, input.attemptId);
+    return await removeBackgroundStep(input.itemVersionId, input.attemptId);
   } catch (error) {
     // AppError step failures carry a stable code. Avoid persisting provider messages.
     const failureCode =
@@ -62,7 +56,7 @@ export async function removeBackgroundWorkflow(input: {
     try {
       const failed = await markCutoutFailedStep(
         input.itemVersionId,
-        input.attemptId ?? null,
+        input.attemptId,
         code
       );
       if (failed.type === 'cutout_skipped') return failed;

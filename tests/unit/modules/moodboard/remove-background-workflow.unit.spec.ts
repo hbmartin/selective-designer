@@ -49,18 +49,4 @@ describe('background removal workflow', () => {
       failureCode: 'PROVIDER_UNAVAILABLE',
     });
   });
-
-  it('treats legacy workflow inputs as null attempts', async () => {
-    pipeline.removeBackground.mockResolvedValue(
-      Result.Ok({ type: 'cutout_ready' })
-    );
-    expect(
-      await removeBackgroundWorkflow({ itemVersionId: 'legacy-version' })
-    ).toEqual({ type: 'cutout_ready' });
-    expect(pipeline.removeBackground).toHaveBeenCalledExactlyOnceWith({
-      versionId: 'legacy-version',
-      attemptId: null,
-    });
-    expect(pipeline.markCutoutFailed).not.toHaveBeenCalled();
-  });
 });

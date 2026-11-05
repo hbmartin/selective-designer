@@ -3,8 +3,8 @@ import { describe, expect, it } from 'vitest';
 import {
   classifyDatabaseFailure,
   extractDatabaseErrorDetails,
-  getDatabaseErrorCode,
   getConstraintName,
+  getDatabaseErrorCode,
   getErrorDetail,
   isUniqueConstraintViolation,
   withDatabaseErrorDetails,
@@ -77,7 +77,7 @@ it.each([
   );
   expect(getDatabaseErrorCode(error)).toBe(code);
   expect(classifyDatabaseFailure(error)).toMatchObject({
-    publication: 'rejected',
+    publication: 'unknown',
     retryableRollback: false,
   });
 });

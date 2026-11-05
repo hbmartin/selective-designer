@@ -50,11 +50,13 @@ import { createCachedFactory } from './shared/singleton';
  */
 export type RenderingPipelineOverrides = {
   kernel?: PipelineKernel;
-  renderRepository?: RenderRepository;
+  persistence?: {
+    renderRepository: RenderRepository;
+    resultImages: ResultImages;
+  };
   renderInputs?: RenderInputs;
   maskCompositor?: MaskCompositor;
   imageModels?: ImageModels;
-  resultImages?: ResultImages;
 };
 
 type InputsKernel = Pick<
@@ -164,22 +166,13 @@ export const createResultImages = (
   return {
     async findRegistered(input) {
       const found = await findRegisteredRenderImage(kernel, input);
-      if (found.isOk() && found.get().type === 'result_image_registered') {
-        const saved = found.get();
-        if (saved.type === 'result_image_registered')
-          await dispatch(input, saved.imageId);
-      }
+      if (found.isError()) return Result.Error(found.getError());
+      const saved = found.get();
+      if (saved.type === 'result_image_registered')
+        await dispatch(input, saved.imageId);
       return found;
     },
     async register(input) {
-      const existing = await findRegisteredRenderImage(kernel, input);
-      if (existing.isError()) return Result.Error(existing.getError());
-      const registered = existing.get();
-      if (registered.type !== 'result_image_not_registered') {
-        if (registered.type === 'result_image_registered')
-          await dispatch(input, registered.imageId);
-        return Result.Ok(registered);
-      }
       const object = await kernel.objectStorage.getObjectBytes(input.objectKey);
       if (object.isError()) return Result.Error(object.getError());
       const found = object.get();
@@ -196,13 +189,16 @@ export const createResultImages = (
           kind: 'result',
           originalKey: input.objectKey,
           originalContentType:
-            contentTypeForFormat(dimensions.format) ?? input.contentType,
+            contentTypeForFormat(dimensions.format) ??
+            found.contentType ??
+            input.contentType,
           original: size,
           workingKey: input.objectKey,
           working: size,
         },
         completion: {
           ...input.completion,
+          completedAt: new Date(input.completion.completedAt),
           framingChanged: hasFramingChanged(size, input.sourceSize),
         },
       });
@@ -262,13 +258,15 @@ const build = (overrides?: RenderingPipelineOverrides) => {
   const kernel = overrides?.kernel ?? getPipelineKernel();
   return createRenderingPipelineUseCases({
     renderRepository:
-      overrides?.renderRepository ?? createRenderRepository({ db: kernel.db }),
+      overrides?.persistence?.renderRepository ??
+      createRenderRepository({ db: kernel.db }),
     renderInputs: overrides?.renderInputs ?? createRenderInputs(kernel),
     maskCompositor:
       overrides?.maskCompositor ??
       createPngMaskCompositor({ objectStorage: kernel.objectStorage }),
     imageModels: overrides?.imageModels ?? createImageModels(),
-    resultImages: overrides?.resultImages ?? createResultImages(kernel),
+    resultImages:
+      overrides?.persistence?.resultImages ?? createResultImages(kernel),
     objectStorage: kernel.objectStorage,
     providerCallLog: kernel.providerCallLog,
     idGenerator: kernel.idGenerator,

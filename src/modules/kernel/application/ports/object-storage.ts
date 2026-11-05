@@ -119,7 +119,11 @@ export type ObjectStoragePort = {
   createObject: (
     input: ObjectWriteInput
   ) => Promise<ApplicationResult<ObjectCreateOutcome>>;
-  /** Source failures are tagged and guarantee no destination write was attempted. */
+  /**
+   * Read the source before attempting an atomic create. Expected HTTP/source
+   * rejections are tagged; ObjectCopySourceError also proves no destination
+   * write was attempted. Other errors provide no write-ownership proof.
+   */
   copyNewObjectFromUrl: (
     input: ObjectCopyInput
   ) => Promise<ApplicationResult<ObjectCopyNewOutcome>>;

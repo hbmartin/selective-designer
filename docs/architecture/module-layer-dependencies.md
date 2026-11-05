@@ -181,6 +181,7 @@ node_moodboard_transport --> node_auth_public
 node_moodboard_transport --> node_kernel_domain
 node_moodboard_transport --> node_kernel_transport
 node_moodboard_transport --> node_moodboard_domain
+node_rendering_application --> node_kernel_application
 node_rendering_application --> node_kernel_domain
 node_rendering_application --> node_rendering_domain
 node_rendering_infrastructure --> node_design_infrastructure
@@ -258,17 +259,17 @@ linkStyle 91 stroke-dasharray: 1 4
 linkStyle 93 stroke-dasharray: 1 4
 linkStyle 94 stroke-dasharray: 1 4
 linkStyle 95 stroke-dasharray: 6 4
-linkStyle 109 stroke-dasharray: 1 4
-linkStyle 111 stroke-dasharray: 1 4
+linkStyle 110 stroke-dasharray: 1 4
 linkStyle 112 stroke-dasharray: 1 4
-linkStyle 113 stroke-dasharray: 6 4
-linkStyle 131 stroke-dasharray: 1 4
+linkStyle 113 stroke-dasharray: 1 4
+linkStyle 114 stroke-dasharray: 6 4
 linkStyle 132 stroke-dasharray: 1 4
-linkStyle 133 stroke-dasharray: 6 4
-linkStyle 145 stroke-dasharray: 1 4
+linkStyle 133 stroke-dasharray: 1 4
+linkStyle 134 stroke-dasharray: 6 4
 linkStyle 146 stroke-dasharray: 1 4
 linkStyle 147 stroke-dasharray: 1 4
-linkStyle 148 stroke-dasharray: 6 4
+linkStyle 148 stroke-dasharray: 1 4
+linkStyle 149 stroke-dasharray: 6 4
 ```
 
 ## Edge Styles

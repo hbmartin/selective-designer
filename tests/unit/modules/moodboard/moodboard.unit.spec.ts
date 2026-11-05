@@ -521,6 +521,119 @@ describe('background removal pipeline', () => {
   });
 });
 
+describe('cutout output checkpoints', () => {
+  it.each(['source read', 'publication', 'checkpoint reply'] as const)(
+    'recovers %s without invoking the paid provider again',
+    async (phase) => {
+      const ctx = setup();
+      const item = await createProduct(ctx);
+      const attempt = {
+        versionId: item.currentVersion.id,
+        attemptId: latestAttempt(ctx),
+      };
+      const remove = vi
+        .fn<BackgroundRemover['removeBackground']>()
+        .mockResolvedValue(
+          Result.Ok({
+            type: 'background_removed',
+            result: { kind: 'url', url: 'https://provider.test/cutout' },
+            provider: 'fal',
+            endpoint: 'birefnet',
+            providerRequestId: 'paid',
+            costUsdMicros: 123,
+            costSource: 'reported',
+          })
+        );
+      ctx.storage.addRemoteSource('https://provider.test/cutout', {
+        bytes: Uint8Array.of(7, 8),
+        contentType: 'image/png',
+      });
+      const pipeline = ctx.pipeline({ removeBackground: remove });
+      const failure = new AppError({
+        code: 'INJECTED_FAILURE',
+        category: 'system',
+        status: 502,
+      });
+      const copy = vi.spyOn(ctx.storage.storage, 'copyNewObjectFromUrl');
+      if (phase === 'source read')
+        copy.mockResolvedValueOnce(Result.Error(failure));
+      if (phase === 'publication')
+        vi.spyOn(
+          ctx.items.repository,
+          'finishCutoutAttempt'
+        ).mockResolvedValueOnce(Result.Error(failure));
+      if (phase === 'checkpoint reply') {
+        const save = ctx.items.repository.saveCutoutOutput;
+        vi.spyOn(
+          ctx.items.repository,
+          'saveCutoutOutput'
+        ).mockImplementationOnce(async (input) => {
+          await save(input);
+          return Result.Error(failure);
+        });
+      }
+      const failed = await pipeline.removeBackground(attempt);
+      expect(failed.isError() && failed.getError()).toBe(failure);
+      expect(ctx.items.checkpoints.has(attempt.versionId)).toBe(true);
+      remove.mockRejectedValue(new Error('must reuse the paid result'));
+      if (phase === 'publication')
+        copy.mockRejectedValue(new Error('source expired'));
+      expect(okValue(await pipeline.removeBackground(attempt))).toEqual({
+        type: 'cutout_ready',
+      });
+      expect(remove).toHaveBeenCalledOnce();
+      expect(ctx.calls.calls.size).toBe(1);
+      expect(
+        ctx.storage.objects.get(
+          `item-cutouts/${attempt.versionId}/${attempt.attemptId}.png`
+        )?.bytes
+      ).toEqual(Uint8Array.of(7, 8));
+    }
+  );
+  it('clears the previous output when the user starts a fresh attempt', async () => {
+    const ctx = setup();
+    const item = await createProduct(ctx);
+    const attempt = {
+      versionId: item.currentVersion.id,
+      attemptId: latestAttempt(ctx),
+    };
+    const checkpoint = {
+      source: { kind: 'url' as const, url: 'https://provider.test/old' },
+      objectKey: unwrapParseResult(toObjectKey('item-cutouts/old.png')),
+      contentType: null,
+      provider: 'fal',
+      endpoint: 'test',
+      providerRequestId: 'old',
+      costUsdMicros: 123,
+      costSource: 'reported' as const,
+      completedAt: now.toISOString(),
+    };
+    okValue(
+      await ctx.items.repository.saveCutoutOutput({ ...attempt, checkpoint })
+    );
+    okValue(
+      await ctx.items.repository.finishCutoutAttempt({
+        ...attempt,
+        cutoutStatus: 'failed',
+        cutoutKey: null,
+      })
+    );
+    okValue(
+      await ctx.useCases.retryCutout({
+        currentUserId: ownerId,
+        itemId: item.id,
+      })
+    );
+    expect(ctx.items.checkpoints.has(attempt.versionId)).toBe(false);
+    expect(latestAttempt(ctx)).not.toBe(attempt.attemptId);
+    expect(
+      okValue(
+        await ctx.items.repository.saveCutoutOutput({ ...attempt, checkpoint })
+      )
+    ).toEqual({ type: 'cutout_attempt_skipped' });
+  });
+});
+
 describe('background removal fallback', () => {
   it('marks a still-pending version failed after the workflow gives up', async () => {
     const ctx = setup();

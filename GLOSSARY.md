@@ -29,7 +29,7 @@ _Avoid_: Product reference, reference, asset
 One state of an item's imagery. A render recipe can pin an item version so later corrections do not change the images used by that render.
 
 **Cutout attempt**:
-One run of background removal for an item version. The owner can retry a failed run or one that has been pending too long. Once they retry, only the new attempt can supply the cutout.
+One run of background removal for an item version. The owner can retry a failed run or one that has been pending too long. Once they retry, only the new attempt can supply the cutout. Recovering an interrupted attempt reuses the result already returned for that attempt.
 
 **Product**:
 An item made from a product photo with its background removed. It must keep its silhouette, proportions, details and finish when rendered.
@@ -91,7 +91,7 @@ The image one model returned for a render.
 _Avoid_: Variant, fork, output
 
 **Render attempt**:
-One request to a model to produce a render result. Retrying a failed result starts another attempt; recovering the response from the same attempt preserves its image.
+One request to a model to produce a render result. Retrying a failed result starts another attempt; recovering the response from the same attempt preserves its image and reuses the result already returned by the model.
 
 **Preferred result**:
 The one render result per render that the user marks as best. The other results stay available for comparison and further editing.

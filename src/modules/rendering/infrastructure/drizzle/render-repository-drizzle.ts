@@ -1,5 +1,5 @@
 import { type Result as BoxedResult, Result } from '@bloodyowl/boxed';
-import { and, asc, desc, eq, inArray, sql } from 'drizzle-orm';
+import { and, asc, desc, eq, inArray, isNull, or, sql } from 'drizzle-orm';
 
 import type { ProviderCostSource } from '@/modules/kernel';
 import { AppError } from '@/modules/kernel/domain/errors/app-error';
@@ -403,6 +403,139 @@ export const createRenderRepository = ({
       }
     },
 
+    async claimExecution(input) {
+      try {
+        const rows = await db
+          .update(resultTable)
+          .set({ workflowRunId: input.workflowRunId })
+          .where(
+            and(
+              eq(resultTable.id, input.resultId),
+              eq(resultTable.attempt, input.attempt),
+              inArray(resultTable.status, [
+                'pending',
+                'submitted',
+                'succeeded',
+              ]),
+              or(
+                isNull(resultTable.workflowRunId),
+                eq(resultTable.workflowRunId, input.workflowRunId)
+              )
+            )
+          )
+          .returning({ id: resultTable.id });
+        return Result.Ok({
+          type: rows.length
+            ? 'result_execution_claimed'
+            : 'result_attempt_superseded',
+        });
+      } catch (error) {
+        return Result.Error(dbError(error));
+      }
+    },
+    async saveSubmission(input) {
+      try {
+        const rows = await db
+          .update(resultTable)
+          .set({
+            status: 'submitted',
+            providerRequestId: input.providerRequestId,
+            settings: input.settings,
+            prompt: input.prompt,
+            submittedAt: input.submittedAt,
+          })
+          .where(
+            and(
+              eq(resultTable.id, input.resultId),
+              eq(resultTable.attempt, input.attempt),
+              eq(resultTable.workflowRunId, input.workflowRunId),
+              eq(resultTable.status, 'pending'),
+              isNull(resultTable.providerRequestId)
+            )
+          )
+          .returning({ id: resultTable.id });
+        return Result.Ok({
+          type: rows.length ? 'result_submitted' : 'result_attempt_superseded',
+        });
+      } catch (error) {
+        return Result.Error(dbError(error));
+      }
+    },
+    async saveOutput(input) {
+      try {
+        const rows = await db
+          .update(resultTable)
+          .set({ outputCheckpoint: input.checkpoint })
+          .where(
+            and(
+              eq(resultTable.id, input.resultId),
+              eq(resultTable.attempt, input.attempt),
+              eq(resultTable.providerRequestId, input.providerRequestId),
+              eq(resultTable.status, 'submitted'),
+              isNull(resultTable.outputCheckpoint)
+            )
+          )
+          .returning({ checkpoint: resultTable.outputCheckpoint });
+        if (rows[0]?.checkpoint)
+          return Result.Ok({
+            type: 'result_output_saved',
+            checkpoint: rows[0].checkpoint,
+          });
+        const found = await repository.publicationContext(input.resultId);
+        if (found.isError()) return Result.Error(found.getError());
+        const value = found.get();
+        if (
+          value.type === 'publication_context' &&
+          value.context.result.attempt === input.attempt &&
+          value.context.result.providerRequestId === input.providerRequestId &&
+          value.context.result.status === 'submitted' &&
+          value.context.checkpoint
+        )
+          return Result.Ok({
+            type: 'result_output_saved',
+            checkpoint: value.context.checkpoint,
+          });
+        return Result.Ok({ type: 'result_attempt_superseded' });
+      } catch (error) {
+        return Result.Error(dbError(error));
+      }
+    },
+    async retryAttempt(input) {
+      try {
+        const rows = await db
+          .update(resultTable)
+          .set({
+            status: 'pending',
+            attempt: input.expectedAttempt + 1,
+            providerRequestId: null,
+            workflowRunId: null,
+            outputCheckpoint: null,
+            outputImageId: null,
+            errorMessage: null,
+            submittedAt: null,
+            completedAt: null,
+            costUsdMicros: null,
+            costSource: null,
+            modelVersion: null,
+            framingChanged: false,
+          })
+          .where(
+            and(
+              eq(resultTable.id, input.resultId),
+              eq(resultTable.attempt, input.expectedAttempt),
+              eq(resultTable.status, 'failed')
+            )
+          )
+          .returning({ attempt: resultTable.attempt });
+        return Result.Ok(
+          rows[0]
+            ? { type: 'result_retry_claimed', attempt: rows[0].attempt }
+            : { type: 'result_attempt_superseded' }
+        );
+      } catch (error) {
+        return Result.Error(dbError(error));
+      }
+    },
     async failResultAttempt(input) {
       try {
         const rows = await db
@@ -415,11 +548,10 @@ export const createRenderRepository = ({
           .where(
             and(
               eq(resultTable.id, input.resultId),
+              eq(resultTable.attempt, input.attempt),
+              eq(resultTable.workflowRunId, input.workflowRunId),
               inArray(resultTable.status, ['pending', 'submitted']),
-              input.attempt === undefined
-                ? undefined
-                : eq(resultTable.attempt, input.attempt),
-              input.providerRequestId == null
+              input.providerRequestId === undefined
                 ? undefined
                 : eq(resultTable.providerRequestId, input.providerRequestId)
             )
@@ -434,17 +566,41 @@ export const createRenderRepository = ({
         return Result.Error(dbError(error));
       }
     },
-    async lockResultForCompletion(resultId) {
+    async publicationContext(resultId, lock) {
       try {
-        const [row] = await db
-          .select()
+        const query = db
+          .select({
+            result: resultTable,
+            designId: renderTable.designId,
+            sourceId: renderTable.renderSourceImageId,
+            sourceSize: sql<{
+              width: number;
+              height: number;
+            }>`${renderTable.recipe}->'source'`,
+          })
           .from(resultTable)
-          .where(eq(resultTable.id, resultId))
-          .for('update');
+          .innerJoin(renderTable, eq(renderTable.id, resultTable.renderId))
+          .where(eq(resultTable.id, resultId));
+        const [row] = await (lock
+          ? query.for('update', { of: resultTable })
+          : query);
         if (!row) return Result.Ok({ type: 'result_not_found' });
-        const parsed = toResult(row);
-        if (parsed.isError()) return Result.Error(parsed.getError());
-        return Result.Ok({ type: 'result_locked', result: parsed.get() });
+        const result = toResult(row.result);
+        const designId = toDesignId(row.designId);
+        const sourceId = toImageId(row.sourceId);
+        if (result.isError() || designId.isError() || sourceId.isError())
+          return Result.Error(rowError(resultId));
+        return Result.Ok({
+          type: 'publication_context',
+          context: {
+            result: result.get(),
+            designId: designId.get(),
+            renderSourceImageId: sourceId.get(),
+            workflowRunId: row.result.workflowRunId,
+            checkpoint: row.result.outputCheckpoint,
+            sourceSize: row.sourceSize,
+          },
+        });
       } catch (error) {
         return Result.Error(dbError(error));
       }

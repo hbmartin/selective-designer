@@ -1,4 +1,3 @@
-import { hasFramingChanged } from '@/modules/rendering';
 import { Result } from '@bloodyowl/boxed';
 import {
   createFakeObjectStorage,
@@ -7,8 +6,9 @@ import {
 import { createFakeRenderRepository } from '@tests/support/fake-render-repository';
 import { okValue } from '@tests/support/result';
 import { decode, encode } from 'fast-png';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 
+import { AppError } from '@/modules/kernel';
 import {
   type ImageId,
   type RenderId,
@@ -20,6 +20,7 @@ import {
   toUserId,
 } from '@/modules/kernel/domain/ids';
 import { unwrapParseResult } from '@/modules/kernel/testing';
+import { hasFramingChanged } from '@/modules/rendering';
 import {
   createRenderingPipelineUseCases,
   createRenderingUseCases,
@@ -33,9 +34,21 @@ import {
   type ModelPoll,
   type ModelRequest,
   type RenderInputs,
+  type RenderResult,
+  type ResultImages,
   type SourceImage,
 } from '@/modules/rendering';
 import { createPngMaskCompositor } from '@/modules/rendering/testing';
+
+const execution = (result: RenderResult) => ({
+  resultId: result.id,
+  attempt: result.attempt,
+  workflowRunId: `workflow-${result.id}-${result.attempt}`,
+});
+const polling = (result: RenderResult) => ({
+  ...execution(result),
+  providerRequestId: result.providerRequestId!,
+});
 
 const now = new Date('2026-11-02T12:00:00.000Z');
 const ownerId = unwrapParseResult(toUserId('owner-1'));
@@ -143,12 +156,12 @@ const setup = (options: { enabledModelIds?: readonly string[] } = {}) => {
     renderInputs,
     maskCompositor,
     renderScheduler: {
-      async scheduleRender(renderId) {
-        scheduled.renders.push(renderId);
+      async scheduleRender(input) {
+        scheduled.renders.push(input.renderId);
         return Result.Ok({ type: 'render_scheduled' });
       },
-      async scheduleResult(resultId) {
-        scheduled.results.push(resultId);
+      async scheduleResult(input) {
+        scheduled.results.push(input.resultId);
         return Result.Ok({ type: 'render_scheduled' });
       },
     },
@@ -164,6 +177,52 @@ const setup = (options: { enabledModelIds?: readonly string[] } = {}) => {
   const models = new Map<ModelId, ReturnType<typeof scriptedModel>>();
   const registered: { objectKey: string; renderSourceImageId: string }[] = [];
   const resultSize = { width: 40, height: 20 };
+  const resultImages: ResultImages = {
+    async findRegistered(input) {
+      const found = await renders.repository.findResult(input.resultId);
+      if (found.isOk() && found.get().type === 'result_found') {
+        const row = found.get();
+        if (
+          row.type === 'result_found' &&
+          row.result.status === 'succeeded' &&
+          row.result.outputImageId
+        )
+          return Result.Ok({
+            type: 'result_image_registered',
+            imageId: row.result.outputImageId,
+            ...resultSize,
+          });
+      }
+      return Result.Ok({ type: 'result_image_not_registered' });
+    },
+    async register(input) {
+      registered.push(input);
+      const imageId = unwrapParseResult(
+        toImageId(`result-${registered.length}`)
+      );
+      images.set(imageId, {
+        imageId,
+        designId,
+        ownerId,
+        workingKey: input.objectKey,
+        ...resultSize,
+      });
+      await renders.repository.completeResultAttempt({
+        ...input,
+        imageId,
+        completion: {
+          ...input.completion,
+          completedAt: new Date(input.completion.completedAt),
+          framingChanged: hasFramingChanged(resultSize, input.sourceSize),
+        },
+      });
+      return Result.Ok({
+        type: 'result_image_registered',
+        imageId,
+        ...resultSize,
+      });
+    },
+  };
   const pipeline = createRenderingPipelineUseCases({
     renderRepository: renders.repository,
     renderInputs,
@@ -178,51 +237,7 @@ const setup = (options: { enabledModelIds?: readonly string[] } = {}) => {
         return model.adapter;
       },
     },
-    resultImages: {
-      async findRegistered(input) {
-        const found = await renders.repository.findResult(input.resultId);
-        if (found.isOk() && found.get().type === 'result_found') {
-          const row = found.get();
-          if (
-            row.type === 'result_found' &&
-            row.result.status === 'succeeded' &&
-            row.result.outputImageId
-          )
-            return Result.Ok({
-              type: 'result_image_registered',
-              imageId: row.result.outputImageId,
-              ...resultSize,
-            });
-        }
-        return Result.Ok({ type: 'result_image_not_registered' });
-      },
-      async register(input) {
-        registered.push(input);
-        const imageId = unwrapParseResult(
-          toImageId(`result-${registered.length}`)
-        );
-        images.set(imageId, {
-          imageId,
-          designId,
-          ownerId,
-          workingKey: input.objectKey,
-          ...resultSize,
-        });
-        await renders.repository.completeResultAttempt({
-          ...input,
-          imageId,
-          completion: {
-            ...input.completion,
-            framingChanged: hasFramingChanged(resultSize, input.sourceSize),
-          },
-        });
-        return Result.Ok({
-          type: 'result_image_registered',
-          imageId,
-          ...resultSize,
-        });
-      },
-    },
+    resultImages,
     objectStorage: storage.storage,
     providerCallLog: calls.log,
     idGenerator,
@@ -262,6 +277,7 @@ const setup = (options: { enabledModelIds?: readonly string[] } = {}) => {
   return {
     useCases,
     pipeline,
+    resultImages,
     storage,
     calls,
     renders,
@@ -517,21 +533,153 @@ describe('render pipeline', () => {
     return { ctx, renderId: renderId as RenderId, resultFor };
   };
 
-  it('lists runnable results', async () => {
-    const { ctx, renderId } = await submitted();
+  it('claims duplicate dispatches once and rejects concurrent manual retry claims', async () => {
+    const { ctx, resultFor } = await submitted();
+    const result = resultFor('krea-3');
+    const first = execution(result);
+    const outcomes = await Promise.all([
+      ctx.pipeline.submit(first),
+      ctx.pipeline.submit({ ...first, workflowRunId: 'duplicate-workflow' }),
+    ]);
+    expect(outcomes.map((outcome) => okValue(outcome).type).sort()).toEqual([
+      'result_attempt_superseded',
+      'result_submitted',
+    ]);
+    expect(ctx.models.get('krea-3')!.requests).toHaveLength(1);
+    okValue(await ctx.pipeline.markFailed({ ...first, reason: 'failed' }));
+    const claims = await Promise.all([
+      ctx.useCases.retryResult({ currentUserId: ownerId, resultId: result.id }),
+      ctx.useCases.retryResult({ currentUserId: ownerId, resultId: result.id }),
+    ]);
+    expect(claims.map((claim) => okValue(claim).type).sort()).toEqual([
+      'render_updated',
+      'result_not_retryable',
+    ]);
+    expect(result.attempt).toBe(2);
+    expect(ctx.scheduled.results).toEqual([result.id]);
     expect(
-      okValue(await ctx.pipeline.runnable(renderId)).resultIds
-    ).toHaveLength(4);
+      okValue(
+        await ctx.pipeline.markFailed({ ...first, reason: 'stale timeout' })
+      ).type
+    ).toBe('result_attempt_superseded');
+    expect(result.status).toBe('pending');
+  });
+
+  it.each(['source read', 'publication'] as const)(
+    'resumes checkpointed output after %s fails without polling or purchasing again',
+    async (phase) => {
+      const { ctx, resultFor } = await submitted();
+      const result = resultFor('krea-3');
+      await ctx.pipeline.submit(execution(result));
+      const provider = ctx.models.get('krea-3')!;
+      const poll = vi.fn<ImageModelAdapter['poll']>().mockResolvedValue(
+        Result.Ok({
+          type: 'model_completed',
+          outputUrl: 'https://provider.test/result',
+          outputBytes: null,
+          modelVersion: 'v1',
+          costUsdMicros: 123,
+          costSource: 'reported',
+        })
+      );
+      provider.adapter.poll = poll;
+      ctx.storage.addRemoteSource('https://provider.test/result', {
+        bytes: Uint8Array.of(4, 5, 6),
+        contentType: 'image/webp',
+      });
+      const error = new AppError({
+        code: 'INJECTED_FAILURE',
+        category: 'system',
+        status: 502,
+      });
+      const copy = vi.spyOn(ctx.storage.storage, 'copyNewObjectFromUrl');
+      const register = vi.spyOn(ctx.resultImages, 'register');
+      if (phase === 'source read')
+        copy.mockResolvedValueOnce(Result.Error(error));
+      else register.mockResolvedValueOnce(Result.Error(error));
+      const failed = await ctx.pipeline.poll(polling(result));
+      expect(failed.isError() && failed.getError()).toBe(error);
+      expect(ctx.renders.checkpoints.has(result.id)).toBe(true);
+      poll.mockRejectedValue(
+        new Error('provider result is no longer available')
+      );
+      if (phase === 'publication')
+        copy.mockRejectedValue(new Error('provider URL expired'));
+      expect(okValue(await ctx.pipeline.poll(polling(result)))).toEqual({
+        type: 'result_succeeded',
+      });
+      expect(poll).toHaveBeenCalledOnce();
+      expect(copy).toHaveBeenCalledTimes(phase === 'source read' ? 2 : 1);
+      expect(provider.requests).toHaveLength(1);
+      expect(ctx.calls.calls.size).toBe(1);
+      expect(ctx.storage.objects.get(`results/${result.id}/1/raw.img`)).toEqual(
+        { bytes: Uint8Array.of(4, 5, 6), contentType: 'image/webp' }
+      );
+    }
+  );
+
+  it('does not fail or stop the replacement attempt when an older provider answers late', async () => {
+    const { ctx, resultFor } = await submitted();
+    const result = resultFor('krea-3');
+    await ctx.pipeline.submit(execution(result));
+    let answer!: (
+      value: Awaited<ReturnType<ImageModelAdapter['poll']>>
+    ) => void;
+    let entered!: () => void;
+    const ready = new Promise<void>((resolve) => {
+      entered = resolve;
+    });
+    ctx.models.get('krea-3')!.adapter.poll = async () => {
+      entered();
+      return new Promise((resolve) => {
+        answer = resolve;
+      });
+    };
+    const previous = polling(result);
+    const oldPoll = ctx.pipeline.poll(previous);
+    await ready;
+    await ctx.pipeline.markFailed({ ...previous, reason: 'old timeout' });
+    await ctx.useCases.retryResult({
+      currentUserId: ownerId,
+      resultId: result.id,
+    });
+    await ctx.pipeline.submit(execution(result));
+    answer(Result.Ok({ type: 'model_failed', reason: 'old request rejected' }));
+    const warning = vi.spyOn(logger, 'warn');
+    expect(okValue(await oldPoll)).toEqual({
+      type: 'result_attempt_superseded',
+    });
+    expect(warning).not.toHaveBeenCalled();
+    warning.mockRestore();
+    expect(result).toMatchObject({
+      attempt: 2,
+      status: 'submitted',
+      providerRequestId: 'req-2',
+    });
+    ctx.models.get('krea-3')!.adapter.poll = async () =>
+      Result.Ok({
+        type: 'model_completed',
+        outputUrl: null,
+        outputBytes: { bytes: Uint8Array.of(1), contentType: 'image/png' },
+        modelVersion: null,
+        costUsdMicros: 1,
+        costSource: 'reported',
+      });
+    expect(okValue(await ctx.pipeline.poll(polling(result)))).toEqual({
+      type: 'result_succeeded',
+    });
   });
 
   it('submits once, even when the step is retried', async () => {
     const { ctx, resultFor } = await submitted();
     const result = resultFor('krea-3');
-    expect(okValue(await ctx.pipeline.submit(result.id))).toEqual({
+    expect(okValue(await ctx.pipeline.submit(execution(result)))).toEqual({
       type: 'result_submitted',
+      providerRequestId: 'req-1',
     });
-    expect(okValue(await ctx.pipeline.submit(result.id))).toEqual({
+    expect(okValue(await ctx.pipeline.submit(execution(result)))).toEqual({
       type: 'result_already_submitted',
+      providerRequestId: 'req-1',
     });
     const krea = ctx.models.get('krea-3');
     expect(krea?.requests).toHaveLength(1);
@@ -551,8 +699,8 @@ describe('render pipeline', () => {
 
   it('sends mask models a mask in their own polarity', async () => {
     const { ctx, resultFor } = await submitted();
-    await ctx.pipeline.submit(resultFor('ideogram-4-5').id);
-    await ctx.pipeline.submit(resultFor('gpt-image-2').id);
+    await ctx.pipeline.submit(execution(resultFor('ideogram-4-5')));
+    await ctx.pipeline.submit(execution(resultFor('gpt-image-2')));
     const editMaskKey = ctx.renders.renders[0]?.recipe.editMaskKey ?? '';
     const black = editMaskKey.replace('.png', '-black_edits.png');
     const white = editMaskKey.replace('.png', '-white_edits.png');
@@ -578,7 +726,7 @@ describe('render pipeline', () => {
   it('copies a finished output, registers it and logs the cost', async () => {
     const { ctx, resultFor } = await submitted();
     const result = resultFor('gpt-image-2');
-    await ctx.pipeline.submit(result.id);
+    await ctx.pipeline.submit(execution(result));
     const model = ctx.models.get('gpt-image-2');
     if (!model) throw new Error('model missing');
     ctx.storage.addRemoteSource('https://fal.test/out.png', {
@@ -599,10 +747,10 @@ describe('render pipeline', () => {
     model.adapter.poll = async () =>
       Result.Ok(polls.shift() ?? { type: 'model_pending' });
 
-    expect(okValue(await ctx.pipeline.poll(result.id))).toEqual({
+    expect(okValue(await ctx.pipeline.poll(polling(result)))).toEqual({
       type: 'result_pending',
     });
-    expect(okValue(await ctx.pipeline.poll(result.id))).toEqual({
+    expect(okValue(await ctx.pipeline.poll(polling(result)))).toEqual({
       type: 'result_succeeded',
     });
 
@@ -637,7 +785,7 @@ describe('render pipeline', () => {
     const { ctx, resultFor } = await submitted();
     ctx.resultSize.width = 20; // 20×20 vs a 40×20 source
     const result = resultFor('krea-3');
-    await ctx.pipeline.submit(result.id);
+    await ctx.pipeline.submit(execution(result));
     const model = ctx.models.get('krea-3');
     if (!model) throw new Error('model missing');
     model.adapter.poll = async () =>
@@ -649,7 +797,7 @@ describe('render pipeline', () => {
         costUsdMicros: 5,
         costSource: 'reported',
       });
-    okValue(await ctx.pipeline.poll(result.id));
+    okValue(await ctx.pipeline.poll(polling(result)));
     expect(resultFor('krea-3')).toMatchObject({
       framingChanged: true,
       costUsdMicros: 5,
@@ -663,7 +811,7 @@ describe('render pipeline', () => {
   it('marks a result failed when the model fails or the output is unusable', async () => {
     const { ctx, resultFor } = await submitted();
     const result = resultFor('flux-3-image');
-    await ctx.pipeline.submit(result.id);
+    await ctx.pipeline.submit(execution(result));
     const model = ctx.models.get('flux-3-image');
     if (!model) throw new Error('model missing');
     model.adapter.poll = async () =>
@@ -675,7 +823,7 @@ describe('render pipeline', () => {
         costUsdMicros: null,
         costSource: 'unavailable',
       });
-    expect(okValue(await ctx.pipeline.poll(result.id))).toEqual({
+    expect(okValue(await ctx.pipeline.poll(polling(result)))).toEqual({
       type: 'result_failed',
       reason: 'output_copy_source_unavailable',
     });
@@ -708,7 +856,8 @@ describe('reviewing results', () => {
       )
     ).toEqual({ type: 'result_not_retryable' });
 
-    await ctx.pipeline.markFailed({ resultId: krea.id, reason: 'boom' });
+    await ctx.renders.repository.claimExecution(execution(krea));
+    await ctx.pipeline.markFailed({ ...execution(krea), reason: 'boom' });
     const outcome = okValue(
       await ctx.useCases.retryResult({
         currentUserId: ownerId,

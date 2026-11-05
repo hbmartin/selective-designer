@@ -33,6 +33,10 @@ import {
   hasOversizedResponseBody,
   readLimitedBody,
 } from './limited-response-body';
+import {
+  isPermanentSourceFailure,
+  sourceRetryAfterMs,
+} from './source-read-policy';
 
 const OBJECT_DELETE_TIMEOUT_MS = 5_000;
 const OBJECT_COPY_TIMEOUT_MS = 60_000;
@@ -370,10 +374,11 @@ export class BetterUploadObjectStorage implements ObjectStoragePort {
 
     const deadline = performance.now() + OBJECT_COPY_TIMEOUT_MS;
     let lastError: ObjectCopySourceError | undefined;
+    let requestedDelay = 0;
     for (let attempt = 0; attempt < 3; attempt++) {
       if (attempt > 0) {
         const remaining = deadline - performance.now();
-        const backoff = attempt === 1 ? 1_000 : 3_000;
+        const backoff = Math.max(attempt === 1 ? 1_000 : 3_000, requestedDelay);
         if (remaining <= backoff) break;
         // oxlint-disable-next-line no-await-in-loop -- bounded source-only backoff.
         await new Promise((resolve) => setTimeout(resolve, backoff));
@@ -404,11 +409,13 @@ export class BetterUploadObjectStorage implements ObjectStoragePort {
               reason: 'http',
               attempts: attempt + 1,
               status: response.status,
+              retryAfterMs: sourceRetryAfterMs(response),
               cause: storageError(
                 'OBJECT_COPY_SOURCE_HTTP',
                 `Source HTTP ${response.status}`
               ),
             });
+            requestedDelay = lastError.retryAfterMs ?? 0;
             continue;
           }
           return Result.Ok({
@@ -466,7 +473,10 @@ export class BetterUploadObjectStorage implements ObjectStoragePort {
               : 'network',
           attempts: attempt + 1,
           cause,
+          retryable: !isPermanentSourceFailure(cause),
         });
+        if (!lastError.retryable) return Result.Error(lastError);
+        requestedDelay = 0;
       } finally {
         clearTimeout(timeoutId);
       }
