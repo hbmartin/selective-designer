@@ -1,5 +1,6 @@
 import { afterEach, expect, it, vi } from 'vitest';
 
+import { ObjectCopySourceError } from '@/modules/kernel/application/ports/object-storage';
 import { BetterUploadObjectStorage } from '@/modules/kernel/backend';
 
 const config = vi.hoisted(() => vi.fn());
@@ -8,6 +9,7 @@ vi.mock('@/modules/kernel/infrastructure/config/storage', () => ({
 }));
 
 afterEach(() => {
+  vi.useRealTimers();
   vi.unstubAllGlobals();
   config.mockReset();
 });
@@ -138,6 +140,7 @@ it.each(['network', 'timeout'] as const)(
   'reports a %s source failure without attempting PUT',
   async (reason) => {
     storageConfig();
+    vi.useFakeTimers();
     const fetch = vi
       .fn()
       .mockRejectedValue(
@@ -146,16 +149,176 @@ it.each(['network', 'timeout'] as const)(
           : new Error('connection reset')
       );
     vi.stubGlobal('fetch', fetch);
-    const result = await new BetterUploadObjectStorage().copyNewObjectFromUrl({
+    const pending = new BetterUploadObjectStorage().copyNewObjectFromUrl({
       sourceUrl: 'https://provider.test/mask.png',
       objectKey: 'region-masks/fresh.png',
       acceptedContentTypes: ['image/png'],
       maxBytes: 100,
     });
-    expect(result.isOk() && result.get()).toEqual({
-      type: 'copy_source_unavailable',
+    await vi.runAllTimersAsync();
+    const result = await pending;
+    expect(result.isError() && result.getError()).toBeInstanceOf(
+      ObjectCopySourceError
+    );
+    expect(result.isError() && result.getError()).toMatchObject({
       reason,
+      attempts: 3,
     });
-    expect(fetch).toHaveBeenCalledOnce();
+    expect(fetch).toHaveBeenCalledTimes(3);
+    expect(vi.getTimerCount()).toBe(0);
+  }
+);
+
+const copyInput = {
+  sourceUrl: 'https://provider.test/mask.png?token=private',
+  objectKey: 'region-masks/fresh.png',
+  acceptedContentTypes: ['image/png'],
+  maxBytes: 100,
+};
+
+it.each([408, 429, 500, 503])(
+  'retries source HTTP %s on the same URL and disposes its body',
+  async (status) => {
+    storageConfig();
+    vi.useFakeTimers();
+    const cancel = vi.fn();
+    const fetch = vi
+      .fn()
+      .mockResolvedValueOnce(
+        new Response(new ReadableStream({ cancel }), { status })
+      )
+      .mockResolvedValueOnce(
+        new Response(Uint8Array.of(1, 2), {
+          headers: { 'content-type': 'image/png' },
+        })
+      )
+      .mockResolvedValueOnce(new Response(null, { status: 201 }));
+    vi.stubGlobal('fetch', fetch);
+    const pending = new BetterUploadObjectStorage().copyNewObjectFromUrl(
+      copyInput
+    );
+    await vi.runAllTimersAsync();
+    expect((await pending).isOk()).toBe(true);
+    expect(fetch.mock.calls.slice(0, 2).map(([url]) => String(url))).toEqual([
+      copyInput.sourceUrl,
+      copyInput.sourceUrl,
+    ]);
+    expect(cancel).toHaveBeenCalledOnce();
+    expect(vi.getTimerCount()).toBe(0);
+  }
+);
+
+it('bounds repeated timeouts to the total source budget without attempting a PUT', async () => {
+  storageConfig();
+  vi.useFakeTimers();
+  const fetch = vi.fn(
+    (_url: unknown, init: RequestInit) =>
+      new Promise<Response>((_resolve, reject) => {
+        init.signal!.addEventListener(
+          'abort',
+          () => reject(new DOMException('timeout', 'AbortError')),
+          { once: true }
+        );
+      })
+  );
+  vi.stubGlobal('fetch', fetch);
+  const started = performance.now();
+  const pending = new BetterUploadObjectStorage().copyNewObjectFromUrl(
+    copyInput
+  );
+  await vi.runAllTimersAsync();
+  const result = await pending;
+  expect(result.isError() && result.getError()).toMatchObject({
+    reason: 'timeout',
+    attempts: 3,
+  });
+  expect(performance.now() - started).toBe(60_000);
+  expect(fetch).toHaveBeenCalledTimes(3);
+  expect(vi.getTimerCount()).toBe(0);
+});
+
+it('preserves the original nested network diagnostic after exhaustion', async () => {
+  storageConfig();
+  vi.useFakeTimers();
+  const cause = new TypeError('fetch failed', {
+    cause: Object.assign(new Error('TLS handshake failed'), {
+      code: 'CERT_HAS_EXPIRED',
+    }),
+  });
+  vi.stubGlobal('fetch', vi.fn().mockRejectedValue(cause));
+  const pending = new BetterUploadObjectStorage().copyFromUrl(copyInput);
+  await vi.runAllTimersAsync();
+  const result = await pending;
+  expect(result.isError() && result.getError().cause).toBe(cause);
+});
+
+it.each(['fake', 'adapter'] as const)(
+  'honors the create-only copy contract in the %s',
+  async (kind) => {
+    const { createFakeObjectStorage } =
+      await import('@tests/support/fake-kernel-ports');
+    const memory = createFakeObjectStorage();
+    storageConfig();
+    const objects = memory.objects;
+    const sources = new Map([
+      [
+        copyInput.sourceUrl,
+        { bytes: Uint8Array.of(1, 2), contentType: 'image/png' },
+      ],
+    ]);
+    memory.addRemoteSource(
+      copyInput.sourceUrl,
+      sources.get(copyInput.sourceUrl)!
+    );
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (request: URL | Request) => {
+        if (request instanceof Request) {
+          expect(request.headers.get('if-none-match')).toBe('*');
+          const bytes = new Uint8Array(await request.arrayBuffer());
+          const key = new URL(request.url).pathname
+            .split('/')
+            .slice(2)
+            .join('/');
+          if (objects.has(key)) return new Response(null, { status: 412 });
+          objects.set(key, { bytes, contentType: 'image/png' });
+          return new Response(null, { status: 201 });
+        }
+        const source = sources.get(String(request));
+        return source
+          ? new Response(new Uint8Array(source.bytes), {
+              headers: { 'content-type': source.contentType },
+            })
+          : new Response(null, { status: 404 });
+      })
+    );
+    const storage =
+      kind === 'fake' ? memory.storage : new BetterUploadObjectStorage();
+    const results = await Promise.all([
+      storage.copyNewObjectFromUrl(copyInput),
+      storage.copyNewObjectFromUrl(copyInput),
+    ]);
+    expect(
+      results.map((result) => result.isOk() && result.get().type).sort()
+    ).toEqual(['object_already_exists', 'object_created']);
+    expect(objects.get(copyInput.objectKey)?.bytes).toEqual(
+      Uint8Array.of(1, 2)
+    );
+    const unavailable = await storage.copyNewObjectFromUrl({
+      ...copyInput,
+      sourceUrl: 'https://provider.test/missing',
+    });
+    expect(unavailable.isOk() && unavailable.get()).toEqual({
+      type: 'copy_source_unavailable',
+      status: 404,
+    });
+    const invalid = await storage.copyNewObjectFromUrl({
+      ...copyInput,
+      sourceUrl: 'http://provider.test/mask',
+    });
+    expect(invalid.isOk() && invalid.get()).toEqual({
+      type: 'copy_source_rejected',
+      reason: 'insecure_url',
+    });
   }
 );

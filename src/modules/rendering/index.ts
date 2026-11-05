@@ -11,6 +11,7 @@ export type {
   RenderingUseCaseDeps,
 } from './application/use-cases/types';
 export * from './domain/edit-set';
+export { hasFramingChanged } from './domain/image-framing';
 export * from './domain/model-catalog';
 export * from './domain/prompt-builder';
 export * from './domain/recipe';

@@ -13,7 +13,7 @@ import {
 } from 'vitest';
 
 import { writeImageWithDetection } from '@/composition/image-detection-intent';
-import { type DesignRepository, toDesignName } from '@/modules/design';
+import { toDesignName } from '@/modules/design';
 import { createDesignRepository } from '@/modules/design/testing';
 import { AppError } from '@/modules/kernel';
 import {
@@ -441,70 +441,45 @@ describe('RegionRepositoryDrizzle', () => {
     ]);
   });
 
-  it('rolls back an image when its intent fails, and records an undispatched result', async () => {
-    const resultId = okValue(toImageId('new-result-image'));
-    const now = new Date('2027-01-01T00:00:00Z');
+  it('persists a base image and its undispatched intent through the typed writer', async () => {
+    const newId = okValue(toImageId('new-base'));
     const kernel = {
       db: database.db,
-      clock: { now: () => now },
+      clock: { now: () => new Date('2027-01-01T00:00:00Z') },
       idGenerator: { createId: () => toGeneratedId('intent-id') },
+      logger: { warn: vi.fn(), info: vi.fn(), error: vi.fn(), debug: vi.fn() },
     };
-    const save = (design: DesignRepository) =>
-      design.addImage({
-        designId,
-        image: {
-          id: resultId,
-          kind: 'result',
-          originalKey: key('results/generated.png'),
-          originalContentType: 'image/png',
-          original: { width: 100, height: 100 },
-          workingKey: key('results/generated.png'),
-          working: { width: 100, height: 100 },
-        },
-      });
-    const options = { carryFromImageId: imageId, save };
-    await repository.startDetection({
-      imageId,
-      runId: 'existing-intent',
-      phase: 'ready',
-      expiresAtMs: now.getTime(),
-    });
-    const failed = await writeImageWithDetection(kernel, {
-      ...options,
-      image: {
+    const input = {
+      id: okValue(toDesignId('new-design')),
+      ownerId,
+      name: okValue(toDesignName('New design')),
+      copiedFromDesignId: null,
+      baseImage: {
         id: imageId,
-        designId,
-        kind: 'result',
+        kind: 'base' as const,
         originalKey: key('results/generated.png'),
         originalContentType: 'image/png',
         original: { width: 100, height: 100 },
         workingKey: key('results/generated.png'),
         working: { width: 100, height: 100 },
       },
-    });
-    expect(failed.isError()).toBe(true);
+    };
     const designs = createDesignRepository({ db: database.db });
-    expect(okValue(await designs.findImage(resultId)).type).toBe(
+    expect(okValue(await designs.findImage(newId)).type).toBe(
       'image_not_found'
     );
-    const saved = await writeImageWithDetection(kernel, {
-      ...options,
-      image: {
-        id: resultId,
-        designId,
-        kind: 'result',
-        originalKey: key('results/generated.png'),
-        originalContentType: 'image/png',
-        original: { width: 100, height: 100 },
-        workingKey: key('results/generated.png'),
-        working: { width: 100, height: 100 },
-      },
-    });
-    expect(saved.isOk()).toBe(true);
-    expect(okValue(await repository.findDetection(resultId))).toMatchObject({
+    expect(
+      (
+        await writeImageWithDetection(kernel, {
+          ...input,
+          baseImage: { ...input.baseImage, id: newId },
+        })
+      ).isOk()
+    ).toBe(true);
+    expect(okValue(await repository.findDetection(newId))).toMatchObject({
       type: 'detection_lease',
       phase: 'ready',
-      progress: { carryFromImageId: imageId, concepts: null },
+      progress: { carryFromImageId: null, concepts: null },
     });
   });
 

@@ -12,7 +12,21 @@ import {
   vi,
 } from 'vitest';
 
-import { writeImageWithDetection } from '@/composition/image-detection-intent';
+import { createFakeObjectStorage } from '@tests/support/fake-kernel-ports';
+import * as designBackend from '@/modules/design/backend';
+import { createProviderCallLog } from '@/modules/kernel/backend';
+import { createResultImages } from '@/composition/rendering-pipeline';
+import {
+  createRenderingPipelineUseCases,
+  type MaskCompositor,
+  type ImageModelAdapter,
+} from '@/modules/rendering';
+import { createRenderRepository } from '@/modules/rendering/testing';
+import {
+  writeRenderImageWithDetection,
+  renderImageIdentity,
+  writeImageWithDetection,
+} from '@/composition/image-detection-intent';
 import { toDesignName } from '@/modules/design';
 import { createDesignRepository } from '@/modules/design/testing';
 import {
@@ -22,6 +36,8 @@ import {
   toImageId,
   toObjectKey,
   toUserId,
+  toRenderId,
+  toRenderResultId,
 } from '@/modules/kernel';
 import {
   createMigrationDbClient,
@@ -29,13 +45,17 @@ import {
 } from '@/modules/kernel/infrastructure/db/migrate';
 import { user as userTable } from '@/modules/kernel/infrastructure/db/schema';
 import { createRegionRepository } from '@/modules/segmentation/testing';
+import {
+  createSegmentationUseCases,
+  RegionWriteError,
+} from '@/modules/segmentation';
 
 const ownerId = okValue(toUserId('owner'));
 const designId = okValue(toDesignId('design'));
 const image = (id = 'result') => ({
   id: okValue(toImageId(id)),
   designId,
-  kind: 'result' as const,
+  kind: 'base' as const,
   originalKey: okValue(toObjectKey('renders/result.png')),
   originalContentType: 'image/png',
   original: { width: 100, height: 100 },
@@ -50,7 +70,8 @@ const nativeUrl = process.env.RECOVERY_TEST_DATABASE_URL;
 async function installIntentFault(
   db: Awaited<ReturnType<typeof createPgliteTestDatabase>>['db'],
   code: string,
-  failures: number
+  failures: number,
+  table: 'active_detection' | 'region' = 'active_detection'
 ) {
   if (!nativeUrl) {
     const transact = db.$runInTransaction!;
@@ -82,11 +103,11 @@ async function installIntentFault(
     IF nextval('image_write_fault_sequence') <= ${failures} THEN RAISE EXCEPTION 'injected rollback' USING ERRCODE = '${code}'; END IF;
     RETURN NEW; END $$`);
   await db.$client.query(
-    'CREATE TRIGGER image_write_fault BEFORE INSERT ON active_detection FOR EACH ROW EXECUTE FUNCTION fail_image_intent()'
+    `CREATE TRIGGER image_write_fault BEFORE INSERT ON ${table} FOR EACH ROW EXECUTE FUNCTION fail_image_intent()`
   );
   return async () => {
     await db.$client.query(
-      'DROP TRIGGER IF EXISTS image_write_fault ON active_detection'
+      `DROP TRIGGER IF EXISTS image_write_fault ON ${table}`
     );
     await db.$client.query('DROP FUNCTION IF EXISTS fail_image_intent()');
     await db.$client.query(
@@ -126,13 +147,6 @@ describe('atomic image and detection writes', () => {
   beforeEach(async () => {
     await database.truncate();
     await database.db.insert(userTable).values(makeUserRow({ id: ownerId }));
-    await createDesignRepository({ db: database.db }).create({
-      id: designId,
-      ownerId,
-      name: okValue(toDesignName('Villa')),
-      copiedFromDesignId: null,
-      baseImage: { ...image('base'), kind: 'base' },
-    });
   });
   afterAll(async () => {
     await database?.close();
@@ -142,20 +156,22 @@ describe('atomic image and detection writes', () => {
     const createId = vi.fn(() => toGeneratedId('stable-write'));
     const kernel = {
       db: database.db,
+      logger: { warn: vi.fn(), info: vi.fn(), error: vi.fn(), debug: vi.fn() },
       clock: { now: () => new Date('2026-11-05T00:00:00Z') },
       idGenerator: { createId },
     };
-    const save = vi.fn(
-      (repository: ReturnType<typeof createDesignRepository>) =>
-        repository.addImage({ designId, image: image() })
-    );
     const wait = vi.fn(async () => {});
     return {
       kernel,
-      save,
       createId,
       wait,
-      input: { image: image(), carryFromImageId: null, save },
+      input: {
+        id: designId,
+        ownerId,
+        name: okValue(toDesignName('Villa')),
+        copiedFromDesignId: null,
+        baseImage: image(),
+      },
     };
   };
 
@@ -168,8 +184,7 @@ describe('atomic image and detection writes', () => {
         const result = await writeImageWithDetection(ctx.kernel, ctx.input, {
           delay: ctx.wait,
         });
-        expect(okValue(result).image.id).toBe(image().id);
-        expect(ctx.save).toHaveBeenCalledTimes(3);
+        expect(okValue(result).design.baseImage.id).toBe(image().id);
         expect(ctx.createId).toHaveBeenCalledOnce();
         expect(ctx.wait.mock.calls).toEqual([[100], [300]]);
         expect(
@@ -183,7 +198,7 @@ describe('atomic image and detection writes', () => {
         const rows = okValue(
           await createDesignRepository({ db: database.db }).listImages({
             designId,
-            kind: 'result',
+            kind: 'base',
           })
         );
         expect(rows.images).toHaveLength(1);
@@ -204,7 +219,6 @@ describe('atomic image and detection writes', () => {
           })
         ).isError()
       ).toBe(true);
-      expect(ctx.save).toHaveBeenCalledTimes(3);
       expect(ctx.wait.mock.calls).toEqual([[100], [300]]);
       expect(
         okValue(
@@ -236,7 +250,6 @@ describe('atomic image and detection writes', () => {
           })
         ).isError()
       ).toBe(true);
-      expect(ctx.save).toHaveBeenCalledOnce();
       expect(ctx.wait).not.toHaveBeenCalled();
     } finally {
       await cleanup();
@@ -246,12 +259,15 @@ describe('atomic image and detection writes', () => {
       category: 'system',
       status: 500,
     });
-    ctx.save.mockResolvedValue(Result.Error(error));
+    const reject = vi
+      .spyOn(database.db, '$runInTransaction')
+      .mockRejectedValueOnce(error);
     const result = await writeImageWithDetection(ctx.kernel, ctx.input, {
       delay: ctx.wait,
     });
     expect(result.isError() && result.getError()).toBe(error);
     expect(ctx.wait).not.toHaveBeenCalled();
+    reject.mockRestore();
   });
 
   it.each([undefined, 'EPIPE', '08006'])(
@@ -277,9 +293,8 @@ describe('atomic image and detection writes', () => {
             await writeImageWithDetection(ctx.kernel, ctx.input, {
               delay: ctx.wait,
             })
-          ).image.id
+          ).design.baseImage.id
         ).toBe(image().id);
-        expect(ctx.save).toHaveBeenCalledOnce();
         expect(spy).toHaveBeenCalledTimes(2);
         expect(ctx.wait).not.toHaveBeenCalled();
         expect(spy.mock.calls[1]?.[1]).toEqual({
@@ -301,8 +316,7 @@ describe('atomic image and detection writes', () => {
     'preserves the original failure when reconciliation finds %s',
     async (scenario) => {
       const ctx = setup();
-      if (scenario === 'wrong image')
-        ctx.input.image = { ...image(), working: { width: 101, height: 100 } };
+
       const transact = database.db.$runInTransaction!;
       const lost = new Error('original commit diagnostic');
       let first = true;
@@ -317,6 +331,10 @@ describe('atomic image and detection writes', () => {
                 throw lost;
               }, options);
             await transact(work, options);
+            if (scenario === 'wrong image')
+              await database.db.$client.query(
+                "UPDATE image SET \"workingKey\" = 'another-key' WHERE id = 'result'"
+              );
             if (scenario === 'wrong identity')
               await database.db.$client.query(
                 'UPDATE active_detection SET "imageWriteId" = \'another-write\' WHERE "imageId" = \'result\''
@@ -332,11 +350,377 @@ describe('atomic image and detection writes', () => {
           delay: ctx.wait,
         });
         expect(result.isError() && result.getError().cause).toBe(lost);
-        expect(ctx.save).toHaveBeenCalledOnce();
         expect(spy).toHaveBeenCalledTimes(4);
         expect(ctx.wait.mock.calls).toEqual([[100], [300]]);
       } finally {
         spy.mockRestore();
+      }
+    }
+  );
+  const renderSetup = async () => {
+    const ctx = setup();
+    okValue(await writeImageWithDetection(ctx.kernel, ctx.input));
+    const renders = createRenderRepository({ db: database.db });
+    const resultId = okValue(toRenderResultId('render-result'));
+    const sourceId = image().id;
+    okValue(
+      await renders.createRender({
+        id: okValue(toRenderId('render')),
+        designId,
+        renderSourceImageId: sourceId,
+        batchId: null,
+        batchOptionItemId: null,
+        recipe: {
+          renderSourceImageId: sourceId,
+          source: { workingKey: 'source.png', width: 1, height: 1 },
+          edits: [],
+          prompt: '',
+          editMaskKey: 'mask.png',
+        },
+        results: [
+          {
+            id: resultId,
+            modelId: 'krea-3',
+            status: 'pending',
+            skipReason: null,
+          },
+        ],
+      })
+    );
+    okValue(
+      await renders.updateResult({
+        resultId,
+        changes: { status: 'submitted', providerRequestId: 'paid-request' },
+      })
+    );
+    const storage = createFakeObjectStorage();
+    const bytes = new Uint8Array(
+      Buffer.from(
+        'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVQIHWP4z8DwHwAFgAI/ScLbtAAAAABJRU5ErkJggg==',
+        'base64'
+      )
+    );
+    const kernel = {
+      ...ctx.kernel,
+      objectStorage: storage.storage,
+      providerCallLog: createProviderCallLog({ db: database.db }),
+    };
+    const scheduler = {
+      schedule: vi.fn(async () =>
+        Result.Ok({ type: 'auto_detection_scheduled' as const })
+      ),
+    };
+    const resultImages = createResultImages(kernel, scheduler);
+    const poll = vi.fn<ImageModelAdapter['poll']>().mockResolvedValue(
+      Result.Ok({
+        type: 'model_completed',
+        outputUrl: null,
+        outputBytes: { bytes, contentType: 'image/png' },
+        modelVersion: 'v1',
+        costUsdMicros: 123,
+        costSource: 'reported',
+      })
+    );
+    const pipeline = createRenderingPipelineUseCases({
+      ...kernel,
+      renderRepository: renders,
+      resultImages,
+      renderInputs: { sourceImage: vi.fn(), item: vi.fn(), region: vi.fn() },
+      maskCompositor: {
+        composeEditMask: vi.fn<MaskCompositor['composeEditMask']>(),
+        maskForModel: vi.fn<MaskCompositor['maskForModel']>(),
+      },
+      imageModels: {
+        adapterFor: () => ({
+          submit: vi.fn<ImageModelAdapter['submit']>(),
+          poll,
+        }),
+      },
+    });
+    const identity = {
+      resultId,
+      attempt: 1,
+      providerRequestId: 'paid-request',
+    };
+    return {
+      ...ctx,
+      kernel,
+      renders,
+      resultImages,
+      storage,
+      scheduler,
+      pipeline,
+      poll,
+      bytes,
+      identity,
+    };
+  };
+
+  it('reuses a committed render after every immediate reconciliation read failed', async () => {
+    const ctx = await renderSetup();
+    const transact = database.db.$runInTransaction!;
+    const lost = Object.assign(new Error('lost reply'), { code: 'EPIPE' });
+    let committed = false;
+    const spy = vi
+      .spyOn(database.db, '$runInTransaction')
+      .mockImplementation(async (work, options) => {
+        if (committed) throw new Error('database unavailable');
+        await transact(work, options);
+        committed = true;
+        throw lost;
+      });
+    try {
+      const outcome = await ctx.pipeline.poll(ctx.identity.resultId);
+      expect(outcome.isError() && outcome.getError().cause).toBe(lost);
+      expect(ctx.scheduler.schedule).not.toHaveBeenCalled();
+      expect(ctx.kernel.logger.warn).toHaveBeenCalledWith(
+        expect.objectContaining({ event: 'image.write.unresolved' })
+      );
+    } finally {
+      spy.mockRestore();
+    }
+    const copy = vi.spyOn(ctx.storage.storage, 'createObject');
+    expect(okValue(await ctx.pipeline.poll(ctx.identity.resultId))).toEqual({
+      type: 'result_succeeded',
+    });
+    expect(ctx.poll).toHaveBeenCalledOnce();
+    expect(copy).not.toHaveBeenCalled();
+    const images = okValue(
+      await createDesignRepository({ db: database.db }).listImages({
+        designId,
+        kind: 'result',
+      })
+    );
+    expect(images.images).toHaveLength(1);
+    expect(images.images[0]?.id).toBe(
+      renderImageIdentity(ctx.identity).imageId
+    );
+    expect(ctx.scheduler.schedule).toHaveBeenCalledOnce();
+    const calls = await database.db.$client.query(
+      'SELECT status, "costUsdMicros" FROM provider_call'
+    );
+    expect(calls.rows).toEqual([{ status: 'succeeded', costUsdMicros: '123' }]);
+  });
+
+  it.skipIf(!nativeUrl)(
+    'serializes simultaneous completions and preserves the winning object and intent',
+    async () => {
+      const ctx = await renderSetup();
+      const results = await Promise.all([
+        ctx.pipeline.poll(ctx.identity.resultId),
+        ctx.pipeline.poll(ctx.identity.resultId),
+      ]);
+      expect(results.every((value) => value.isOk())).toBe(true);
+      const images = okValue(
+        await createDesignRepository({ db: database.db }).listImages({
+          designId,
+          kind: 'result',
+        })
+      );
+      expect(images.images).toHaveLength(1);
+      expect(
+        ctx.storage.objects.get(`results/${ctx.identity.resultId}/1/raw.png`)
+          ?.bytes
+      ).toEqual(ctx.bytes);
+      const intent = okValue(
+        await createRegionRepository({ db: database.db }).findDetection(
+          images.images[0]!.id
+        )
+      );
+      expect(intent).toMatchObject({
+        imageWriteId: renderImageIdentity(ctx.identity).writeId,
+      });
+    }
+  );
+
+  it('keeps separate images for explicitly retried attempts and rejects a stale completion', async () => {
+    const ctx = await renderSetup();
+    okValue(await ctx.pipeline.poll(ctx.identity.resultId));
+    okValue(
+      await ctx.renders.updateResult({
+        resultId: ctx.identity.resultId,
+        changes: {
+          attempt: 2,
+          status: 'submitted',
+          providerRequestId: 'second-paid-request',
+          outputImageId: null,
+        },
+      })
+    );
+    expect(
+      okValue(await ctx.resultImages.findRegistered(ctx.identity))
+    ).toEqual({ type: 'result_attempt_superseded' });
+    const stale = await writeRenderImageWithDetection(ctx.kernel, {
+      ...ctx.identity,
+      designId,
+      image: { ...image(), kind: 'result' },
+      carryFromImageId: image().id,
+      completion: {
+        modelVersion: null,
+        costUsdMicros: 1,
+        costSource: 'reported',
+        completedAt: ctx.kernel.clock.now(),
+        framingChanged: false,
+      },
+    });
+    expect(okValue(stale)).toEqual({ type: 'result_attempt_superseded' });
+    okValue(await ctx.pipeline.poll(ctx.identity.resultId));
+    const images = okValue(
+      await createDesignRepository({ db: database.db }).listImages({
+        designId,
+        kind: 'result',
+      })
+    );
+    expect(images.images).toHaveLength(2);
+    const failed = okValue(
+      await ctx.renders.failResultAttempt({
+        ...ctx.identity,
+        reason: 'late failure',
+        now: ctx.kernel.clock.now(),
+      })
+    );
+    expect(failed.type).toBe('result_attempt_superseded');
+    const current = okValue(
+      await ctx.renders.findResult(ctx.identity.resultId)
+    );
+    expect(current).toMatchObject({
+      result: { attempt: 2, status: 'succeeded', costUsdMicros: 123 },
+    });
+  });
+
+  it('rolls back render completion, image and intent together while retaining paid cost', async () => {
+    const ctx = await renderSetup();
+    const cleanup = await installIntentFault(database.db, '23514', 1);
+    try {
+      expect((await ctx.pipeline.poll(ctx.identity.resultId)).isError()).toBe(
+        true
+      );
+      expect(
+        okValue(await ctx.renders.findResult(ctx.identity.resultId))
+      ).toMatchObject({ result: { status: 'submitted', outputImageId: null } });
+      expect(
+        okValue(
+          await createDesignRepository({ db: database.db }).findImage(
+            renderImageIdentity(ctx.identity).imageId
+          )
+        ).type
+      ).toBe('image_not_found');
+      expect(
+        okValue(
+          await createRegionRepository({ db: database.db }).findDetection(
+            renderImageIdentity(ctx.identity).imageId
+          )
+        ).type
+      ).toBe('no_detection');
+      expect(
+        (await database.db.$client.query('SELECT status FROM provider_call'))
+          .rows
+      ).toEqual([{ status: 'succeeded' }]);
+    } finally {
+      await cleanup();
+    }
+  });
+
+  it('rejects a mismatched saved image before committing its intent', async () => {
+    const ctx = setup();
+    const original = designBackend.createDesignRepository;
+    const spy = vi
+      .spyOn(designBackend, 'createDesignRepository')
+      .mockImplementation((input) => {
+        const repository = original(input);
+        return {
+          ...repository,
+          async create(value) {
+            return (await repository.create(value)).map((saved) => ({
+              ...saved,
+              design: {
+                ...saved.design,
+                baseImage: {
+                  ...saved.design.baseImage,
+                  id: okValue(toImageId('wrong-image')),
+                },
+              },
+            }));
+          },
+        };
+      });
+    try {
+      expect(
+        (await writeImageWithDetection(ctx.kernel, ctx.input)).isError()
+      ).toBe(true);
+      expect(
+        okValue(await original({ db: database.db }).findImage(image().id)).type
+      ).toBe('image_not_found');
+    } finally {
+      spy.mockRestore();
+    }
+  });
+  it.skipIf(!nativeUrl).each(['40001', '40P01', '55P03'])(
+    'cleans fresh interactive masks after a server-confirmed %s rejection',
+    async (code) => {
+      const ctx = await renderSetup();
+      const regions = createRegionRepository({ db: database.db });
+      const useCases = createSegmentationUseCases({
+        ...ctx.kernel,
+        regionRepository: regions,
+        imageAccess: {
+          find: async () =>
+            Result.Ok({
+              type: 'image_found',
+              image: {
+                imageId: image().id,
+                designId,
+                ownerId,
+                workingKey: image().workingKey,
+                width: 100,
+                height: 100,
+              },
+            }),
+        },
+        permissionChecker: {
+          hasPermission: async () => Result.Ok({ type: 'permission_granted' }),
+        },
+        uploadIntentStore: { consume: vi.fn(), remember: vi.fn() },
+        detectionRetry: { retry: vi.fn() },
+        segmenter: {
+          segment: async () =>
+            Result.Ok({
+              type: 'segmented',
+              provider: 'fake',
+              endpoint: 'sam',
+              costUsdMicros: 10,
+              costSource: 'reported',
+              providerRequestId: 'sam-paid',
+              masks: [
+                {
+                  mask: { kind: 'bytes', bytes: Uint8Array.of(1) },
+                  box: [0, 0, 1, 1],
+                  score: 1,
+                },
+              ],
+            }),
+        },
+      });
+      const cleanup = await installIntentFault(database.db, code, 1, 'region');
+      try {
+        const result = await useCases.segment({
+          currentUserId: ownerId,
+          imageId: image().id,
+          prompt: { type: 'text', text: 'chair' },
+          label: 'chair',
+        });
+        expect(result.isError() && result.getError()).toBeInstanceOf(
+          RegionWriteError
+        );
+        expect(result.isError() && result.getError()).toMatchObject({
+          publication: 'rejected',
+        });
+        expect(ctx.storage.objects.size).toBe(0);
+        expect(
+          (await database.db.$client.query('SELECT id FROM region')).rows
+        ).toEqual([]);
+      } finally {
+        await cleanup();
       }
     }
   );

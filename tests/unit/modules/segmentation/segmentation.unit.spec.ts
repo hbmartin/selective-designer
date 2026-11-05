@@ -8,6 +8,7 @@ import { okValue } from '@tests/support/result';
 import { describe, expect, it, vi } from 'vitest';
 
 import { AppError } from '@/modules/kernel';
+import { ObjectCopySourceError } from '@/modules/kernel/application/ports/object-storage';
 import {
   type DesignId,
   type ImageId,
@@ -477,7 +478,7 @@ describe('segmentation pipeline', () => {
         },
       });
       if (rejection !== 'prompt' && rejection !== 'missing mask') {
-        vi.spyOn(ctx.storage.storage, 'copyFromUrl').mockResolvedValue(
+        vi.spyOn(ctx.storage.storage, 'copyNewObjectFromUrl').mockResolvedValue(
           Result.Ok({
             type: 'copy_source_rejected',
             reason: rejection === 'invalid mask' ? 'too_large' : rejection,
@@ -1000,3 +1001,65 @@ it('shows a completed record as idle even after its execution deadline', async (
     )
   ).toMatchObject({ detection: { type: 'idle', omissions: [] } });
 });
+
+it.each([true, false])(
+  'keeps interactive partial success when a source fails: usable=%s',
+  async (usable) => {
+    const ctx = setup({
+      async segment() {
+        return Result.Ok({
+          type: 'segmented',
+          provider: 'fake',
+          endpoint: 'fake/sam',
+          costUsdMicros: 10,
+          costSource: 'reported',
+          providerRequestId: 'paid',
+          masks: [
+            ...(usable
+              ? [
+                  {
+                    mask: { kind: 'bytes' as const, bytes: Uint8Array.of(1) },
+                    box: [0, 0, 1, 1] as [number, number, number, number],
+                    score: 1,
+                  },
+                ]
+              : []),
+            {
+              mask: {
+                kind: 'url' as const,
+                url: 'https://provider.test/mask?token=private',
+              },
+              box: [0, 0, 1, 1],
+              score: 1,
+            },
+          ],
+        });
+      },
+    });
+    const error = new ObjectCopySourceError({
+      reason: 'network',
+      attempts: 3,
+      cause: Object.assign(new Error('private URL must not appear in logs'), {
+        code: 'ECONNRESET',
+      }),
+    });
+    vi.spyOn(ctx.storage.storage, 'copyNewObjectFromUrl').mockResolvedValue(
+      Result.Error(error)
+    );
+    const result = await ctx.useCases.segment({
+      currentUserId: ownerId,
+      imageId: baseImageId,
+      prompt: { type: 'text', text: 'chair' },
+      label: 'chair',
+    });
+    if (usable)
+      expect(okValue(result)).toMatchObject({
+        type: 'regions_created',
+        regions: [expect.anything()],
+      });
+    else expect(result.isError() && result.getError()).toBe(error);
+    expect([...ctx.calls.calls.values()]).toMatchObject([
+      { status: 'succeeded', costUsdMicros: 10 },
+    ]);
+  }
+);

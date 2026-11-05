@@ -90,6 +90,9 @@ Several renders that differ only in which item fills one placement.
 The image one model returned for a render.
 _Avoid_: Variant, fork, output
 
+**Render attempt**:
+One request to a model to produce a render result. Retrying a failed result starts another attempt; recovering the response from the same attempt preserves its image.
+
 **Preferred result**:
 The one render result per render that the user marks as best. The other results stay available for comparison and further editing.
 _Avoid_: Best variant, favourite, pick

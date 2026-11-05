@@ -136,6 +136,47 @@ export const createFakeRenderRepository = (now: () => Date) => {
           : { type: 'result_not_found' }
       );
     },
+    async failResultAttempt(input) {
+      const found = findResult(input.resultId);
+      if (
+        !found ||
+        !['pending', 'submitted'].includes(found.result.status) ||
+        (input.attempt !== undefined &&
+          found.result.attempt !== input.attempt) ||
+        (input.providerRequestId != null &&
+          found.result.providerRequestId !== input.providerRequestId)
+      )
+        return Result.Ok({ type: 'result_attempt_superseded' });
+      Object.assign(found.result, {
+        status: 'failed',
+        errorMessage: input.reason.slice(0, 500),
+        completedAt: input.now,
+      });
+      return Result.Ok({ type: 'result_marked_failed' });
+    },
+    async lockResultForCompletion(resultId) {
+      const found = findResult(resultId);
+      return Result.Ok(
+        found
+          ? { type: 'result_locked', result: found.result }
+          : { type: 'result_not_found' }
+      );
+    },
+    async completeResultAttempt(input) {
+      const found = findResult(input.resultId);
+      if (
+        !found ||
+        found.result.attempt !== input.attempt ||
+        found.result.providerRequestId !== input.providerRequestId ||
+        found.result.status !== 'submitted'
+      )
+        return Result.Ok({ type: 'result_attempt_superseded' });
+      Object.assign(found.result, input.completion, {
+        status: 'succeeded',
+        outputImageId: input.imageId,
+      });
+      return Result.Ok({ type: 'result_completed' });
+    },
     async updateResult(input) {
       const found = findResult(input.resultId);
       if (found) Object.assign(found.result, input.changes);

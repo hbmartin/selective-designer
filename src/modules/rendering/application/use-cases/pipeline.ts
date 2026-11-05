@@ -30,14 +30,6 @@ const EXTENSION: Record<string, string> = {
   'image/webp': 'webp',
 };
 
-/** Aspect ratios within 1% count as the same framing. */
-const sameFraming = (
-  a: { width: number; height: number },
-  b: { width: number; height: number }
-) =>
-  Math.abs(a.width / a.height - b.width / b.height) / (b.width / b.height) <=
-  0.01;
-
 const loadResult = (deps: RenderingPipelineDeps, resultId: RenderResultId) =>
   deps.renderRepository.findResult(resultId);
 
@@ -189,8 +181,24 @@ export async function pollResult(
   if (outcome.type === 'result_not_found')
     return Result.Ok({ type: 'result_not_runnable' });
   const { result, render } = outcome;
-  if (result.status === 'succeeded')
+  if (result.status === 'succeeded' && !result.providerRequestId)
     return Result.Ok({ type: 'result_succeeded' });
+  if (
+    result.providerRequestId &&
+    (result.status === 'submitted' || result.status === 'succeeded')
+  ) {
+    const recovered = await deps.resultImages.findRegistered({
+      resultId,
+      attempt: result.attempt,
+      providerRequestId: result.providerRequestId,
+    });
+    if (recovered.isError()) return Result.Error(recovered.getError());
+    const registration = recovered.get();
+    if (registration.type === 'result_image_registered')
+      return Result.Ok({ type: 'result_succeeded' });
+    if (registration.type === 'result_attempt_superseded')
+      return Result.Ok({ type: 'result_not_runnable' });
+  }
   if (result.status !== 'submitted' || !result.providerRequestId) {
     return Result.Ok({ type: 'result_not_runnable' });
   }
@@ -205,78 +213,12 @@ export async function pollResult(
   if (poll.type === 'model_failed') {
     const failed = await markResultFailed(deps, {
       resultId,
+      attempt: result.attempt,
+      providerRequestId: result.providerRequestId,
       reason: poll.reason,
     });
     if (failed.isError()) return Result.Error(failed.getError());
     return Result.Ok({ type: 'result_failed', reason: poll.reason });
-  }
-
-  // Deterministic key per attempt: a retried step overwrites, never duplicates.
-  const rawKey = (extension: string) =>
-    toObjectKey(`results/${resultId}/${result.attempt}/raw.${extension}`);
-  let objectKey;
-  let contentType: string;
-  if (poll.outputBytes) {
-    contentType = poll.outputBytes.contentType;
-    const key = rawKey(EXTENSION[contentType] ?? 'png');
-    if (key.isError()) return Result.Error(key.getError());
-    const stored = await deps.objectStorage.putObject({
-      objectKey: key.get(),
-      body: poll.outputBytes.bytes,
-      contentType,
-      cacheControl: IMMUTABLE_OBJECT_CACHE_CONTROL,
-    });
-    if (stored.isError()) return Result.Error(stored.getError());
-    objectKey = key.get();
-  } else if (poll.outputUrl) {
-    const key = rawKey('img');
-    if (key.isError()) return Result.Error(key.getError());
-    const copied = await deps.objectStorage.copyFromUrl({
-      sourceUrl: poll.outputUrl,
-      objectKey: key.get(),
-      acceptedContentTypes: OUTPUT_TYPES,
-      maxBytes: OUTPUT_MAX_BYTES,
-      cacheControl: IMMUTABLE_OBJECT_CACHE_CONTROL,
-    });
-    if (copied.isError()) return Result.Error(copied.getError());
-    const copy = copied.get();
-    if (copy.type !== 'object_copied') {
-      const failed = await markResultFailed(deps, {
-        resultId,
-        reason: `output_${copy.type}`,
-      });
-      if (failed.isError()) return Result.Error(failed.getError());
-      return Result.Ok({
-        type: 'result_failed',
-        reason: `output_${copy.type}`,
-      });
-    }
-    contentType = copy.contentType;
-    objectKey = key.get();
-  } else {
-    const failed = await markResultFailed(deps, {
-      resultId,
-      reason: 'no_output',
-    });
-    if (failed.isError()) return Result.Error(failed.getError());
-    return Result.Ok({ type: 'result_failed', reason: 'no_output' });
-  }
-
-  const registered = await deps.resultImages.register({
-    designId: render.designId,
-    renderSourceImageId: render.renderSourceImageId,
-    objectKey,
-    contentType,
-  });
-  if (registered.isError()) return Result.Error(registered.getError());
-  const image = registered.get();
-  if (image.type === 'result_image_unreadable') {
-    const failed = await markResultFailed(deps, {
-      resultId,
-      reason: 'output_unreadable',
-    });
-    if (failed.isError()) return Result.Error(failed.getError());
-    return Result.Ok({ type: 'result_failed', reason: 'output_unreadable' });
   }
 
   const spec = MODEL_CATALOG[result.modelId];
@@ -288,23 +230,6 @@ export async function pollResult(
         ? 'price_table'
         : 'unavailable';
   const now = deps.clock.now();
-  const saved = await deps.renderRepository.updateResult({
-    resultId,
-    changes: {
-      status: 'succeeded',
-      outputImageId: image.imageId,
-      modelVersion: poll.modelVersion,
-      framingChanged: !sameFraming(
-        { width: image.width, height: image.height },
-        render.recipe.source
-      ),
-      costUsdMicros,
-      costSource,
-      completedAt: now,
-    },
-  });
-  if (saved.isError()) return Result.Error(saved.getError());
-
   const callId = toProviderCallId(`render:${resultId}:${result.attempt}`);
   if (callId.isError()) return Result.Error(callId.getError());
   const logged = await deps.providerCallLog.record({
@@ -324,24 +249,119 @@ export async function pollResult(
     completedAt: now,
   });
   if (logged.isError()) return Result.Error(logged.getError());
+
+  // Immutable attempt output: a concurrent execution cannot overwrite published bytes.
+  const rawKey = (extension: string) =>
+    toObjectKey(`results/${resultId}/${result.attempt}/raw.${extension}`);
+  let objectKey;
+  let contentType: string;
+  if (poll.outputBytes) {
+    contentType = poll.outputBytes.contentType;
+    const key = rawKey(EXTENSION[contentType] ?? 'png');
+    if (key.isError()) return Result.Error(key.getError());
+    const stored = await deps.objectStorage.createObject({
+      objectKey: key.get(),
+      body: poll.outputBytes.bytes,
+      contentType,
+      cacheControl: IMMUTABLE_OBJECT_CACHE_CONTROL,
+    });
+    if (stored.isError()) return Result.Error(stored.getError());
+    objectKey = key.get();
+  } else if (poll.outputUrl) {
+    const key = rawKey('img');
+    if (key.isError()) return Result.Error(key.getError());
+    const copied = await deps.objectStorage.copyNewObjectFromUrl({
+      sourceUrl: poll.outputUrl,
+      objectKey: key.get(),
+      acceptedContentTypes: OUTPUT_TYPES,
+      maxBytes: OUTPUT_MAX_BYTES,
+      cacheControl: IMMUTABLE_OBJECT_CACHE_CONTROL,
+    });
+    if (copied.isError()) return Result.Error(copied.getError());
+    const copy = copied.get();
+    if (
+      copy.type !== 'object_created' &&
+      copy.type !== 'object_already_exists'
+    ) {
+      const failed = await markResultFailed(deps, {
+        resultId,
+        attempt: result.attempt,
+        providerRequestId: result.providerRequestId,
+        reason: `output_${copy.type}`,
+      });
+      if (failed.isError()) return Result.Error(failed.getError());
+      return Result.Ok({
+        type: 'result_failed',
+        reason: `output_${copy.type}`,
+      });
+    }
+    contentType = 'application/octet-stream';
+    objectKey = key.get();
+  } else {
+    const failed = await markResultFailed(deps, {
+      resultId,
+      attempt: result.attempt,
+      providerRequestId: result.providerRequestId,
+      reason: 'no_output',
+    });
+    if (failed.isError()) return Result.Error(failed.getError());
+    return Result.Ok({ type: 'result_failed', reason: 'no_output' });
+  }
+
+  const registered = await deps.resultImages.register({
+    resultId,
+    attempt: result.attempt,
+    providerRequestId: result.providerRequestId,
+    completion: {
+      modelVersion: poll.modelVersion,
+      costUsdMicros,
+      costSource,
+      completedAt: now,
+    },
+    sourceSize: render.recipe.source,
+    designId: render.designId,
+    renderSourceImageId: render.renderSourceImageId,
+    objectKey,
+    contentType,
+  });
+  if (registered.isError()) return Result.Error(registered.getError());
+  const image = registered.get();
+  if (image.type === 'result_attempt_superseded')
+    return Result.Ok({ type: 'result_not_runnable' });
+  if (image.type === 'result_image_unreadable') {
+    const failed = await markResultFailed(deps, {
+      resultId,
+      attempt: result.attempt,
+      providerRequestId: result.providerRequestId,
+      reason: 'output_unreadable',
+    });
+    if (failed.isError()) return Result.Error(failed.getError());
+    return Result.Ok({ type: 'result_failed', reason: 'output_unreadable' });
+  }
+
   return Result.Ok({ type: 'result_succeeded' });
 }
 
 export async function markResultFailed(
   deps: Pick<RenderingPipelineDeps, 'renderRepository' | 'clock' | 'logger'>,
-  input: { resultId: RenderResultId; reason: string }
-): Promise<RenderingResult<{ type: 'result_marked_failed' }>> {
-  const saved = await deps.renderRepository.updateResult({
-    resultId: input.resultId,
-    changes: {
-      status: 'failed',
-      errorMessage: input.reason.slice(0, 500),
-      completedAt: deps.clock.now(),
-    },
+  input: {
+    resultId: RenderResultId;
+    reason: string;
+    attempt?: number;
+    providerRequestId?: string | null;
+  }
+): Promise<
+  RenderingResult<
+    { type: 'result_marked_failed' } | { type: 'result_attempt_superseded' }
+  >
+> {
+  const saved = await deps.renderRepository.failResultAttempt({
+    ...input,
+    now: deps.clock.now(),
   });
   if (saved.isError()) return Result.Error(saved.getError());
   deps.logger.warn({ event: 'rendering.result.failed', details: input });
-  return Result.Ok({ type: 'result_marked_failed' });
+  return saved;
 }
 
 /**

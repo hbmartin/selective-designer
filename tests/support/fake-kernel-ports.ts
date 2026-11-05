@@ -37,13 +37,33 @@ export const createFakeObjectStorage = () => {
       }));
     },
     async copyNewObjectFromUrl(input) {
-      if (objects.has(input.objectKey))
-        return Result.Ok({ type: 'object_already_exists' });
-      return (await storage.copyFromUrl(input)).map((outcome) =>
-        outcome.type === 'object_copied'
-          ? { type: 'object_created' as const, objectKey: input.objectKey }
-          : outcome
-      );
+      try {
+        if (new URL(input.sourceUrl).protocol !== 'https:')
+          return Result.Ok({
+            type: 'copy_source_rejected',
+            reason: 'insecure_url',
+          });
+      } catch {
+        return Result.Ok({
+          type: 'copy_source_rejected',
+          reason: 'insecure_url',
+        });
+      }
+      const source = remoteSources.get(input.sourceUrl);
+      if (!source)
+        return Result.Ok({ type: 'copy_source_unavailable', status: 404 });
+      if (!input.acceptedContentTypes.includes(source.contentType))
+        return Result.Ok({
+          type: 'copy_source_rejected',
+          reason: 'content_type',
+        });
+      if (source.bytes.byteLength > input.maxBytes)
+        return Result.Ok({ type: 'copy_source_rejected', reason: 'too_large' });
+      return storage.createObject({
+        ...input,
+        body: source.bytes,
+        contentType: source.contentType,
+      });
     },
     async getObjectBytes(objectKey) {
       const object = objects.get(objectKey);
@@ -67,6 +87,18 @@ export const createFakeObjectStorage = () => {
       });
     },
     async copyFromUrl(input) {
+      try {
+        if (new URL(input.sourceUrl).protocol !== 'https:')
+          return Result.Ok({
+            type: 'copy_source_rejected',
+            reason: 'insecure_url',
+          });
+      } catch {
+        return Result.Ok({
+          type: 'copy_source_rejected',
+          reason: 'insecure_url',
+        });
+      }
       const source = remoteSources.get(input.sourceUrl);
       if (!source)
         return Result.Ok({ type: 'copy_source_unavailable', status: 404 });

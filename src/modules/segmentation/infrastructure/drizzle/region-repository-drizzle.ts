@@ -9,7 +9,7 @@ import {
   toRegionId,
 } from '@/modules/kernel/domain/ids';
 import { createTransactionRunner } from '@/modules/kernel/infrastructure/db/client';
-import { getDatabaseErrorCode } from '@/modules/kernel/infrastructure/db/db-error-details';
+import { classifyDatabaseFailure } from '@/modules/kernel/infrastructure/db/db-error-details';
 import { observeRepository } from '@/modules/kernel/infrastructure/db/observability';
 import {
   type DbLike,
@@ -55,14 +55,7 @@ const dbError = (cause: unknown) =>
   });
 
 const regionWriteError = (cause: unknown) =>
-  new RegionWriteError(
-    ['23502', '23503', '23505', '23514'].includes(
-      getDatabaseErrorCode(cause) ?? ''
-    )
-      ? 'rejected'
-      : 'unknown',
-    cause
-  );
+  new RegionWriteError(classifyDatabaseFailure(cause).publication, cause);
 
 const isSource = (value: string): value is RegionSource =>
   (regionSources as readonly string[]).includes(value);

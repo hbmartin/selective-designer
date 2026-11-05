@@ -228,23 +228,14 @@ export function buildDatabaseErrorLogFields(params: {
   };
 }
 
-function getCause(error: unknown): unknown {
-  return isRecord(error) && 'cause' in error ? error.cause : undefined;
-}
-
-function checkErrorOrCause<T>(
-  error: unknown,
-  schema: z.ZodType<T>,
-  predicate: (data: T) => boolean
-): boolean {
-  const direct = schema.safeParse(error);
-  if (direct.success && predicate(direct.data)) return true;
-
-  const cause = getCause(error);
-  if (cause === undefined) return false;
-
-  const fromCause = schema.safeParse(cause);
-  return fromCause.success && predicate(fromCause.data);
+function* databaseErrorCauses(error: unknown) {
+  const seen = new Set<unknown>();
+  let current = error;
+  while (isRecord(current) && !seen.has(current)) {
+    seen.add(current);
+    yield current;
+    current = current.cause;
+  }
 }
 
 function extractFromErrorOrCause<T, R>(
@@ -252,32 +243,43 @@ function extractFromErrorOrCause<T, R>(
   schema: z.ZodType<T>,
   extract: (data: T) => R
 ): R | undefined {
-  const direct = schema.safeParse(error);
-  if (direct.success) return extract(direct.data);
-
-  const cause = getCause(error);
-  if (cause === undefined) return undefined;
-
-  const fromCause = schema.safeParse(cause);
-  return fromCause.success ? extract(fromCause.data) : undefined;
+  for (const cause of databaseErrorCauses(error)) {
+    const parsed = schema.safeParse(cause);
+    if (parsed.success) return extract(parsed.data);
+  }
+  return undefined;
 }
 
-const errorWithCodeSchema = z.looseObject({ code: z.string() });
-
 export function getDatabaseErrorCode(error: unknown): string | undefined {
-  return extractFromErrorOrCause(
-    error,
-    errorWithCodeSchema,
-    (data) => data.code
-  );
+  for (const current of databaseErrorCauses(error)) {
+    // PostgreSQL classes include 2B, 3D, F0, HV, P0 and XX. Application
+    // codes and transport codes such as EPIPE are not SQLSTATEs.
+    if (
+      typeof current.code === 'string' &&
+      /^(?:[0-9][0-9A-Z]|F0|HV|P0|XX)[0-9A-Z]{3}$/u.test(current.code)
+    )
+      return current.code;
+  }
+  return undefined;
+}
+
+/** Certainty is separate from retryability: 40003 explicitly means unknown. */
+export function classifyDatabaseFailure(error: unknown) {
+  const sqlState = getDatabaseErrorCode(error);
+  const uncertain =
+    !sqlState ||
+    sqlState.startsWith('08') ||
+    ['40003', '57P01', '57P02', '57P03'].includes(sqlState);
+  return {
+    sqlState,
+    publication: uncertain ? ('unknown' as const) : ('rejected' as const),
+    retryableRollback:
+      !!sqlState && ['40001', '40P01', '55P03'].includes(sqlState),
+  };
 }
 
 export function isUniqueConstraintViolation(error: unknown): boolean {
-  return checkErrorOrCause(
-    error,
-    errorWithCodeSchema,
-    (data) => data.code === '23505'
-  );
+  return getDatabaseErrorCode(error) === '23505';
 }
 
 const errorWithConstraintSchema = z.looseObject({ constraint: z.string() });

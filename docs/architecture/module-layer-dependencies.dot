@@ -172,6 +172,7 @@ digraph ModuleLayerDependencies {
   "email/public" -> "kernel/public" [style="solid"];
   "email/transport" -> "email/public" [style="solid"];
   "email/transport" -> "kernel/domain" [style="solid"];
+  "kernel/application" -> "kernel/domain" [style="dotted"];
   "kernel/infrastructure" -> "auth/infrastructure" [style="solid"];
   "kernel/infrastructure" -> "design/infrastructure" [style="dotted"];
   "kernel/infrastructure" -> "email/infrastructure" [style="dotted"];
@@ -223,6 +224,7 @@ digraph ModuleLayerDependencies {
   "rendering/transport" -> "kernel/domain" [style="solid"];
   "rendering/transport" -> "kernel/transport" [style="solid"];
   "rendering/transport" -> "rendering/domain" [style="solid"];
+  "segmentation/application" -> "kernel/application" [style="solid"];
   "segmentation/application" -> "kernel/domain" [style="solid"];
   "segmentation/application" -> "segmentation/domain" [style="solid"];
   "segmentation/domain" -> "kernel/domain" [style="solid"];

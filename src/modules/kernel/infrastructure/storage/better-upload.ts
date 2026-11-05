@@ -25,6 +25,7 @@ import type {
 } from '@/modules/kernel/application/ports/object-storage';
 import type { ApplicationResult } from '@/modules/kernel/application/result';
 import { AppError } from '@/modules/kernel/domain/errors/app-error';
+import { ObjectCopySourceError } from '@/modules/kernel/domain/errors/object-copy-source-error';
 import { getStorageConfig } from '@/modules/kernel/infrastructure/config/storage';
 
 import {
@@ -308,16 +309,7 @@ export class BetterUploadObjectStorage implements ObjectStoragePort {
     input: ObjectCopyInput
   ): Promise<ApplicationResult<ObjectCopyNewOutcome>> {
     const downloaded = await this.readCopySource(input);
-    if (downloaded.isError()) {
-      const cause = downloaded.getError().cause;
-      return Result.Ok({
-        type: 'copy_source_unavailable',
-        reason:
-          cause instanceof Error && cause.name === 'AbortError'
-            ? 'timeout'
-            : 'network',
-      });
-    }
+    if (downloaded.isError()) return Result.Error(downloaded.getError());
     const source = downloaded.get();
     if (source.type !== 'copy_source_downloaded') return Result.Ok(source);
     return this.createObject({
@@ -376,61 +368,119 @@ export class BetterUploadObjectStorage implements ObjectStoragePort {
       });
     }
 
-    const controller = new AbortController();
-    const timeoutId = setTimeout(
-      () => controller.abort(),
-      OBJECT_COPY_TIMEOUT_MS
-    );
-    try {
-      const response = await fetch(source, {
-        redirect: 'follow',
-        signal: controller.signal,
-      });
-      if (!response.ok) {
-        await discardResponseBody(response);
-        return Result.Ok({
-          type: 'copy_source_unavailable',
-          status: response.status,
-        });
+    const deadline = performance.now() + OBJECT_COPY_TIMEOUT_MS;
+    let lastError: ObjectCopySourceError | undefined;
+    for (let attempt = 0; attempt < 3; attempt++) {
+      if (attempt > 0) {
+        const remaining = deadline - performance.now();
+        const backoff = attempt === 1 ? 1_000 : 3_000;
+        if (remaining <= backoff) break;
+        // oxlint-disable-next-line no-await-in-loop -- bounded source-only backoff.
+        await new Promise((resolve) => setTimeout(resolve, backoff));
       }
-      const contentType = (response.headers.get('content-type') ?? '')
-        .split(';')[0]
-        ?.trim()
-        .toLowerCase();
-      if (
-        !contentType ||
-        !input.acceptedContentTypes
-          .map((type) => type.toLowerCase())
-          .includes(contentType)
-      ) {
-        await discardResponseBody(response);
-        return Result.Ok({
-          type: 'copy_source_rejected',
-          reason: 'content_type',
-        });
-      }
-      if (hasOversizedResponseBody(response, input.maxBytes)) {
-        await discardResponseBody(response);
-        return Result.Ok({
-          type: 'copy_source_rejected',
-          reason: 'declared_too_large',
-        });
-      }
-      const bytes = await readLimitedBody(response, input.maxBytes);
-      if (!bytes) {
-        return Result.Ok({ type: 'copy_source_rejected', reason: 'too_large' });
-      }
-      return Result.Ok({ type: 'copy_source_downloaded', bytes, contentType });
-    } catch (error) {
-      return Result.Error(
-        storageError(
-          'OBJECT_STORAGE_COPY_FAILED',
-          'Copying a provider result into storage failed',
-          error
-        )
+      const remaining = deadline - performance.now();
+      if (remaining <= 0) break;
+      const controller = new AbortController();
+      const timeoutId = setTimeout(
+        () => controller.abort(),
+        Math.min(20_000, remaining)
       );
-    } finally {
-      clearTimeout(timeoutId);
+      let response: Response | undefined;
+      try {
+        // oxlint-disable-next-line no-await-in-loop -- retry the same URL, never the paid provider call.
+        response = await fetch(source, {
+          redirect: 'follow',
+          signal: controller.signal,
+        });
+        if (!response.ok) {
+          // oxlint-disable-next-line no-await-in-loop -- release every rejected body.
+          await discardResponseBody(response);
+          if (
+            response.status === 408 ||
+            response.status === 429 ||
+            response.status >= 500
+          ) {
+            lastError = new ObjectCopySourceError({
+              reason: 'http',
+              attempts: attempt + 1,
+              status: response.status,
+              cause: storageError(
+                'OBJECT_COPY_SOURCE_HTTP',
+                `Source HTTP ${response.status}`
+              ),
+            });
+            continue;
+          }
+          return Result.Ok({
+            type: 'copy_source_unavailable',
+            status: response.status,
+          });
+        }
+        const contentType = (response.headers.get('content-type') ?? '')
+          .split(';')[0]
+          ?.trim()
+          .toLowerCase();
+        if (
+          !contentType ||
+          !input.acceptedContentTypes
+            .map((type) => type.toLowerCase())
+            .includes(contentType)
+        ) {
+          // oxlint-disable-next-line no-await-in-loop -- discard unused source.
+          await discardResponseBody(response);
+          return Result.Ok({
+            type: 'copy_source_rejected',
+            reason: 'content_type',
+          });
+        }
+        if (hasOversizedResponseBody(response, input.maxBytes)) {
+          // oxlint-disable-next-line no-await-in-loop -- discard unused source.
+          await discardResponseBody(response);
+          return Result.Ok({
+            type: 'copy_source_rejected',
+            reason: 'declared_too_large',
+          });
+        }
+        // oxlint-disable-next-line no-await-in-loop -- bounded source reads.
+        const bytes = await readLimitedBody(response, input.maxBytes);
+        if (!bytes)
+          return Result.Ok({
+            type: 'copy_source_rejected',
+            reason: 'too_large',
+          });
+        return Result.Ok({
+          type: 'copy_source_downloaded',
+          bytes,
+          contentType,
+        });
+      } catch (cause) {
+        if (response) {
+          // oxlint-disable-next-line no-await-in-loop -- a failed stream must release its body.
+          await discardResponseBody(response);
+        }
+        lastError = new ObjectCopySourceError({
+          reason:
+            controller.signal.aborted ||
+            (cause instanceof Error && cause.name === 'AbortError')
+              ? 'timeout'
+              : 'network',
+          attempts: attempt + 1,
+          cause,
+        });
+      } finally {
+        clearTimeout(timeoutId);
+      }
     }
+    return Result.Error(
+      lastError ??
+        new ObjectCopySourceError({
+          reason: 'timeout',
+          attempts: 0,
+          cause: storageError(
+            'OBJECT_COPY_SOURCE_TIMEOUT',
+            'Source download budget exhausted'
+          ),
+        })
+    );
   }
 }
