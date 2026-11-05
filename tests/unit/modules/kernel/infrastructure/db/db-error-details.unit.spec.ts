@@ -1,7 +1,9 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+  classifyDatabaseFailure,
   extractDatabaseErrorDetails,
+  getDatabaseErrorCode,
   getConstraintName,
   getErrorDetail,
   isUniqueConstraintViolation,
@@ -55,4 +57,49 @@ describe('database error details', () => {
 
     expect(withDatabaseErrorDetails(context, 'plain failure')).toBe(context);
   });
+});
+
+it.each([
+  '2B000',
+  '2D000',
+  '2F005',
+  '3B001',
+  '3D000',
+  '3F000',
+  'P0001',
+  'HV000',
+  'XX000',
+])('finds SQLSTATE %s through application wrappers', (code) => {
+  const cause = Object.assign(new Error('driver'), { code });
+  const error = Object.assign(
+    new Error('application', { cause: new Error('drizzle', { cause }) }),
+    { code: 'APP_ERROR' }
+  );
+  expect(getDatabaseErrorCode(error)).toBe(code);
+  expect(classifyDatabaseFailure(error)).toMatchObject({
+    publication: 'rejected',
+    retryableRollback: false,
+  });
+});
+it.each(['40001', '40P01', '55P03'])(
+  'recognizes confirmed retryable rollback %s',
+  (code) => {
+    expect(
+      classifyDatabaseFailure({ cause: { cause: { code } } })
+    ).toMatchObject({ publication: 'rejected', retryableRollback: true });
+  }
+);
+it.each(['EPIPE', 'ECONNRESET', '08006', '40003', '57P01'])(
+  'preserves uncertainty for %s',
+  (code) => {
+    expect(classifyDatabaseFailure({ code })).toMatchObject({
+      publication: 'unknown',
+      retryableRollback: false,
+    });
+  }
+);
+it('terminates a cyclic cause chain', () => {
+  const error: { cause?: unknown } = {};
+  error.cause = error;
+  expect(getDatabaseErrorCode(error)).toBeUndefined();
 });

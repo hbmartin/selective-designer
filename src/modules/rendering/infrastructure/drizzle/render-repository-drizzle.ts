@@ -403,6 +403,77 @@ export const createRenderRepository = ({
       }
     },
 
+    async failResultAttempt(input) {
+      try {
+        const rows = await db
+          .update(resultTable)
+          .set({
+            status: 'failed',
+            errorMessage: input.reason.slice(0, 500),
+            completedAt: input.now,
+          })
+          .where(
+            and(
+              eq(resultTable.id, input.resultId),
+              inArray(resultTable.status, ['pending', 'submitted']),
+              input.attempt === undefined
+                ? undefined
+                : eq(resultTable.attempt, input.attempt),
+              input.providerRequestId == null
+                ? undefined
+                : eq(resultTable.providerRequestId, input.providerRequestId)
+            )
+          )
+          .returning({ id: resultTable.id });
+        return Result.Ok({
+          type: rows.length
+            ? 'result_marked_failed'
+            : 'result_attempt_superseded',
+        });
+      } catch (error) {
+        return Result.Error(dbError(error));
+      }
+    },
+    async lockResultForCompletion(resultId) {
+      try {
+        const [row] = await db
+          .select()
+          .from(resultTable)
+          .where(eq(resultTable.id, resultId))
+          .for('update');
+        if (!row) return Result.Ok({ type: 'result_not_found' });
+        const parsed = toResult(row);
+        if (parsed.isError()) return Result.Error(parsed.getError());
+        return Result.Ok({ type: 'result_locked', result: parsed.get() });
+      } catch (error) {
+        return Result.Error(dbError(error));
+      }
+    },
+    async completeResultAttempt(input) {
+      try {
+        const rows = await db
+          .update(resultTable)
+          .set({
+            ...input.completion,
+            status: 'succeeded',
+            outputImageId: input.imageId,
+          })
+          .where(
+            and(
+              eq(resultTable.id, input.resultId),
+              eq(resultTable.attempt, input.attempt),
+              eq(resultTable.providerRequestId, input.providerRequestId),
+              eq(resultTable.status, 'submitted')
+            )
+          )
+          .returning({ id: resultTable.id });
+        return Result.Ok({
+          type: rows.length ? 'result_completed' : 'result_attempt_superseded',
+        });
+      } catch (error) {
+        return Result.Error(dbError(error));
+      }
+    },
     async updateResult(input) {
       try {
         await db

@@ -1,3 +1,4 @@
+import { hasFramingChanged } from '@/modules/rendering';
 import { Result } from '@bloodyowl/boxed';
 import {
   createFakeObjectStorage,
@@ -178,6 +179,23 @@ const setup = (options: { enabledModelIds?: readonly string[] } = {}) => {
       },
     },
     resultImages: {
+      async findRegistered(input) {
+        const found = await renders.repository.findResult(input.resultId);
+        if (found.isOk() && found.get().type === 'result_found') {
+          const row = found.get();
+          if (
+            row.type === 'result_found' &&
+            row.result.status === 'succeeded' &&
+            row.result.outputImageId
+          )
+            return Result.Ok({
+              type: 'result_image_registered',
+              imageId: row.result.outputImageId,
+              ...resultSize,
+            });
+        }
+        return Result.Ok({ type: 'result_image_not_registered' });
+      },
       async register(input) {
         registered.push(input);
         const imageId = unwrapParseResult(
@@ -189,6 +207,14 @@ const setup = (options: { enabledModelIds?: readonly string[] } = {}) => {
           ownerId,
           workingKey: input.objectKey,
           ...resultSize,
+        });
+        await renders.repository.completeResultAttempt({
+          ...input,
+          imageId,
+          completion: {
+            ...input.completion,
+            framingChanged: hasFramingChanged(resultSize, input.sourceSize),
+          },
         });
         return Result.Ok({
           type: 'result_image_registered',

@@ -3,14 +3,14 @@ import { Result } from '@bloodyowl/boxed';
 import {
   createDesignPipelineUseCases,
   type DesignRepository,
-  type ImageAddedOutcome,
 } from '@/modules/design';
 import { createDesignRepository } from '@/modules/design/backend';
 import { getAiProvidersConfig } from '@/modules/kernel/backend';
-import { toImageId, toItemId, toRegionId } from '@/modules/kernel/domain/ids';
+import { toItemId, toRegionId } from '@/modules/kernel/domain/ids';
 import { createItemRepository } from '@/modules/moodboard/backend';
 import {
   createRenderingPipelineUseCases,
+  hasFramingChanged,
   type ImageModelAdapter,
   type ImageModels,
   type MaskCompositor,
@@ -35,7 +35,11 @@ import {
 import type { AutoDetectionScheduler } from '@/modules/segmentation';
 import { createRegionRepository } from '@/modules/segmentation/backend';
 
-import { writeImageWithDetection } from './image-detection-intent';
+import {
+  findRegisteredRenderImage,
+  renderImageIdentity,
+  writeRenderImageWithDetection,
+} from './image-detection-intent';
 import { getPipelineKernel, type PipelineKernel } from './pipeline-kernel';
 import { createAutoDetectionScheduler } from './segmentation-scheduler';
 import { createCachedFactory } from './shared/singleton';
@@ -143,52 +147,73 @@ export const createRenderInputs = (kernel: InputsKernel): RenderInputs => ({
 export const createResultImages = (
   kernel: InputsKernel & Pick<PipelineKernel, 'clock'>,
   scheduler: AutoDetectionScheduler = createAutoDetectionScheduler(kernel)
-): ResultImages => ({
-  async register(input) {
-    const object = await kernel.objectStorage.getObjectBytes(input.objectKey);
-    if (object.isError()) return Result.Error(object.getError());
-    const found = object.get();
-    if (found.type === 'object_not_found')
-      return Result.Ok({ type: 'result_image_unreadable' });
-    const dimensions = readImageDimensions(found.bytes);
-    if (dimensions.type === 'unreadable')
-      return Result.Ok({ type: 'result_image_unreadable' });
-    const size = { width: dimensions.width, height: dimensions.height };
-    const rawId = kernel.idGenerator.createId();
-    if (rawId.isError()) return Result.Error(rawId.getError());
-    const allocatedId = toImageId(rawId.get());
-    if (allocatedId.isError()) return Result.Error(allocatedId.getError());
-    const image = {
-      id: allocatedId.get(),
-      kind: 'result' as const,
-      originalKey: input.objectKey,
-      originalContentType:
-        contentTypeForFormat(dimensions.format) ?? input.contentType,
-      original: size,
-      workingKey: input.objectKey,
-      working: size,
-    };
-    const added = await writeImageWithDetection<ImageAddedOutcome>(kernel, {
-      carryFromImageId: input.renderSourceImageId,
-      image: { ...image, designId: input.designId },
-      save: (repository) =>
-        repository.addImage({ designId: input.designId, image }),
-    });
-    if (added.isError()) return Result.Error(added.getError());
-    const imageId = added.get().image.id;
-    const scheduled = await scheduler.schedule({
-      imageId,
-    });
-    if (scheduled.isError()) {
-      // The image and intent have committed. The editor can recover dispatch.
+): ResultImages => {
+  const dispatch = async (
+    input: Parameters<ResultImages['findRegistered']>[0],
+    imageId: Parameters<AutoDetectionScheduler['schedule']>[0]['imageId']
+  ) => {
+    // Historical registrations are already published and may have no intent.
+    if (renderImageIdentity(input).imageId !== imageId) return;
+    const scheduled = await scheduler.schedule({ imageId });
+    if (scheduled.isError())
       kernel.logger.warn({
         event: 'rendering.result.detection_not_scheduled',
         details: { imageId },
       });
-    }
-    return Result.Ok({ type: 'result_image_registered', imageId, ...size });
-  },
-});
+  };
+  return {
+    async findRegistered(input) {
+      const found = await findRegisteredRenderImage(kernel, input);
+      if (found.isOk() && found.get().type === 'result_image_registered') {
+        const saved = found.get();
+        if (saved.type === 'result_image_registered')
+          await dispatch(input, saved.imageId);
+      }
+      return found;
+    },
+    async register(input) {
+      const existing = await findRegisteredRenderImage(kernel, input);
+      if (existing.isError()) return Result.Error(existing.getError());
+      const registered = existing.get();
+      if (registered.type !== 'result_image_not_registered') {
+        if (registered.type === 'result_image_registered')
+          await dispatch(input, registered.imageId);
+        return Result.Ok(registered);
+      }
+      const object = await kernel.objectStorage.getObjectBytes(input.objectKey);
+      if (object.isError()) return Result.Error(object.getError());
+      const found = object.get();
+      if (found.type === 'object_not_found')
+        return Result.Ok({ type: 'result_image_unreadable' });
+      const dimensions = readImageDimensions(found.bytes);
+      if (dimensions.type === 'unreadable')
+        return Result.Ok({ type: 'result_image_unreadable' });
+      const size = { width: dimensions.width, height: dimensions.height };
+      const saved = await writeRenderImageWithDetection(kernel, {
+        ...input,
+        carryFromImageId: input.renderSourceImageId,
+        image: {
+          kind: 'result',
+          originalKey: input.objectKey,
+          originalContentType:
+            contentTypeForFormat(dimensions.format) ?? input.contentType,
+          original: size,
+          workingKey: input.objectKey,
+          working: size,
+        },
+        completion: {
+          ...input.completion,
+          framingChanged: hasFramingChanged(size, input.sourceSize),
+        },
+      });
+      if (saved.isError()) return Result.Error(saved.getError());
+      const outcome = saved.get();
+      if (outcome.type === 'result_image_registered')
+        await dispatch(input, outcome.imageId);
+      return Result.Ok(outcome);
+    },
+  };
+};
 
 const createLiveAdapter = (
   modelId: ModelId,

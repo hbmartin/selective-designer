@@ -83,12 +83,7 @@ const buildDesignUseCases = (overrides?: DesignOverrides) => {
     writeDesignWithBaseImage: (input) => {
       if (overrides?.designRepository)
         return overrides.designRepository.create(input);
-      return writeImageWithDetection(kernel, {
-        waitingForCopy: input.copiedFromDesignId !== null,
-        carryFromImageId: null,
-        save: (design) => design.create(input),
-        image: { ...input.baseImage, designId: input.id },
-      });
+      return writeImageWithDetection(kernel, input);
     },
     uploadIntentStore: kernel.uploadIntentStore,
     objectStorage: kernel.objectStorage,

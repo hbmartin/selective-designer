@@ -4,7 +4,11 @@ import { makeTestKernel } from '@tests/unit/composition/helpers';
 import { expect, it, vi } from 'vitest';
 
 import { getDesignUseCases } from '@/composition/design';
-import { writeImageWithDetection } from '@/composition/image-detection-intent';
+import {
+  writeImageWithDetection,
+  writeRenderImageWithDetection,
+  findRegisteredRenderImage,
+} from '@/composition/image-detection-intent';
 import { createResultImages } from '@/composition/rendering-pipeline';
 import { toDesignName } from '@/modules/design';
 import {
@@ -13,10 +17,14 @@ import {
   toImageId,
   toObjectKey,
   toUserId,
+  toRenderResultId,
 } from '@/modules/kernel';
 
-vi.mock('@/composition/image-detection-intent', () => ({
+vi.mock('@/composition/image-detection-intent', async (original) => ({
+  ...(await original<typeof import('@/composition/image-detection-intent')>()),
   writeImageWithDetection: vi.fn(),
+  writeRenderImageWithDetection: vi.fn(),
+  findRegisteredRenderImage: vi.fn(),
 }));
 
 const failure = new AppError({
@@ -63,9 +71,12 @@ it('routes production base-image creation through the explicit atomic writer', a
   expect(writeImageWithDetection).toHaveBeenCalledWith(
     kernel,
     expect.objectContaining({
-      waitingForCopy: false,
-      image: expect.objectContaining({ kind: 'base', originalKey, workingKey }),
-      save: expect.any(Function),
+      copiedFromDesignId: null,
+      baseImage: expect.objectContaining({
+        kind: 'base',
+        originalKey,
+        workingKey,
+      }),
     })
   );
   expect(listener.imageArrived).not.toHaveBeenCalled();
@@ -84,23 +95,34 @@ it('allocates a render image before handing its write to transaction recovery', 
     contentType: 'image/png',
   });
   const scheduler = { schedule: vi.fn() };
-  vi.mocked(writeImageWithDetection).mockResolvedValueOnce(
+  vi.mocked(writeRenderImageWithDetection).mockResolvedValueOnce(
     Result.Error(failure)
   );
+  vi.mocked(findRegisteredRenderImage).mockResolvedValueOnce(
+    Result.Ok({ type: 'result_image_not_registered' })
+  );
   const result = await createResultImages(kernel, scheduler).register({
+    resultId: okValue(toRenderResultId('result')),
+    attempt: 1,
+    providerRequestId: 'provider',
+    completion: {
+      modelVersion: null,
+      costUsdMicros: null,
+      costSource: 'unavailable',
+      completedAt: new Date(),
+    },
+    sourceSize: { width: 1, height: 1 },
     designId: okValue(toDesignId('design')),
     renderSourceImageId: okValue(toImageId('source')),
     objectKey,
     contentType: 'image/png',
   });
   expect(result.isError() && result.getError()).toBe(failure);
-  expect(writeImageWithDetection).toHaveBeenLastCalledWith(
+  expect(writeRenderImageWithDetection).toHaveBeenLastCalledWith(
     kernel,
     expect.objectContaining({
       image: expect.objectContaining({
-        id: 'generated-id',
         kind: 'result',
-        designId: 'design',
         originalKey: objectKey,
       }),
     })

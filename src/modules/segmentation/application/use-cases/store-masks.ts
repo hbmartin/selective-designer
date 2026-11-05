@@ -4,7 +4,9 @@ import type {
   ObjectCopyNewOutcome,
   ObjectCreateOutcome,
 } from '@/modules/kernel/application/ports/object-storage';
+import { ObjectCopySourceError } from '@/modules/kernel/application/ports/object-storage';
 import { AppError } from '@/modules/kernel/domain/errors/app-error';
+import { safeErrorDiagnostics } from '@/modules/kernel/domain/errors/safe-error-diagnostics';
 import {
   type ObjectKey,
   type ProviderCallId,
@@ -96,6 +98,7 @@ export async function storeSegmentedMasks(
 ): Promise<SegmentationResultOf<MasksStored | MaskUnavailable>> {
   const regions: NewRegion[] = [];
   const createdKeys: ObjectKey[] = [];
+  let sourceError: ObjectCopySourceError | undefined;
 
   for (const mask of input.result.masks) {
     const identity = newRegionMask(deps.idGenerator);
@@ -124,6 +127,7 @@ export async function storeSegmentedMasks(
           cacheControl: IMMUTABLE_OBJECT_CACHE_CONTROL,
         }));
     if (stored.isError()) {
+      const error = stored.getError();
       // An uncertain destination is not ours to delete. Earlier confirmed creations are.
       deps.logger.warn({
         event: 'segmentation.mask.storage_failed',
@@ -132,8 +136,23 @@ export async function storeSegmentedMasks(
           source: input.source,
           objectKey,
           code: stored.getError().code,
+          ...safeErrorDiagnostics(error),
+          ...(error instanceof ObjectCopySourceError
+            ? {
+                reason: error.reason,
+                attempts: error.attempts,
+                status: error.sourceStatus,
+              }
+            : {}),
         },
       });
+      if (
+        error instanceof ObjectCopySourceError &&
+        input.source !== 'detection'
+      ) {
+        sourceError ??= error;
+        continue;
+      }
       // oxlint-disable-next-line no-await-in-loop -- stop and clean this batch.
       await discardUnpublishedMasks(deps, createdKeys);
       return Result.Error(stored.getError());
@@ -169,7 +188,7 @@ export async function storeSegmentedMasks(
             ? { reason: outcome.reason }
             : {
                 status: outcome.status,
-                reason: 'reason' in outcome ? outcome.reason : 'http',
+                reason: 'http',
               }),
         },
       });
@@ -203,6 +222,7 @@ export async function storeSegmentedMasks(
       carriedFromRegionId: null,
     });
   }
+  if (regions.length === 0 && sourceError) return Result.Error(sourceError);
   return Result.Ok({ type: 'masks_stored', regions });
 }
 

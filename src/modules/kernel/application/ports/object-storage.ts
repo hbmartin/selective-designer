@@ -13,6 +13,7 @@ import type { Result } from '@bloodyowl/boxed';
 
 import type { ApplicationResult } from '../result';
 import type { UploadRejectedError } from '../../domain/errors/upload-rejected-error';
+export { ObjectCopySourceError } from '../../domain/errors/object-copy-source-error';
 
 export type ObjectUploadPrepared = {
   /** Server-generated storage object key. The client never controls this. */
@@ -66,11 +67,6 @@ export type ObjectCopyOutcome =
     }
   /** The source answered with a non-success status (e.g. expired link). */
   | { type: 'copy_source_unavailable'; status: number }
-  | {
-      type: 'copy_source_unavailable';
-      reason: 'timeout' | 'network';
-      status?: never;
-    }
   /** The source answered, but its type or size breaks the given limits. */
   | {
       type: 'copy_source_rejected';

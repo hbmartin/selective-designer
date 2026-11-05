@@ -29,7 +29,51 @@ export type NewRenderResult = {
   skipReason: string | null;
 };
 
+export type RenderAttemptIdentity = {
+  resultId: RenderResultId;
+  attempt: number;
+  providerRequestId: string;
+};
+export type RenderCompletion = Pick<
+  RenderResult,
+  | 'modelVersion'
+  | 'costUsdMicros'
+  | 'costSource'
+  | 'completedAt'
+  | 'framingChanged'
+>;
+
 export interface RenderRepository {
+  failResultAttempt(input: {
+    resultId: RenderResultId;
+    attempt?: number;
+    providerRequestId?: string | null;
+    reason: string;
+    now: Date;
+  }): Promise<
+    ApplicationResult<
+      { type: 'result_marked_failed' } | { type: 'result_attempt_superseded' }
+    >
+  >;
+  /** Transaction-scoped row lock held through image publication. */
+  lockResultForCompletion(
+    resultId: RenderResultId
+  ): Promise<
+    ApplicationResult<
+      | { type: 'result_locked'; result: RenderResult }
+      | { type: 'result_not_found' }
+    >
+  >;
+  completeResultAttempt(
+    input: RenderAttemptIdentity & {
+      imageId: ImageId;
+      completion: RenderCompletion;
+    }
+  ): Promise<
+    ApplicationResult<
+      { type: 'result_completed' } | { type: 'result_attempt_superseded' }
+    >
+  >;
   findDraft(
     renderSourceImageId: ImageId
   ): Promise<
@@ -184,23 +228,39 @@ export interface RenderInputs {
  * starts eager detection with region carry-over from the render source.
  */
 export interface ResultImages {
-  register(input: {
-    designId: DesignId;
-    renderSourceImageId: ImageId;
-    objectKey: ObjectKey;
-    contentType: string;
-  }): Promise<
+  findRegistered(
+    input: RenderAttemptIdentity
+  ): Promise<
     ApplicationResult<
-      | {
-          type: 'result_image_registered';
-          imageId: ImageId;
-          width: number;
-          height: number;
-        }
+      | RegisteredResultImage
+      | { type: 'result_image_not_registered' }
+      | { type: 'result_attempt_superseded' }
+    >
+  >;
+  register(
+    input: RenderAttemptIdentity & {
+      designId: DesignId;
+      renderSourceImageId: ImageId;
+      objectKey: ObjectKey;
+      contentType: string;
+      completion: Omit<RenderCompletion, 'framingChanged'>;
+      sourceSize: { width: number; height: number };
+    }
+  ): Promise<
+    ApplicationResult<
+      | RegisteredResultImage
       | { type: 'result_image_unreadable' }
+      | { type: 'result_attempt_superseded' }
     >
   >;
 }
+
+export type RegisteredResultImage = {
+  type: 'result_image_registered';
+  imageId: ImageId;
+  width: number;
+  height: number;
+};
 
 // ---- Masks -----------------------------------------------------------
 
