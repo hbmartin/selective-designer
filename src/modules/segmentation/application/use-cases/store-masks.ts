@@ -1,9 +1,10 @@
 import { Result } from '@bloodyowl/boxed';
 
 import type {
-  ObjectCopyOutcome,
-  ObjectStoredOutcome,
+  ObjectCopyNewOutcome,
+  ObjectCreateOutcome,
 } from '@/modules/kernel/application/ports/object-storage';
+import { AppError } from '@/modules/kernel/domain/errors/app-error';
 import {
   type ObjectKey,
   type ProviderCallId,
@@ -37,15 +38,24 @@ const newRegionMask = (idGenerator: SegmentationPipelineDeps['idGenerator']) =>
 
 type MaskStorageDeps = Pick<
   SegmentationPipelineDeps,
-  'objectStorage' | 'logger'
+  'objectStorage' | 'logger' | 'regionRepository'
 >;
 
 export async function discardUnpublishedMasks(
   deps: MaskStorageDeps,
   keys: readonly ObjectKey[]
 ) {
+  if (keys.length === 0) return;
+  const checked = await deps.regionRepository.unreferencedMaskKeys(keys);
+  if (checked.isError()) {
+    deps.logger.warn({
+      event: 'segmentation.mask.cleanup_check_failed',
+      details: { code: checked.getError().code },
+    });
+    return;
+  }
   await Promise.all(
-    keys.map(async (objectKey) => {
+    checked.get().keys.map(async (objectKey) => {
       const deleted = await deps.objectStorage.deleteObject(objectKey);
       if (deleted.isError()) {
         deps.logger.warn({
@@ -85,62 +95,87 @@ export async function storeSegmentedMasks(
   input: StoreMaskInput
 ): Promise<SegmentationResultOf<MasksStored | MaskUnavailable>> {
   const regions: NewRegion[] = [];
-  const attemptedKeys: ObjectKey[] = [];
+  const createdKeys: ObjectKey[] = [];
 
   for (const mask of input.result.masks) {
     const identity = newRegionMask(deps.idGenerator);
     if (identity.isError()) {
       // oxlint-disable-next-line no-await-in-loop -- stop and clean this batch.
-      await discardUnpublishedMasks(deps, attemptedKeys);
+      await discardUnpublishedMasks(deps, createdKeys);
       return Result.Error(identity.getError());
     }
 
     const { id, objectKey } = identity.get();
-    attemptedKeys.push(objectKey);
     // oxlint-disable-next-line no-await-in-loop -- a handful of masks per call.
     const stored: SegmentationResultOf<
-      ObjectCopyOutcome | ObjectStoredOutcome
+      ObjectCopyNewOutcome | ObjectCreateOutcome
     > = await (mask.mask.kind === 'url'
-      ? deps.objectStorage.copyFromUrl({
+      ? deps.objectStorage.copyNewObjectFromUrl({
           sourceUrl: mask.mask.url,
           objectKey,
           acceptedContentTypes: ['image/png', 'image/webp'],
           maxBytes: MASK_MAX_BYTES,
           cacheControl: IMMUTABLE_OBJECT_CACHE_CONTROL,
         })
-      : deps.objectStorage.putObject({
+      : deps.objectStorage.createObject({
           objectKey,
           body: mask.mask.bytes,
           contentType: 'image/png',
           cacheControl: IMMUTABLE_OBJECT_CACHE_CONTROL,
         }));
-    if (
-      stored.isError() &&
-      input.source !== 'detection' &&
-      stored.getError().code === 'OBJECT_STORAGE_COPY_FAILED'
-    ) {
-      attemptedKeys.pop();
-      continue;
-    }
     if (stored.isError()) {
-      // A failed upload may have written the destination before losing its response.
+      // An uncertain destination is not ours to delete. Earlier confirmed creations are.
+      deps.logger.warn({
+        event: 'segmentation.mask.storage_failed',
+        details: {
+          imageId: input.image.imageId,
+          source: input.source,
+          objectKey,
+          code: stored.getError().code,
+        },
+      });
       // oxlint-disable-next-line no-await-in-loop -- stop and clean this batch.
-      await discardUnpublishedMasks(deps, attemptedKeys);
+      await discardUnpublishedMasks(deps, createdKeys);
       return Result.Error(stored.getError());
     }
     const outcome = stored.get();
+    if (outcome.type === 'object_already_exists') {
+      deps.logger.warn({
+        event: 'segmentation.mask.key_collision',
+        details: { imageId: input.image.imageId, objectKey },
+      });
+      // oxlint-disable-next-line no-await-in-loop -- stop and clean this batch.
+      await discardUnpublishedMasks(deps, createdKeys);
+      return Result.Error(
+        new AppError({
+          code: 'MASK_KEY_COLLISION',
+          category: 'system',
+          status: 500,
+          message: 'Could not create a fresh region mask',
+        })
+      );
+    }
     if (
       outcome.type === 'copy_source_rejected' ||
       outcome.type === 'copy_source_unavailable'
     ) {
-      attemptedKeys.pop();
       deps.logger.warn({
         event: 'segmentation.mask.copy_failed',
-        details: { outcome: outcome.type },
+        details: {
+          imageId: input.image.imageId,
+          source: input.source,
+          outcome: outcome.type,
+          ...(outcome.type === 'copy_source_rejected'
+            ? { reason: outcome.reason }
+            : {
+                status: outcome.status,
+                reason: 'reason' in outcome ? outcome.reason : 'http',
+              }),
+        },
       });
       if (input.source === 'detection') {
         // oxlint-disable-next-line no-await-in-loop -- stop and clean this batch.
-        await discardUnpublishedMasks(deps, attemptedKeys);
+        await discardUnpublishedMasks(deps, createdKeys);
         return Result.Ok({
           type: 'detection_mask_unavailable',
           reason:
@@ -154,6 +189,7 @@ export async function storeSegmentedMasks(
       continue;
     }
 
+    createdKeys.push(objectKey);
     regions.push({
       id,
       designId: input.image.designId,

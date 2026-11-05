@@ -101,18 +101,10 @@ export const createSegmentationHandlers = ({
       }),
       {
         ...common,
-        auto_detection_scheduled: () => ({
-          type: 'auto_detection_scheduled' as const,
-        }),
-        detection_queue_uncertain: () => ({
-          type: 'detection_queue_uncertain' as const,
-        }),
-        detection_queue_rejected: () => ({
-          type: 'detection_queue_rejected' as const,
-        }),
-        detection_not_retryable: () => ({
-          type: 'detection_not_retryable' as const,
-        }),
+        auto_detection_scheduled: (outcome) => outcome,
+        detection_queue_uncertain: (outcome) => outcome,
+        detection_queue_rejected: (outcome) => outcome,
+        detection_not_retryable: (outcome) => outcome,
       }
     ),
   segment: (

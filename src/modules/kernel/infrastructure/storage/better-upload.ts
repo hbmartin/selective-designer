@@ -11,12 +11,16 @@ import { mapValues } from 'remeda';
 
 import type {
   ObjectBytesOutcome,
+  ObjectCopyInput,
+  ObjectCopyNewOutcome,
   ObjectCopyOutcome,
+  ObjectCreateOutcome,
   ObjectDeleteOutcome,
   ObjectStoragePort,
   ObjectStoredOutcome,
   ObjectUploadRequestHandler,
   ObjectUploadRouteDefinition,
+  ObjectWriteInput,
   SignedReadUrlOutcome,
 } from '@/modules/kernel/application/ports/object-storage';
 import type { ApplicationResult } from '@/modules/kernel/application/result';
@@ -248,13 +252,114 @@ export class BetterUploadObjectStorage implements ObjectStoragePort {
     }
   }
 
-  async copyFromUrl(input: {
-    sourceUrl: string;
-    objectKey: string;
-    acceptedContentTypes: readonly string[];
-    maxBytes: number;
-    cacheControl?: string;
-  }): Promise<ApplicationResult<ObjectCopyOutcome>> {
+  async createObject(
+    input: ObjectWriteInput
+  ): Promise<ApplicationResult<ObjectCreateOutcome>> {
+    let timeoutId: ReturnType<typeof setTimeout> | undefined;
+    try {
+      const config = getStorageConfig();
+      const client = createUploadClient();
+      const controller = new AbortController();
+      timeoutId = setTimeout(() => controller.abort(), OBJECT_COPY_TIMEOUT_MS);
+      const response = await client.s3.fetch(
+        `${client.buildBucketUrl(config.bucketName)}/${input.objectKey}`,
+        {
+          method: 'PUT',
+          signal: controller.signal,
+          headers: {
+            'If-None-Match': '*',
+            'Content-Type': input.contentType,
+            'Content-Length': String(input.body.byteLength),
+            ...(input.cacheControl
+              ? { 'Cache-Control': input.cacheControl }
+              : {}),
+          },
+          body: new Uint8Array(input.body),
+        }
+      );
+      await discardResponseBody(response);
+      if (response.status === 412)
+        return Result.Ok({ type: 'object_already_exists' });
+      if (response.ok)
+        return Result.Ok({
+          type: 'object_created',
+          objectKey: input.objectKey,
+        });
+      return Result.Error(
+        storageError(
+          'OBJECT_STORAGE_CREATE_FAILED',
+          `Object storage create failed with status ${response.status}`
+        )
+      );
+    } catch (cause) {
+      return Result.Error(
+        storageError(
+          'OBJECT_STORAGE_CREATE_FAILED',
+          'Object storage create failed',
+          cause
+        )
+      );
+    } finally {
+      clearTimeout(timeoutId);
+    }
+  }
+
+  async copyNewObjectFromUrl(
+    input: ObjectCopyInput
+  ): Promise<ApplicationResult<ObjectCopyNewOutcome>> {
+    const downloaded = await this.readCopySource(input);
+    if (downloaded.isError()) {
+      const cause = downloaded.getError().cause;
+      return Result.Ok({
+        type: 'copy_source_unavailable',
+        reason:
+          cause instanceof Error && cause.name === 'AbortError'
+            ? 'timeout'
+            : 'network',
+      });
+    }
+    const source = downloaded.get();
+    if (source.type !== 'copy_source_downloaded') return Result.Ok(source);
+    return this.createObject({
+      objectKey: input.objectKey,
+      body: source.bytes,
+      contentType: source.contentType,
+      ...(input.cacheControl ? { cacheControl: input.cacheControl } : {}),
+    });
+  }
+
+  async copyFromUrl(
+    input: ObjectCopyInput
+  ): Promise<ApplicationResult<ObjectCopyOutcome>> {
+    const downloaded = await this.readCopySource(input);
+    if (downloaded.isError()) return Result.Error(downloaded.getError());
+    const source = downloaded.get();
+    if (source.type !== 'copy_source_downloaded') return Result.Ok(source);
+    const stored = await this.putObject({
+      objectKey: input.objectKey,
+      body: source.bytes,
+      contentType: source.contentType,
+      ...(input.cacheControl ? { cacheControl: input.cacheControl } : {}),
+    });
+    if (stored.isError()) return Result.Error(stored.getError());
+    return Result.Ok({
+      type: 'object_copied',
+      objectKey: input.objectKey,
+      contentType: source.contentType,
+      byteLength: source.bytes.byteLength,
+    });
+  }
+
+  private async readCopySource(input: ObjectCopyInput): Promise<
+    ApplicationResult<
+      | Exclude<ObjectCopyOutcome, { type: 'object_copied' }>
+      | {
+          type: 'copy_source_downloaded';
+          bytes: Uint8Array;
+          contentType: string;
+        }
+    >
+  > {
     let source: URL;
     try {
       source = new URL(input.sourceUrl);
@@ -315,19 +420,7 @@ export class BetterUploadObjectStorage implements ObjectStoragePort {
       if (!bytes) {
         return Result.Ok({ type: 'copy_source_rejected', reason: 'too_large' });
       }
-      const stored = await this.putObject({
-        objectKey: input.objectKey,
-        body: bytes,
-        contentType,
-        ...(input.cacheControl ? { cacheControl: input.cacheControl } : {}),
-      });
-      if (stored.isError()) return Result.Error(stored.getError());
-      return Result.Ok({
-        type: 'object_copied',
-        objectKey: input.objectKey,
-        contentType,
-        byteLength: bytes.byteLength,
-      });
+      return Result.Ok({ type: 'copy_source_downloaded', bytes, contentType });
     } catch (error) {
       return Result.Error(
         storageError(

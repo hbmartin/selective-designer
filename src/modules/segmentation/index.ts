@@ -13,6 +13,7 @@ export {
   DETECTION_START_WINDOW_MS,
 } from './application/use-cases/types';
 export * from './domain/region';
+export { RegionWriteError } from './domain/region-write-error';
 export {
   createSegmentationPipelineUseCases,
   createSegmentationUseCases,

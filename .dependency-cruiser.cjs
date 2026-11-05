@@ -61,6 +61,14 @@ module.exports = {
       to: { path: '^src/modules/(?!auth/|email/|kernel/)[^/]+/presentation' },
     },
     {
+      name: 'segmentation-infrastructure-only-application-ports',
+      severity: 'error',
+      comment:
+        'Segmentation adapters depend on domain rules and application ports, not application implementations.',
+      from: { path: '^src/modules/segmentation/infrastructure/' },
+      to: { path: '^src/modules/segmentation/application/(?!ports(?:/|$))' },
+    },
+    {
       name: 'application-no-infrastructure',
       severity: 'error',
       from: { path: '^src/modules/[^/]+/application' },

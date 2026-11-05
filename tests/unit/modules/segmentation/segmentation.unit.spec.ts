@@ -15,6 +15,7 @@ import {
   toGeneratedId,
   toImageId,
   toObjectKey,
+  toRegionId,
   toUserId,
 } from '@/modules/kernel/domain/ids';
 import { unwrapParseResult } from '@/modules/kernel/testing';
@@ -25,6 +26,7 @@ import {
   type NewRegion,
   type Region,
   type RegionRepository,
+  RegionWriteError,
   type Segmenter,
   toFractionalBox,
 } from '@/modules/segmentation';
@@ -50,6 +52,15 @@ const fakeRegions = () => {
     createdAt: now,
   });
   const repository: RegionRepository = {
+    async matchImageWrite() {
+      return Result.Ok({ type: 'image_write_not_matched' });
+    },
+    async unreferencedMaskKeys(keys) {
+      return Result.Ok({
+        type: 'unreferenced_mask_keys',
+        keys: keys.filter((key) => !rows.some((row) => row.maskKey === key)),
+      });
+    },
     async findDetection() {
       return Result.Ok({
         type: 'detection_lease',
@@ -190,7 +201,15 @@ const setup = (segmenter: Segmenter = createFakeSegmenter()) => {
       categoriesOf: async () => Result.Ok(['Lighting', 'Plants']),
     },
   });
-  return { useCases, pipeline, regions, storage, calls, intents };
+  return {
+    useCases,
+    pipeline,
+    regions,
+    storage,
+    calls,
+    intents,
+    idGenerator: common.idGenerator,
+  };
 };
 
 describe('segmentation domain', () => {
@@ -333,8 +352,14 @@ describe('interactive segmentation', () => {
       }
       expect([...ctx.storage.objects.keys()]).toEqual(
         scenario === 'upload failure'
-          ? ['region-masks/previous.png']
-          : ['region-masks/previous.png', 'region-masks/r1.png']
+          ? ['region-masks/previous.png', 'region-masks/r2.png']
+          : scenario === 'cleanup failure'
+            ? [
+                'region-masks/previous.png',
+                'region-masks/r1.png',
+                'region-masks/r2.png',
+              ]
+            : ['region-masks/previous.png', 'region-masks/r1.png']
       );
     }
   );
@@ -609,7 +634,9 @@ describe('segmentation pipeline', () => {
         concept: 'window',
         runId: 'run-1',
       });
-      expect(ctx.storage.objects.size).toBe(0);
+      expect(ctx.storage.objects.size).toBe(
+        scenario === 'lost upload response' ? 1 : 0
+      );
       if (scenario === 'zero masks') {
         expect(okValue(outcome)).toEqual({
           type: 'concept_detected',
@@ -711,20 +738,20 @@ it.each([
 );
 
 it.each([
-  { code: 'REGION_INSERT_REJECTED', keys: ['region-masks/previous.png'] },
+  { publication: 'rejected' as const, keys: ['region-masks/previous.png'] },
   {
-    code: 'REGION_REPOSITORY_ERROR',
+    publication: 'unknown' as const,
     keys: ['region-masks/previous.png', 'region-masks/r1.png'],
   },
 ])(
-  'cleans interactive masks only when the database reports $code',
-  async ({ code, keys }) => {
+  'cleans interactive masks only when publication is $publication',
+  async ({ publication, keys }) => {
     const ctx = setup();
     ctx.storage.objects.set('region-masks/previous.png', {
       bytes: Uint8Array.of(1),
       contentType: 'image/png',
     });
-    const error = new AppError({ code, category: 'system', status: 500 });
+    const error = new RegionWriteError(publication, new Error('insert failed'));
     vi.spyOn(ctx.regions.repository, 'insertMany').mockResolvedValue(
       Result.Error(error)
     );
@@ -738,3 +765,238 @@ it.each([
     expect([...ctx.storage.objects.keys()]).toEqual(keys);
   }
 );
+
+it('never overwrites or deletes a published mask after an ID collision', async () => {
+  const ctx = setup();
+  const input = {
+    currentUserId: ownerId,
+    imageId: baseImageId,
+    prompt: { type: 'text' as const, text: 'chair' },
+    label: 'Chair',
+  };
+  await ctx.useCases.segment(input);
+  const original = { bytes: Uint8Array.of(90, 91), contentType: 'image/png' };
+  ctx.storage.objects.set('region-masks/r1.png', original);
+  vi.spyOn(ctx.idGenerator, 'createId').mockReturnValue(toGeneratedId('r1'));
+  const deleted = vi.spyOn(ctx.storage.storage, 'deleteObject');
+  const result = await ctx.useCases.segment(input);
+  expect(result.isError() && result.getError().code).toBe('MASK_KEY_COLLISION');
+  expect(ctx.storage.objects.get('region-masks/r1.png')).toEqual(original);
+  expect(ctx.regions.rows).toHaveLength(1);
+  expect(deleted).not.toHaveBeenCalled();
+});
+
+it('preserves masks when the reference lookup cannot establish cleanup safety', async () => {
+  const ctx = setup();
+  const original = new RegionWriteError(
+    'rejected',
+    new Error('constraint failed')
+  );
+  vi.spyOn(ctx.regions.repository, 'insertMany').mockResolvedValue(
+    Result.Error(original)
+  );
+  vi.spyOn(ctx.regions.repository, 'unreferencedMaskKeys').mockResolvedValue(
+    Result.Error(
+      new AppError({ code: 'LOOKUP_FAILED', category: 'system', status: 500 })
+    )
+  );
+  const deleted = vi.spyOn(ctx.storage.storage, 'deleteObject');
+  const result = await ctx.useCases.segment({
+    currentUserId: ownerId,
+    imageId: baseImageId,
+    prompt: { type: 'text', text: 'chair' },
+    label: 'Chair',
+  });
+  expect(result.isError() && result.getError()).toBe(original);
+  expect(ctx.storage.objects.has('region-masks/r1.png')).toBe(true);
+  expect(deleted).not.toHaveBeenCalled();
+});
+
+it('logs a skipped interactive download and retains the paid provider record', async () => {
+  const ctx = setup({
+    async segment() {
+      return Result.Ok({
+        type: 'segmented',
+        provider: 'fake',
+        endpoint: 'fake/sam',
+        providerRequestId: undefined,
+        costUsdMicros: 20,
+        costSource: 'price_table',
+        masks: [
+          {
+            mask: {
+              kind: 'url',
+              url: 'https://provider.test/expired.png?secret=hidden',
+            },
+            box: [0, 0, 10, 10],
+            score: 1,
+          },
+        ],
+      });
+    },
+  });
+  const warn = vi.spyOn(logger, 'warn');
+  const outcome = await ctx.useCases.segment({
+    currentUserId: ownerId,
+    imageId: baseImageId,
+    prompt: { type: 'text', text: 'chair' },
+    label: 'Chair',
+  });
+  expect(okValue(outcome)).toEqual({
+    type: 'segmentation_failed',
+    reason: 'mask_unavailable',
+  });
+  expect(warn).toHaveBeenCalledWith(
+    expect.objectContaining({
+      event: 'segmentation.mask.copy_failed',
+      details: expect.objectContaining({
+        status: 404,
+        reason: 'http',
+        imageId: baseImageId,
+      }),
+    })
+  );
+  expect(JSON.stringify(warn.mock.calls)).not.toContain('secret=hidden');
+  expect([...ctx.calls.calls.values()]).toMatchObject([
+    { status: 'succeeded', costUsdMicros: 20 },
+  ]);
+  warn.mockRestore();
+});
+
+it('cleans only its confirmed creation when an ID repeats within a batch', async () => {
+  const ctx = setup({
+    async segment() {
+      return Result.Ok({
+        type: 'segmented',
+        provider: 'fake',
+        endpoint: 'fake/sam',
+        providerRequestId: undefined,
+        costUsdMicros: 20,
+        costSource: 'price_table',
+        masks: [1, 2].map(() => ({
+          mask: { kind: 'bytes' as const, bytes: Uint8Array.of(1) },
+          box: [0, 0, 10, 10] as [number, number, number, number],
+          score: 1,
+        })),
+      });
+    },
+  });
+  vi.spyOn(ctx.idGenerator, 'createId').mockReturnValue(
+    toGeneratedId('repeated')
+  );
+  const result = await ctx.useCases.segment({
+    currentUserId: ownerId,
+    imageId: baseImageId,
+    prompt: { type: 'text', text: 'chair' },
+    label: 'Chair',
+  });
+  expect(result.isError() && result.getError().code).toBe('MASK_KEY_COLLISION');
+  expect(ctx.storage.objects.size).toBe(0);
+  expect(ctx.regions.rows).toHaveLength(0);
+  expect(ctx.calls.calls.size).toBe(1);
+});
+
+it('preserves a confirmed-created object referenced by a copied region', async () => {
+  const ctx = setup();
+  ctx.regions.rows.push({
+    id: okValue(toRegionId('copied-region')),
+    imageId: resultImageId,
+    designId,
+    maskKey: okValue(toObjectKey('region-masks/r1.png')),
+    source: 'click',
+    label: 'Copied',
+    box: { x: 0, y: 0, width: 1, height: 1 },
+    score: null,
+    isSuggestion: true,
+    carriedFromRegionId: null,
+    createdAt: now,
+  });
+  const error = new RegionWriteError('rejected', new Error('insert rejected'));
+  vi.spyOn(ctx.regions.repository, 'insertMany').mockResolvedValue(
+    Result.Error(error)
+  );
+  const deleted = vi.spyOn(ctx.storage.storage, 'deleteObject');
+  const result = await ctx.useCases.segment({
+    currentUserId: ownerId,
+    imageId: baseImageId,
+    prompt: { type: 'text', text: 'chair' },
+    label: 'Chair',
+  });
+  expect(result.isError() && result.getError()).toBe(error);
+  expect(ctx.storage.objects.has('region-masks/r1.png')).toBe(true);
+  expect(deleted).not.toHaveBeenCalled();
+});
+
+it('preserves the original insert rejection when cleanup fails', async () => {
+  const ctx = setup();
+  const original = new RegionWriteError(
+    'rejected',
+    new Error('insert rejected')
+  );
+  vi.spyOn(ctx.regions.repository, 'insertMany').mockResolvedValue(
+    Result.Error(original)
+  );
+  vi.spyOn(ctx.storage.storage, 'deleteObject').mockResolvedValue(
+    Result.Error(
+      new AppError({ code: 'CLEANUP_FAILED', category: 'system', status: 500 })
+    )
+  );
+  const warn = vi.spyOn(logger, 'warn');
+  const result = await ctx.useCases.segment({
+    currentUserId: ownerId,
+    imageId: baseImageId,
+    prompt: { type: 'text', text: 'chair' },
+    label: 'Chair',
+  });
+  expect(result.isError() && result.getError()).toBe(original);
+  expect(warn).toHaveBeenCalledWith(
+    expect.objectContaining({ event: 'segmentation.mask.cleanup_failed' })
+  );
+  expect(ctx.storage.objects.has('region-masks/r1.png')).toBe(true);
+  warn.mockRestore();
+});
+
+it.each(['rejected', 'unknown'] as const)(
+  'uses publication proof for an automatic batch with %s persistence',
+  async (publication) => {
+    const ctx = setup();
+    const error = new RegionWriteError(
+      publication,
+      new Error('publication failed')
+    );
+    vi.spyOn(ctx.regions.repository, 'replaceDetections').mockResolvedValue(
+      Result.Error(error)
+    );
+    const result = await ctx.pipeline.detectConcept({
+      imageId: baseImageId,
+      concept: 'chair',
+    });
+    expect(result.isError() && result.getError()).toBe(error);
+    expect(ctx.storage.objects.has('region-masks/r1.png')).toBe(
+      publication === 'unknown'
+    );
+    expect(ctx.calls.calls.size).toBe(1);
+  }
+);
+
+it('shows a completed record as idle even after its execution deadline', async () => {
+  const ctx = setup();
+  vi.spyOn(ctx.regions.repository, 'listByImage').mockResolvedValue(
+    Result.Ok({
+      type: 'regions_listed',
+      regions: [],
+      detection: {
+        type: 'detection_recorded',
+        phase: 'completed',
+        failed: false,
+        expiresAt: new Date('2020-01-01T00:00:00Z'),
+        omissions: [],
+      },
+    })
+  );
+  expect(
+    okValue(
+      await ctx.useCases.list({ currentUserId: ownerId, imageId: baseImageId })
+    )
+  ).toMatchObject({ detection: { type: 'idle', omissions: [] } });
+});

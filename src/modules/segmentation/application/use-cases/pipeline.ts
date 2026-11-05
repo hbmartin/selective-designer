@@ -12,13 +12,17 @@ import {
   type SegmentationResultOf,
   SIGNED_MASK_URL_SECONDS,
 } from './types';
-import { detectionRunFor, ownsDetectionLease } from '../detection-run';
 import type { DetectionIdentity } from '../ports/ports';
+import {
+  detectionRunFor,
+  ownsDetectionLease,
+} from '../../domain/detection-run';
 import {
   detectionConcepts,
   isDetectionConceptSettled,
   isUserMadeSource,
 } from '../../domain/region';
+import { RegionWriteError } from '../../domain/region-write-error';
 
 /** Concepts automatic detection looks for in this image's design. */
 export async function detectionConceptsFor(
@@ -166,7 +170,15 @@ export async function detectConcept(
     now: deps.clock.now(),
   });
   // A persistence error may have arrived after the commit.
-  if (saved.isError()) return Result.Error(saved.getError());
+  if (saved.isError()) {
+    const error = saved.getError();
+    if (error instanceof RegionWriteError && error.publication === 'rejected')
+      await discardUnpublishedMasks(
+        deps,
+        stored.regions.map((region) => region.maskKey)
+      );
+    return Result.Error(error);
+  }
   const published = saved.get();
   if (published.type !== 'regions_saved') {
     await discardUnpublishedMasks(

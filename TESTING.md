@@ -85,3 +85,7 @@ Mutation testing is intentionally slower. Use scoped commands during deep work, 
 - Adapter integration tests assert durable state or provider contract effects.
 - Property tests have bounded, reproducible generators and clear invariant names.
 - New architecture or security regressions have guardrails through depcruise, Semgrep, or `check:test-layering` where practical.
+
+### Focused detection write recovery
+
+`pnpm test:integration tests/integration/composition/image-detection-intent.integration.test.ts` checks rollback, retries, and commit reconciliation through the local test database driver. To exercise PostgreSQL server-raised faults, set `RECOVERY_TEST_DATABASE_URL` to a disposable direct loopback PostgreSQL database whose name starts with `selective_designer_recovery_test_`, then run the same command. The suite applies migrations and truncates that database. The loopback connection must not tunnel to a remote database. The default socket emulator uses driver-shaped failures around real transaction rollbacks because repeated server error responses are not supported reliably by its protocol bridge.

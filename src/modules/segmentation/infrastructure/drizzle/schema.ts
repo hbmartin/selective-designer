@@ -40,18 +40,23 @@ export const region = pgTable(
     isSuggestion: boolean('isSuggestion').default(false).notNull(),
     carriedFromRegionId: text('carriedFromRegionId'),
   },
-  (table) => [index('region_image_idx').on(table.imageId, table.source)]
+  (table) => [
+    index('region_image_idx').on(table.imageId, table.source),
+    index('region_mask_key_idx').on(table.maskKey),
+  ]
 );
 
 export type RegionRow = typeof region.$inferSelect;
 
-/** In-progress or retryable automatic detection for one image. */
+/** Durable detection state, retained until its image is deleted. */
 export const activeDetection = pgTable('active_detection', {
   imageId: text('imageId')
     .primaryKey()
     .references(() => image.id, { onDelete: 'cascade' }),
   // Null identifies leases acquired before run IDs were introduced.
   runId: text('runId'),
+  imageWriteId: text('imageWriteId').unique(),
+  completedAt: timestamp('completedAt', { precision: 3, mode: 'date' }),
   phase: text('phase').$type<DetectionPhase>(),
   workerId: text('workerId'),
   failed: boolean('failed').default(false).notNull(),

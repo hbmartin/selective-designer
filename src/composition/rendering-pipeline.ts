@@ -7,7 +7,7 @@ import {
 } from '@/modules/design';
 import { createDesignRepository } from '@/modules/design/backend';
 import { getAiProvidersConfig } from '@/modules/kernel/backend';
-import { toItemId, toRegionId } from '@/modules/kernel/domain/ids';
+import { toImageId, toItemId, toRegionId } from '@/modules/kernel/domain/ids';
 import { createItemRepository } from '@/modules/moodboard/backend';
 import {
   createRenderingPipelineUseCases,
@@ -154,23 +154,25 @@ export const createResultImages = (
     if (dimensions.type === 'unreadable')
       return Result.Ok({ type: 'result_image_unreadable' });
     const size = { width: dimensions.width, height: dimensions.height };
+    const rawId = kernel.idGenerator.createId();
+    if (rawId.isError()) return Result.Error(rawId.getError());
+    const allocatedId = toImageId(rawId.get());
+    if (allocatedId.isError()) return Result.Error(allocatedId.getError());
+    const image = {
+      id: allocatedId.get(),
+      kind: 'result' as const,
+      originalKey: input.objectKey,
+      originalContentType:
+        contentTypeForFormat(dimensions.format) ?? input.contentType,
+      original: size,
+      workingKey: input.objectKey,
+      working: size,
+    };
     const added = await writeImageWithDetection<ImageAddedOutcome>(kernel, {
       carryFromImageId: input.renderSourceImageId,
-      imageId: (saved) => saved.image.id,
+      image: { ...image, designId: input.designId },
       save: (repository) =>
-        designPipeline(kernel, repository).addImage({
-          designId: input.designId,
-          image: {
-            kind: 'result',
-            originalKey: input.objectKey,
-            originalContentType:
-              contentTypeForFormat(dimensions.format) ?? input.contentType,
-            original: size,
-            // Results are shown and edited at their native size.
-            workingKey: input.objectKey,
-            working: size,
-          },
-        }),
+        repository.addImage({ designId: input.designId, image }),
     });
     if (added.isError()) return Result.Error(added.getError());
     const imageId = added.get().image.id;
@@ -181,11 +183,6 @@ export const createResultImages = (
       // The image and intent have committed. The editor can recover dispatch.
       kernel.logger.warn({
         event: 'rendering.result.detection_not_scheduled',
-        details: { imageId },
-      });
-    } else if (scheduled.get().type === 'detection_intent_missing') {
-      kernel.logger.warn({
-        event: 'segmentation.detection.intent_missing',
         details: { imageId },
       });
     }
