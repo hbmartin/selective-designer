@@ -210,6 +210,7 @@ const setup = (segmenter: Segmenter = createFakeSegmenter()) => {
     calls,
     intents,
     idGenerator: common.idGenerator,
+    segmenter,
   };
 };
 
@@ -259,7 +260,7 @@ describe('interactive segmentation', () => {
     expect(ctx.storage.objects.has(`region-masks/${region?.id}.png`)).toBe(
       true
     );
-    expect([...ctx.calls.calls.values()][0]).toMatchObject({
+    expect([...ctx.calls.receipts.values()][0]).toMatchObject({
       purpose: 'segmentation',
       status: 'succeeded',
       userId: ownerId,
@@ -733,7 +734,7 @@ it.each([
         })
       )
     ).toEqual(expected);
-    expect(ctx.calls.calls.size).toBe(1);
+    expect(ctx.calls.receipts.size).toBe(1);
     expect(ctx.regions.rows).toHaveLength(0);
   }
 );
@@ -858,7 +859,7 @@ it('logs a skipped interactive download and retains the paid provider record', a
     })
   );
   expect(JSON.stringify(warn.mock.calls)).not.toContain('secret=hidden');
-  expect([...ctx.calls.calls.values()]).toMatchObject([
+  expect([...ctx.calls.receipts.values()]).toMatchObject([
     { status: 'succeeded', costUsdMicros: 20 },
   ]);
   warn.mockRestore();
@@ -894,7 +895,7 @@ it('cleans only its confirmed creation when an ID repeats within a batch', async
   expect(result.isError() && result.getError().code).toBe('MASK_KEY_COLLISION');
   expect(ctx.storage.objects.size).toBe(0);
   expect(ctx.regions.rows).toHaveLength(0);
-  expect(ctx.calls.calls.size).toBe(1);
+  expect(ctx.calls.receipts.size).toBe(1);
 });
 
 it('preserves a confirmed-created object referenced by a copied region', async () => {
@@ -976,7 +977,7 @@ it.each(['rejected', 'unknown'] as const)(
     expect(ctx.storage.objects.has('region-masks/r2.png')).toBe(
       publication === 'unknown'
     );
-    expect(ctx.calls.calls.size).toBe(1);
+    expect(ctx.calls.receipts.size).toBe(1);
   }
 );
 
@@ -1058,8 +1059,39 @@ it.each([true, false])(
         regions: [expect.anything()],
       });
     else expect(result.isError() && result.getError()).toBe(error);
-    expect([...ctx.calls.calls.values()]).toMatchObject([
+    expect([...ctx.calls.receipts.values()]).toMatchObject([
       { status: 'succeeded', costUsdMicros: 10 },
+    ]);
+  }
+);
+
+it.each(['interactive', 'automatic'])(
+  'preserves failure request identity in %s SAM receipts',
+  async (mode) => {
+    const ctx = setup();
+    vi.spyOn(ctx.segmenter, 'segment').mockResolvedValue(
+      Result.Ok({
+        type: 'segmentation_failed',
+        provider: 'fal',
+        endpoint: 'fal-ai/sam-3/image',
+        providerRequestId: 'failed-native-request',
+        reason: 'rejected',
+      })
+    );
+    if (mode === 'interactive')
+      await ctx.useCases.segment({
+        currentUserId: ownerId,
+        imageId: baseImageId,
+        label: '',
+        prompt: { type: 'text', text: 'chair' },
+      });
+    else
+      await ctx.pipeline.detectConcept({
+        imageId: baseImageId,
+        concept: 'chair',
+      });
+    expect([...ctx.calls.receipts.values()]).toMatchObject([
+      { providerRequestId: 'failed-native-request', status: 'failed' },
     ]);
   }
 );

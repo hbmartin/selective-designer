@@ -1,6 +1,8 @@
 import { Result } from '@bloodyowl/boxed';
 
 import type { ProviderCallReceipt } from '@/modules/kernel';
+import { AppError } from '@/modules/kernel/domain/errors/app-error';
+import { safeErrorDiagnostics } from '@/modules/kernel/domain/errors/safe-error-diagnostics';
 import { sourceErrorDiagnostics } from '@/modules/kernel/domain/errors/source-error-diagnostics';
 import {
   type DesignId,
@@ -8,7 +10,6 @@ import {
   type ObjectKey,
   type RenderResultId,
   toObjectKey,
-  toProviderCallId,
 } from '@/modules/kernel/domain/ids';
 import { providerCallIdentity } from '@/modules/kernel/domain/provider-call-identity';
 import { IMMUTABLE_OBJECT_CACHE_CONTROL } from '@/modules/kernel/domain/upload-policy';
@@ -19,6 +20,7 @@ import {
   type RenderingResult,
 } from './types';
 import type {
+  AcceptedRenderSubmission,
   ModelRequest,
   RenderExecution,
   RenderPublicationContext,
@@ -96,7 +98,7 @@ const buildRequest = async (
 };
 
 export type SubmitResultOutcome =
-  | { type: 'result_submitted'; providerRequestId: string }
+  | { type: 'result_accepted'; submission: AcceptedRenderSubmission }
   | { type: 'result_already_submitted'; providerRequestId: string }
   | { type: 'result_failed'; reason: string }
   | { type: 'result_not_runnable' }
@@ -133,6 +135,7 @@ export async function submitResult(
   if (request.isError()) return Result.Error(request.getError());
   const invocationId = deps.idGenerator.createId();
   if (invocationId.isError()) return Result.Error(invocationId.getError());
+  const startedAt = deps.clock.now().toISOString();
   const submitted = await deps.imageModels
     .adapterFor(result.modelId)
     .submit(request.get());
@@ -140,23 +143,89 @@ export async function submitResult(
   const submission = submitted.get();
   if (submission.type === 'model_rejected')
     return failPoll(deps, input, submission.reason);
-  const saved = await deps.renderRepository.saveSubmission({
-    ...input,
-    providerRequestId: submission.providerRequestId,
-    settings: submission.settings,
-    prompt: request.get().prompt,
-    submittedAt: deps.clock.now(),
-    accountingIdentity: {
-      invocationId: invocationId.get(),
-      providerRequestId: submission.accountingRequestId,
+  const spec = MODEL_CATALOG[result.modelId];
+  const callId = providerCallIdentity({
+    provider: spec.provider,
+    endpoint: spec.endpoint,
+    providerRequestId: submission.accountingRequestId,
+    invocationId: invocationId.get(),
+  });
+  if (callId.isError()) return Result.Error(callId.getError());
+  return Result.Ok({
+    type: 'result_accepted',
+    submission: {
+      ...input,
+      providerRequestId: submission.providerRequestId,
+      settings: submission.settings,
+      prompt: request.get().prompt,
+      submittedAt: deps.clock.now().toISOString(),
+      accountingIdentity: {
+        invocationId: invocationId.get(),
+        providerRequestId: submission.accountingRequestId,
+        receipt: {
+          id: callId.get(),
+          provider: spec.provider,
+          endpoint: spec.endpoint,
+          providerRequestId: submission.accountingRequestId,
+          userId: undefined,
+          designId: render.designId,
+          subjectId: input.resultId,
+          purpose: 'render',
+          status: 'submitted',
+          costUsdMicros: undefined,
+          costSource: 'unavailable',
+          details: { modelId: result.modelId, attempt: input.attempt },
+          startedAt,
+          completedAt: undefined,
+        },
+      },
     },
   });
-  if (saved.isError()) return Result.Error(saved.getError());
+}
+
+/** Retried separately from the paid provider step, including after a lost write reply. */
+export async function persistSubmission(
+  deps: RenderingPipelineDeps,
+  input: AcceptedRenderSubmission
+): Promise<
+  RenderingResult<
+    | { type: 'result_submitted'; providerRequestId: string }
+    | { type: 'result_attempt_superseded' }
+  >
+> {
+  const captured = await deps.providerAccounting.capture(
+    input.accountingIdentity.receipt
+  );
+  if (captured.isError()) {
+    deps.logger.warn({
+      event: 'rendering.result.submission_persistence_failed',
+      details: {
+        ...renderLogContext(input),
+        phase: 'receipt',
+        code: captured.getError().code,
+        ...safeErrorDiagnostics(captured.getError()),
+      },
+    });
+    return Result.Error(captured.getError());
+  }
+  const saved = await deps.renderRepository.saveSubmission(input);
+  if (saved.isError()) {
+    deps.logger.warn({
+      event: 'rendering.result.submission_persistence_failed',
+      details: {
+        ...renderLogContext(input),
+        phase: 'submission',
+        code: saved.getError().code,
+        ...safeErrorDiagnostics(saved.getError()),
+      },
+    });
+    return Result.Error(saved.getError());
+  }
   if (saved.get().type === 'result_attempt_superseded')
     return Result.Ok({ type: 'result_attempt_superseded' });
   return Result.Ok({
     type: 'result_submitted',
-    providerRequestId: submission.providerRequestId,
+    providerRequestId: input.providerRequestId,
   });
 }
 
@@ -188,9 +257,9 @@ const failPoll = async (
   );
 };
 
-const discardLostOutput = async (
+export const discardLostOutput = async (
   deps: RenderingPipelineDeps,
-  input: PollExecution,
+  input: RenderExecution,
   objectKey: ObjectKey
 ) => {
   const referenced = await deps.resultOutputReferences.check(objectKey);
@@ -211,59 +280,30 @@ const discardLostOutput = async (
 };
 
 const outputReceipt = (
-  input: PollExecution,
   context: RenderPublicationContext,
-  checkpoint: RenderOutputCheckpoint
+  checkpoint: Omit<RenderOutputCheckpoint, 'receipt'>
 ): RenderingResult<ProviderCallReceipt> => {
-  if (checkpoint.receipt) return Result.Ok(checkpoint.receipt);
-  const spec = MODEL_CATALOG[context.result.modelId];
-  // New submissions explicitly distinguish accounting identity from polling locators.
-  const providerRequestId = context.accountingIdentity
-    ? context.accountingIdentity.providerRequestId
-    : /^[A-Za-z0-9_-]+$/u.test(input.providerRequestId)
-      ? input.providerRequestId
-      : undefined;
-  const id =
-    context.accountingIdentity === null
-      ? toProviderCallId(`render:${input.resultId}:${input.attempt}`)
-      : providerCallIdentity({
-          provider: checkpoint.provider ?? spec.provider,
-          endpoint: checkpoint.endpoint ?? spec.endpoint,
-          providerRequestId,
-          invocationId: context.accountingIdentity.invocationId,
-        });
-  if (id.isError()) return Result.Error(id.getError());
-  const receipt: ProviderCallReceipt = {
-    id: id.get(),
-    userId: undefined,
-    designId: context.designId,
-    purpose: 'render',
-    provider: checkpoint.provider ?? spec.provider,
-    endpoint: checkpoint.endpoint ?? spec.endpoint,
-    subjectId: input.resultId,
-    providerRequestId: providerRequestId,
+  const original = context.accountingIdentity?.receipt;
+  if (!original)
+    return Result.Error(
+      new AppError({
+        code: 'RENDER_ACCOUNTING_IDENTITY_MISSING',
+        category: 'system',
+        status: 500,
+      })
+    );
+  return Result.Ok({
+    ...original,
     status: 'succeeded',
     costUsdMicros: checkpoint.costUsdMicros ?? undefined,
     costSource: checkpoint.costSource,
-    details: { modelId: context.result.modelId, attempt: input.attempt },
-    startedAt:
-      checkpoint.startedAt ??
-      context.result.submittedAt?.toISOString() ??
-      checkpoint.completedAt,
     completedAt: checkpoint.completedAt,
-  };
-  return Result.Ok(receipt);
+  });
 };
-const recordOutput = async (
+const recordOutput = (
   deps: RenderingPipelineDeps,
-  input: PollExecution,
-  context: RenderPublicationContext,
   checkpoint: RenderOutputCheckpoint
-) => {
-  const receipt = outputReceipt(input, context, checkpoint);
-  if (receipt.isError()) return Result.Error(receipt.getError());
-  return deps.providerAccounting.capture(receipt.get());
-};
+) => deps.providerAccounting.capture(checkpoint.receipt);
 const warnCostRecord = (
   deps: RenderingPipelineDeps,
   input: PollExecution,
@@ -323,22 +363,22 @@ const checkpointProviderOutput = async (
   >
 > => {
   const { result } = context;
-  const urlKey = toObjectKey(
-    `results/${input.resultId}/${input.attempt}/raw.img`
-  );
-  const pngKey = toObjectKey(
-    `results/${input.resultId}/${input.attempt}/raw.png`
-  );
-  const jpegKey = toObjectKey(
-    `results/${input.resultId}/${input.attempt}/raw.jpg`
-  );
-  const webpKey = toObjectKey(
-    `results/${input.resultId}/${input.attempt}/raw.webp`
-  );
-  if (urlKey.isError()) return Result.Error(urlKey.getError());
-  if (pngKey.isError()) return Result.Error(pngKey.getError());
-  if (jpegKey.isError()) return Result.Error(jpegKey.getError());
-  if (webpKey.isError()) return Result.Error(webpKey.getError());
+  const keys: Record<'url' | 'png' | 'jpeg' | 'webp', ObjectKey> = {} as Record<
+    'url' | 'png' | 'jpeg' | 'webp',
+    ObjectKey
+  >;
+  for (const [format, extension] of Object.entries({
+    url: 'img',
+    png: 'png',
+    jpeg: 'jpg',
+    webp: 'webp',
+  }) as ['url' | 'png' | 'jpeg' | 'webp', string][]) {
+    const key = toObjectKey(
+      `results/${input.resultId}/${input.attempt}/raw.${extension}`
+    );
+    if (key.isError()) return Result.Error(key.getError());
+    keys[format] = key.get();
+  }
   const polled = await deps.imageModels
     .adapterFor(result.modelId)
     .poll(input.providerRequestId);
@@ -346,16 +386,25 @@ const checkpointProviderOutput = async (
   const poll = polled.get();
   if (poll.type === 'model_pending')
     return Result.Ok({ type: 'result_pending' });
-  if (poll.type === 'model_failed') return failPoll(deps, input, poll.reason);
-  const key = outputKeyFor(
-    {
-      url: urlKey.get(),
-      png: pngKey.get(),
-      jpeg: jpegKey.get(),
-      webp: webpKey.get(),
-    },
-    poll.outputBytes?.contentType
-  );
+  if (poll.type === 'model_failed') {
+    const receipt = context.accountingIdentity?.receipt;
+    if (!receipt)
+      return Result.Error(
+        new AppError({
+          code: 'RENDER_ACCOUNTING_IDENTITY_MISSING',
+          category: 'system',
+          status: 500,
+        })
+      );
+    const captured = await deps.providerAccounting.capture({
+      ...receipt,
+      status: 'failed',
+      completedAt: deps.clock.now().toISOString(),
+    });
+    if (captured.isError()) return Result.Error(captured.getError());
+    return failPoll(deps, input, poll.reason);
+  }
+  const key = outputKeyFor(keys, poll.outputBytes?.contentType);
   const spec = MODEL_CATALOG[result.modelId];
   const costUsdMicros = poll.costUsdMicros ?? spec.estimatedCostUsdMicros;
   const costSource =
@@ -365,7 +414,7 @@ const checkpointProviderOutput = async (
         ? 'price_table'
         : 'unavailable';
   const now = deps.clock.now();
-  let checkpoint: RenderOutputCheckpoint = {
+  const metadata: Omit<RenderOutputCheckpoint, 'receipt'> = {
     source: poll.outputBytes
       ? { kind: 'object' }
       : poll.outputUrl
@@ -375,17 +424,20 @@ const checkpointProviderOutput = async (
     contentType: poll.outputBytes?.contentType ?? null,
     provider: spec.provider,
     endpoint: spec.endpoint,
-    startedAt: (result.submittedAt ?? now).toISOString(),
+    startedAt: context.accountingIdentity?.receipt.startedAt,
     modelVersion: poll.modelVersion,
     costUsdMicros,
     costSource,
     completedAt: now.toISOString(),
   };
-  const receipt = outputReceipt(input, context, checkpoint);
+  const receipt = outputReceipt(context, metadata);
   if (receipt.isError()) return Result.Error(receipt.getError());
-  checkpoint = { ...checkpoint, receipt: receipt.get() };
+  const checkpoint: RenderOutputCheckpoint = {
+    ...metadata,
+    receipt: receipt.get(),
+  };
   if (!poll.outputBytes && !poll.outputUrl) {
-    const logged = await recordOutput(deps, input, context, checkpoint);
+    const logged = await recordOutput(deps, checkpoint);
     if (logged.isError()) return Result.Error(logged.getError());
     return failPoll(deps, input, 'no_output');
   }
@@ -398,7 +450,7 @@ const checkpointProviderOutput = async (
       cacheControl: IMMUTABLE_OBJECT_CACHE_CONTROL,
     });
     if (stored.isError()) {
-      const logged = await recordOutput(deps, input, context, checkpoint);
+      const logged = await recordOutput(deps, checkpoint);
       if (logged.isError()) warnCostRecord(deps, input, logged.getError().code);
       return Result.Error(stored.getError());
     }
@@ -409,25 +461,25 @@ const checkpointProviderOutput = async (
     checkpoint,
   });
   if (saved.isError()) {
-    const logged = await recordOutput(deps, input, context, checkpoint);
+    const logged = await recordOutput(deps, checkpoint);
     if (logged.isError()) warnCostRecord(deps, input, logged.getError().code);
     return Result.Error(saved.getError());
   }
   const savedValue = saved.get();
   if (savedValue.type === 'result_attempt_superseded') {
-    const logged = await recordOutput(deps, input, context, checkpoint);
+    const logged = await recordOutput(deps, checkpoint);
     if (logged.isError()) warnCostRecord(deps, input, logged.getError().code);
     if (createdKey) await discardLostOutput(deps, input, createdKey);
     return Result.Ok(savedValue);
   }
   if (savedValue.type === 'result_already_completed') {
-    const logged = await recordOutput(deps, input, context, checkpoint);
+    const logged = await recordOutput(deps, checkpoint);
     if (logged.isError()) warnCostRecord(deps, input, logged.getError().code);
     if (createdKey) await discardLostOutput(deps, input, createdKey);
     return recoverCompletedResult(deps, input);
   }
   if (checkpoint.receipt?.id !== savedValue.checkpoint.receipt?.id) {
-    const logged = await recordOutput(deps, input, context, checkpoint);
+    const logged = await recordOutput(deps, checkpoint);
     if (logged.isError()) warnCostRecord(deps, input, logged.getError().code);
   }
   if (createdKey && savedValue.checkpoint.objectKey !== createdKey) {
@@ -465,6 +517,18 @@ export async function pollResult(
   if (result.status !== 'submitted')
     return Result.Ok({ type: 'result_not_runnable' });
 
+  if (
+    !context.accountingIdentity?.receipt ||
+    (context.checkpoint && !context.checkpoint.receipt)
+  )
+    return Result.Error(
+      new AppError({
+        code: 'RENDER_ACCOUNTING_IDENTITY_MISSING',
+        category: 'system',
+        status: 500,
+      })
+    );
+
   let checkpoint = context.checkpoint;
   let createdKey: ObjectKey | undefined;
   if (!checkpoint) {
@@ -476,10 +540,9 @@ export async function pollResult(
     createdKey = output.createdKey;
   }
 
-  const logged = await recordOutput(deps, input, context, checkpoint);
+  const logged = await recordOutput(deps, checkpoint);
   if (logged.isError()) {
-    // New checkpoints already committed their receipt atomically. Legacy recovery must capture first.
-    if (!checkpoint.receipt) return Result.Error(logged.getError());
+    // The checkpoint already committed its receipt atomically.
     warnCostRecord(deps, input, logged.getError().code);
   }
 

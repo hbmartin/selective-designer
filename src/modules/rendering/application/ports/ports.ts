@@ -1,4 +1,8 @@
-import type { ApplicationResult, ProviderCostSource } from '@/modules/kernel';
+import type {
+  ApplicationResult,
+  ProviderCallReceipt,
+  ProviderCostSource,
+} from '@/modules/kernel';
 import type {
   BatchId,
   DesignId,
@@ -48,16 +52,26 @@ export type RenderExecution = {
   attempt: number;
   workflowRunId: string;
 };
+export type RenderAccountingIdentity = {
+  invocationId: string;
+  providerRequestId?: string;
+  receipt: ProviderCallReceipt;
+};
+/** Server-only handoff persisted by the workflow before database persistence retries. */
+export type AcceptedRenderSubmission = RenderExecution & {
+  providerRequestId: string;
+  settings: ModelSettings;
+  prompt: string;
+  submittedAt: string;
+  accountingIdentity: RenderAccountingIdentity;
+};
 export type RenderPublicationContext = {
   result: RenderResult;
   designId: DesignId;
   renderSourceImageId: ImageId;
   workflowRunId: string | null;
   checkpoint: RenderOutputCheckpoint | null;
-  accountingIdentity: {
-    invocationId: string;
-    providerRequestId?: string;
-  } | null;
+  accountingIdentity: RenderAccountingIdentity | null;
   sourceSize: { width: number; height: number };
 };
 
@@ -71,18 +85,13 @@ export interface RenderRepository {
     >
   >;
   saveSubmission(
-    input: RenderExecution & {
-      providerRequestId: string;
-      settings: ModelSettings;
-      prompt: string;
-      submittedAt: Date;
-      accountingIdentity?: { invocationId: string; providerRequestId?: string };
-    }
+    input: AcceptedRenderSubmission
   ): Promise<
     ApplicationResult<
       { type: 'result_submitted' } | { type: 'result_attempt_superseded' }
     >
   >;
+  /** Atomically captures the performed call receipt even when this output loses its attempt fence. */
   saveOutput(
     input: RenderAttemptIdentity & { checkpoint: RenderOutputCheckpoint }
   ): Promise<
@@ -395,6 +404,7 @@ export interface RenderScheduler {
   scheduleResult(input: {
     resultId: RenderResultId;
     attempt: number;
+    replacedObjectKey?: ObjectKey;
   }): Promise<ApplicationResult<{ type: 'render_scheduled' }>>;
 }
 

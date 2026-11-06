@@ -1,10 +1,19 @@
+import { errorCauses } from '@/modules/kernel/domain/errors/error-causes';
 import { makeUserRow } from '@tests/server/db-fixtures';
 import { createRecoveryTestDatabase } from '@tests/server/recovery-database';
 import { makeProviderReceipt } from '@tests/support/provider-receipt';
 import { updateRenderResultFixture } from '@tests/support/render-result-fixture';
 import { okValue } from '@tests/support/result';
 import { sql } from 'drizzle-orm';
-import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
+import {
+  afterAll,
+  beforeAll,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  vi,
+} from 'vitest';
 
 import { toDesignName } from '@/modules/design';
 import { createDesignRepository } from '@/modules/design/testing';
@@ -382,7 +391,17 @@ describe('RenderRepositoryDrizzle', () => {
           ...input,
           settings: {},
           prompt: '',
-          submittedAt: startedAt,
+          submittedAt: startedAt.toISOString(),
+          accountingIdentity: {
+            invocationId: 'test-invocation',
+            providerRequestId: input.providerRequestId,
+            receipt: makeProviderReceipt({
+              designId,
+              subjectId: input.resultId,
+              providerRequestId: input.providerRequestId,
+              startedAt: startedAt.toISOString(),
+            }),
+          },
         })
       );
     }
@@ -514,7 +533,17 @@ describe('RenderRepositoryDrizzle', () => {
             ...input,
             settings: {},
             prompt: '',
-            submittedAt: next,
+            submittedAt: next.toISOString(),
+            accountingIdentity: {
+              invocationId: 'test-invocation',
+              providerRequestId: input.providerRequestId,
+              receipt: makeProviderReceipt({
+                designId,
+                subjectId: input.resultId,
+                providerRequestId: input.providerRequestId,
+                startedAt: startedAt.toISOString(),
+              }),
+            },
           })
         ).type
       ).toBe('result_attempt_superseded');
@@ -758,4 +787,79 @@ describe('RenderRepositoryDrizzle', () => {
       1
     );
   });
+  it.skipIf(!process.env.RECOVERY_TEST_DATABASE_URL)(
+    'reconciles lost submission replies and safely replays after unavailable checks',
+    async () => {
+      const { input, startedAt } = await newAttempt();
+      okValue(await repository.claimExecution(input));
+      const submission = {
+        ...input,
+        settings: {},
+        prompt: 'test',
+        submittedAt: startedAt.toISOString(),
+        accountingIdentity: {
+          invocationId: 'accepted-invocation',
+          providerRequestId: input.providerRequestId,
+          receipt: makeProviderReceipt({
+            designId,
+            subjectId: input.resultId,
+            providerRequestId: input.providerRequestId,
+            startedAt: startedAt.toISOString(),
+            status: 'submitted',
+            costUsdMicros: undefined,
+            costSource: 'unavailable',
+            completedAt: undefined,
+          }),
+        },
+      };
+      const query = database.db.$client.query.bind(database.db.$client);
+      const lost = Object.assign(new Error('submission reply lost'), {
+        code: 'EPIPE',
+      });
+      let wrote = false;
+      const spy = vi
+        .spyOn(database.db.$client, 'query')
+        .mockImplementation(async (text, values) => {
+          const statement =
+            typeof text === 'string' ? text : (text as { text: string }).text;
+          if (
+            wrote &&
+            statement.startsWith('select') &&
+            statement.includes('"render_result"')
+          )
+            throw Object.assign(new Error('reconciliation unavailable'), {
+              code: 'ECONNRESET',
+            });
+          const result = await query(text, values);
+          if (!wrote && statement.startsWith('update "render_result"')) {
+            wrote = true;
+            throw lost;
+          }
+          return result;
+        });
+      try {
+        const saved = await repository.saveSubmission(submission);
+        expect(saved.isError()).toBe(true);
+        if (saved.isError())
+          expect([...errorCauses(saved.getError())]).toContain(lost);
+      } finally {
+        spy.mockRestore();
+      }
+      expect(okValue(await repository.saveSubmission(submission)).type).toBe(
+        'result_submitted'
+      );
+      expect(
+        okValue(await repository.publicationContext(input.resultId))
+      ).toMatchObject({
+        context: {
+          result: {
+            status: 'submitted',
+            attempt: 1,
+            providerRequestId: 'request-1',
+          },
+          accountingIdentity: { invocationId: 'accepted-invocation' },
+        },
+      });
+    }
+  );
 });

@@ -39,28 +39,12 @@ describe('durable provider accounting', () => {
   afterAll(async () => {
     await database?.close();
   });
-  const gateway = (
-    schedule?: (
-      id: ReturnType<typeof makeProviderReceipt>['id']
-    ) => Promise<void>
-  ) => {
-    const worker = createProviderAccounting({
+  const gateway = () =>
+    createProviderAccounting({
       db: database.db,
       clock: { now: () => now },
       logger,
     });
-    return createProviderAccounting({
-      db: database.db,
-      clock: { now: () => now },
-      logger,
-      schedule:
-        schedule ??
-        (async (id) => {
-          const delivered = await worker.deliver(id);
-          if (delivered.isError()) throw delivered.getError();
-        }),
-    });
-  };
 
   it.skipIf(!process.env.RECOVERY_TEST_DATABASE_URL)(
     'keeps receipts pending during sink failure and delivers after recovery',
@@ -69,9 +53,8 @@ describe('durable provider accounting', () => {
         sql`alter table provider_call add constraint accounting_test_down check (status <> 'succeeded')`
       );
       const receipt = makeProviderReceipt();
-      const schedule = vi.fn(async () => {});
       try {
-        expect(okValue(await gateway(schedule).capture(receipt))).toEqual({
+        expect(okValue(await gateway().capture(receipt))).toEqual({
           type: 'receipt_captured',
           receiptId: receipt.id,
         });
@@ -79,7 +62,6 @@ describe('durable provider accounting', () => {
         expect(
           okValue(await providerAccountingSummary(database.db)).pending
         ).toBe(1);
-        expect(schedule).toHaveBeenCalledWith(receipt.id);
         expect(
           (await database.db.select().from(providerCallReceipt))[0]
         ).toMatchObject({ deliveredAt: null, costUsdMicros: 123 });
@@ -110,6 +92,8 @@ describe('durable provider accounting', () => {
     okValue(await gateway().capture(first));
     okValue(await gateway().capture(first));
     okValue(await gateway().capture(second));
+    okValue(await gateway().deliver(first.id));
+    okValue(await gateway().deliver(second.id));
     expect(await database.db.select().from(providerCallReceipt)).toHaveLength(
       2
     );
@@ -134,6 +118,7 @@ describe('durable provider accounting', () => {
   it('preserves a successful sink row against failure or submitted replay', async () => {
     const receipt = makeProviderReceipt();
     await gateway().capture(receipt);
+    okValue(await gateway().deliver(receipt.id));
     const sink = createProviderCallLog({ db: database.db });
     for (const status of ['failed', 'submitted'] as const)
       okValue(
@@ -186,33 +171,6 @@ describe('durable provider accounting', () => {
       0
     );
   });
-  it.skipIf(!process.env.RECOVERY_TEST_DATABASE_URL)(
-    'retains pending work if prompt dispatch fails',
-    async () => {
-      await database.db.execute(
-        sql`alter table provider_call add constraint accounting_test_down check (status <> 'succeeded')`
-      );
-      try {
-        okValue(
-          await gateway(async () => {
-            throw new Error('queue unavailable');
-          }).capture(makeProviderReceipt())
-        );
-        expect(
-          okValue(await providerAccountingSummary(database.db)).pending
-        ).toBe(1);
-        expect(logger.warn).toHaveBeenCalledWith(
-          expect.objectContaining({
-            event: 'provider_accounting.dispatch_failed',
-          })
-        );
-      } finally {
-        await database.db.execute(
-          sql`alter table provider_call drop constraint accounting_test_down`
-        );
-      }
-    }
-  );
   it('captures independently of parent rows and pages past a failing receipt', async () => {
     const store = createProviderReceiptStore({ db: database.db });
     const a = makeProviderReceipt({
@@ -277,10 +235,8 @@ describe('durable provider accounting', () => {
     }
   );
   it('captures without writing the cost sink before the worker executes', async () => {
-    const schedule = vi.fn(async () => {});
     const receipt = makeProviderReceipt();
-    okValue(await gateway(schedule).capture(receipt));
-    expect(schedule).toHaveBeenCalledWith(receipt.id);
+    okValue(await gateway().capture(receipt));
     expect(await database.db.select().from(providerCall)).toHaveLength(0);
     expect(
       (await database.db.select().from(providerCallReceipt))[0]
@@ -325,6 +281,10 @@ describe('durable provider accounting', () => {
         if (failed.isError())
           expect(getDatabaseErrorCode(failed.getError())).toBe('55P03');
         expect(
+          (await database.db.select().from(providerCallReceipt))[0]
+            ?.lastErrorCode
+        ).toBe('55P03');
+        expect(
           (await database.db.select().from(providerCallReceipt))[0]?.deliveredAt
         ).toBeNull();
       } finally {
@@ -332,6 +292,106 @@ describe('durable provider accounting', () => {
         release();
         await blocker;
       }
+    }
+  );
+  it('promotes submitted receipts, redelivers terminal data, and never regresses success', async () => {
+    const success = makeProviderReceipt();
+    const submitted = {
+      ...success,
+      status: 'submitted' as const,
+      costUsdMicros: undefined,
+      costSource: 'unavailable' as const,
+      completedAt: undefined,
+    };
+    okValue(await gateway().capture(submitted));
+    okValue(await gateway().deliver(success.id));
+    const failed = {
+      ...submitted,
+      status: 'failed' as const,
+      completedAt: success.completedAt,
+    };
+    okValue(await gateway().capture(failed));
+    expect(
+      (await database.db.select().from(providerCallReceipt))[0]
+    ).toMatchObject({ status: 'failed', deliveredAt: null });
+    okValue(await gateway().deliver(success.id));
+    okValue(await gateway().capture(success));
+    okValue(await gateway().deliver(success.id));
+    okValue(await gateway().capture(submitted));
+    expect((await database.db.select().from(providerCall))[0]).toMatchObject({
+      status: 'succeeded',
+      costUsdMicros: 123,
+    });
+  });
+  it.skipIf(!process.env.RECOVERY_TEST_DATABASE_URL)(
+    'does not reconcile a rejected promotion from the older submitted identity',
+    async () => {
+      const success = makeProviderReceipt();
+      okValue(
+        await gateway().capture({
+          ...success,
+          status: 'submitted',
+          costUsdMicros: undefined,
+          costSource: 'unavailable',
+          completedAt: undefined,
+        })
+      );
+      await database.db.execute(
+        sql`alter table provider_call_receipt add constraint receipt_promotion_test_down check (status <> 'succeeded')`
+      );
+      try {
+        expect((await gateway().capture(success)).isError()).toBe(true);
+        expect(
+          (await database.db.select().from(providerCallReceipt))[0]
+        ).toMatchObject({ status: 'submitted', costUsdMicros: null });
+      } finally {
+        await database.db.execute(
+          sql`alter table provider_call_receipt drop constraint receipt_promotion_test_down`
+        );
+      }
+      okValue(await gateway().capture(success));
+    }
+  );
+  it.skipIf(!process.env.RECOVERY_TEST_DATABASE_URL)(
+    'reconciles a committed promotion after its reply was lost',
+    async () => {
+      const receipt = makeProviderReceipt();
+      okValue(
+        await gateway().capture({
+          ...receipt,
+          status: 'submitted',
+          costUsdMicros: undefined,
+          costSource: 'unavailable',
+          completedAt: undefined,
+        })
+      );
+      const query = database.db.$client.query.bind(database.db.$client);
+      let lost = false;
+      const spy = vi
+        .spyOn(database.db.$client, 'query')
+        .mockImplementation(async (text, values) => {
+          const result = await query(text, values);
+          const statement =
+            typeof text === 'string' ? text : (text as { text: string }).text;
+          if (!lost && statement.startsWith('update "provider_call_receipt"')) {
+            lost = true;
+            throw Object.assign(new Error('lost update reply'), {
+              code: 'EPIPE',
+            });
+          }
+          return result;
+        });
+      try {
+        expect(okValue(await gateway().capture(receipt)).type).toBe(
+          'receipt_captured'
+        );
+        expect(lost).toBe(true);
+      } finally {
+        spy.mockRestore();
+      }
+      expect(
+        (await database.db.select().from(providerCallReceipt))[0]
+      ).toMatchObject({ status: 'succeeded', costUsdMicros: 123 });
     }
   );
 });

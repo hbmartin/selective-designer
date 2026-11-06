@@ -4,6 +4,7 @@ import { createDesignPipelineUseCases } from '@/modules/design';
 import { createDesignRepository } from '@/modules/design/backend';
 import { getAiProvidersConfig } from '@/modules/kernel/backend';
 import { createItemRepository } from '@/modules/moodboard/backend';
+import type { SegmentationPipelineDeps } from '@/modules/segmentation';
 import {
   type ConceptSource,
   createSegmentationPipelineUseCases,
@@ -17,6 +18,7 @@ import {
   createRegionRepository,
 } from '@/modules/segmentation/backend';
 
+import { withAccountingDelivery } from './accounting-delivery';
 import { getPipelineKernel, type PipelineKernel } from './pipeline-kernel';
 import { createCachedFactory } from './shared/singleton';
 
@@ -84,7 +86,7 @@ export const createSegmenter = (): Segmenter => {
 
 const build = (overrides?: SegmentationPipelineOverrides) => {
   const kernel = overrides?.kernel ?? getPipelineKernel();
-  return createSegmentationPipelineUseCases({
+  const deps: SegmentationPipelineDeps = {
     regionRepository:
       overrides?.regionRepository ?? createRegionRepository({ db: kernel.db }),
     imageAccess: overrides?.imageAccess ?? createImageAccess(kernel),
@@ -95,7 +97,22 @@ const build = (overrides?: SegmentationPipelineOverrides) => {
     idGenerator: kernel.idGenerator,
     clock: kernel.clock,
     logger: kernel.logger,
-  });
+  };
+  const useCases = createSegmentationPipelineUseCases(deps);
+  return {
+    ...useCases,
+    detectConcept: (input: Parameters<typeof useCases.detectConcept>[0]) =>
+      withAccountingDelivery({
+        accounting: deps.providerAccounting,
+        logger: kernel.logger,
+        owner: 'workflow',
+        operation: (providerAccounting) =>
+          createSegmentationPipelineUseCases({
+            ...deps,
+            providerAccounting,
+          }).detectConcept(input),
+      }),
+  };
 };
 
 const factory = createCachedFactory(build);

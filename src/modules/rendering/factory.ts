@@ -1,6 +1,12 @@
+import { Result } from '@bloodyowl/boxed';
+
+import type { ObjectKey } from '@/modules/kernel/domain/ids';
+
 import {
   copyDraftPlacements,
+  discardLostOutput,
   markResultFailed,
+  persistSubmission,
   pollResult,
   submitResult,
 } from './application/use-cases/pipeline';
@@ -54,7 +60,15 @@ export type RenderingUseCases = ReturnType<typeof createRenderingUseCases>;
 export function createRenderingPipelineUseCases(deps: RenderingPipelineDeps) {
   return {
     submit: (input: Input<typeof submitResult>) => submitResult(deps, input),
+    persistSubmission: (input: Input<typeof persistSubmission>) =>
+      persistSubmission(deps, input),
     poll: (input: Input<typeof pollResult>) => pollResult(deps, input),
+    discardOutput: async (
+      input: Parameters<typeof discardLostOutput>[1] & { objectKey: ObjectKey }
+    ) => {
+      await discardLostOutput(deps, input, input.objectKey);
+      return Result.Ok({ type: 'output_cleanup_finished' as const });
+    },
     markFailed: (input: Input<typeof markResultFailed>) =>
       markResultFailed(deps, input),
     copyDraftPlacements: (input: Input<typeof copyDraftPlacements>) =>

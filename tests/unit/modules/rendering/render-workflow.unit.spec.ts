@@ -6,6 +6,8 @@ import { AppError } from '@/modules/kernel';
 type Outcome = { type: string; [key: string]: unknown };
 const pipeline = vi.hoisted(() => ({
   submit: vi.fn(),
+  persistSubmission: vi.fn(),
+  discardOutput: vi.fn(),
   poll: vi.fn(),
   markFailed: vi.fn(),
 }));
@@ -127,6 +129,37 @@ describe('render workflow', () => {
       ...execution,
       providerRequestId: 'request-1',
       reason: 'timed_out',
+    });
+  });
+  it('persists accepted metadata in a separate step and leaves exhausted acceptance unresolved', async () => {
+    const submission = { ...execution, providerRequestId: 'accepted-request' };
+    pipeline.submit.mockResolvedValue(
+      Result.Ok({ type: 'result_accepted', submission })
+    );
+    pipeline.persistSubmission.mockRejectedValue(
+      new Error('Step persistSubmissionStep failed after 3 retries')
+    );
+    expect(await renderResultWorkflow(attempt)).toEqual({
+      result: 'result_submission_unresolved',
+    });
+    expect(pipeline.persistSubmission).toHaveBeenCalledWith(submission);
+    expect(pipeline.submit).toHaveBeenCalledTimes(1);
+    expect(pipeline.poll).not.toHaveBeenCalled();
+    expect(pipeline.markFailed).not.toHaveBeenCalled();
+  });
+  it('continues the replacement while cleanup fails', async () => {
+    pipeline.poll.mockResolvedValue(Result.Ok({ type: 'result_succeeded' }));
+    pipeline.discardOutput.mockRejectedValue(new Error('cleanup unavailable'));
+    expect(
+      await renderResultWorkflow({
+        ...attempt,
+        replacedObjectKey: 'results/old/1/raw.png',
+      })
+    ).toEqual({ result: 'result_succeeded' });
+    expect(pipeline.submit).toHaveBeenCalledBefore(pipeline.discardOutput);
+    expect(pipeline.discardOutput).toHaveBeenCalledWith({
+      ...execution,
+      objectKey: 'results/old/1/raw.png',
     });
   });
   it('backs off from 2 s to 10 s', () => {

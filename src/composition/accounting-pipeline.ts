@@ -7,10 +7,11 @@ import {
 } from '@/modules/kernel/backend';
 import { systemClock } from '@/modules/kernel/infrastructure/clock/system-clock';
 
+import { createCachedFactory } from './shared/singleton';
 import { telemetryProxy } from './telemetry';
 
 /** Workflow-only kernel slice avoids request auth and browser dependencies. */
-export const getAccountingRecovery = () => {
+const factory = createCachedFactory(() => {
   const db = getDefaultDbClient();
   const clock = systemClock;
   const logger = createTelemetryLogger({ telemetry: telemetryProxy });
@@ -45,4 +46,5 @@ export const getAccountingRecovery = () => {
     },
     startedAt: () => clock.now().toISOString(),
   };
-};
+});
+export const getAccountingRecovery = () => factory.get();

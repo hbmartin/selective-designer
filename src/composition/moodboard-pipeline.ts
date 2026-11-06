@@ -4,6 +4,7 @@ import { createDesignPipelineUseCases } from '@/modules/design';
 import { createDesignRepository } from '@/modules/design/backend';
 import type { ProviderAccounting } from '@/modules/kernel';
 import { getAiProvidersConfig } from '@/modules/kernel/backend';
+import type { MoodboardPipelineDeps } from '@/modules/moodboard';
 import {
   type BackgroundRemover,
   createMoodboardPipelineUseCases,
@@ -16,6 +17,7 @@ import {
   createItemRepository,
 } from '@/modules/moodboard/backend';
 
+import { withAccountingDelivery } from './accounting-delivery';
 import { getPipelineKernel, type PipelineKernel } from './pipeline-kernel';
 import { createCachedFactory } from './shared/singleton';
 
@@ -82,7 +84,7 @@ const createBackgroundRemover = (kernel: PipelineKernel): BackgroundRemover => {
 
 const buildPipelineUseCases = (overrides?: MoodboardPipelineOverrides) => {
   const kernel = overrides?.kernel ?? getPipelineKernel();
-  return createMoodboardPipelineUseCases({
+  const deps: MoodboardPipelineDeps = {
     itemRepository:
       overrides?.itemRepository ?? createItemRepository({ db: kernel.db }),
     designAccess: overrides?.designAccess ?? createDesignAccess(kernel),
@@ -94,7 +96,24 @@ const buildPipelineUseCases = (overrides?: MoodboardPipelineOverrides) => {
     idGenerator: kernel.idGenerator,
     clock: kernel.clock,
     logger: kernel.logger,
-  });
+  };
+  const useCases = createMoodboardPipelineUseCases(deps);
+  return {
+    ...useCases,
+    removeBackground: (
+      input: Parameters<typeof useCases.removeBackground>[0]
+    ) =>
+      withAccountingDelivery({
+        accounting: deps.providerAccounting,
+        logger: kernel.logger,
+        owner: 'workflow',
+        operation: (providerAccounting) =>
+          createMoodboardPipelineUseCases({
+            ...deps,
+            providerAccounting,
+          }).removeBackground(input),
+      }),
+  };
 };
 
 const pipelineFactory = createCachedFactory(buildPipelineUseCases);

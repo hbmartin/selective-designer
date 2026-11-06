@@ -17,7 +17,7 @@ export const createFakeRenderRepository = (now: () => Date) => {
   const owners = new Map<string, string>();
   const accountingIdentities = new Map<
     string,
-    { invocationId: string; providerRequestId?: string }
+    import('@/modules/rendering').RenderAccountingIdentity
   >();
   const checkpoints = new Map<string, RenderOutputCheckpoint>();
 
@@ -165,6 +165,16 @@ export const createFakeRenderRepository = (now: () => Date) => {
     async saveSubmission(input) {
       const found = findResult(input.resultId);
       if (
+        found &&
+        found.result.attempt === input.attempt &&
+        found.result.providerRequestId === input.providerRequestId &&
+        ['submitted', 'succeeded'].includes(found.result.status) &&
+        owners.get(input.resultId) === input.workflowRunId &&
+        accountingIdentities.get(input.resultId)?.invocationId ===
+          input.accountingIdentity.invocationId
+      )
+        return Result.Ok({ type: 'result_submitted' });
+      if (
         !found ||
         found.result.attempt !== input.attempt ||
         found.result.status !== 'pending' ||
@@ -179,7 +189,7 @@ export const createFakeRenderRepository = (now: () => Date) => {
         providerRequestId: input.providerRequestId,
         settings: input.settings,
         prompt: input.prompt,
-        submittedAt: input.submittedAt,
+        submittedAt: new Date(input.submittedAt),
       });
       return Result.Ok({ type: 'result_submitted' });
     },

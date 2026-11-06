@@ -8,12 +8,10 @@ import type { Logger } from '@/modules/kernel/application/ports/logger';
 import type { ObjectStoragePort } from '@/modules/kernel/application/ports/object-storage';
 import type { PermissionChecker } from '@/modules/kernel/application/ports/permission-checker';
 import type { ProviderAccounting } from '@/modules/kernel/application/ports/provider-accounting';
-import type { ProviderCallLog } from '@/modules/kernel/application/ports/provider-call-log';
 import type { TransactionRunner } from '@/modules/kernel/application/ports/transaction-runner';
 import type { UploadIntentStore } from '@/modules/kernel/application/ports/upload-intent-store';
 import {
   BetterUploadObjectStorage,
-  createProviderCallLog,
   createUploadIntentStore,
 } from '@/modules/kernel/backend';
 import type { UserId } from '@/modules/kernel/domain/ids';
@@ -105,7 +103,6 @@ export type Kernel = {
   permissionChecker: PermissionChecker;
   objectStorage: ObjectStoragePort;
   uploadIntentStore: UploadIntentStore;
-  providerCallLog: ProviderCallLog;
   providerAccounting: ProviderAccounting;
 };
 
@@ -125,7 +122,6 @@ const buildDefaultKernel = (): Kernel => {
     permissionChecker: createProductionPermissionChecker(),
     objectStorage: new BetterUploadObjectStorage(),
     uploadIntentStore: createUploadIntentStore({ db }),
-    providerCallLog: createProviderCallLog({ db }),
     providerAccounting: createAccountingGateway({ db, clock }),
   };
 };
@@ -166,11 +162,6 @@ export const getKernel = (overrides?: KernelOverrides): Kernel => {
       (overrides.db || overrides.clock
         ? createAccountingGateway({ db, clock })
         : base.providerAccounting),
-    providerCallLog:
-      overrides.providerCallLog ??
-      (overrides.db !== undefined
-        ? createProviderCallLog({ db })
-        : base.providerCallLog),
   };
 };
 

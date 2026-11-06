@@ -348,6 +348,7 @@ jobs:
           )"
 
           {
+            printf '%s=%s\n' 'CRON_SECRET' "$(openssl rand -hex 32)"
             printf '%s=%s\n' 'AUTH_SECRET' "$(openssl rand -base64 32)"
             printf '%s=%s\n' 'DATABASE_URL' "${database_url}"
             printf '%s=%s\n' 'RESEND_API_KEY' "re_$(openssl rand -hex 16)"

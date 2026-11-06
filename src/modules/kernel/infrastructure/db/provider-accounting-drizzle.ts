@@ -2,7 +2,6 @@ import { Result } from '@bloodyowl/boxed';
 import { and, asc, count, eq, isNull, lte, min, sql } from 'drizzle-orm';
 
 import { createTransactionRunner } from './client';
-import { dispatchProviderReceipt } from './provider-accounting-dispatch';
 import { createProviderCallLog } from './provider-call-log-drizzle';
 import { providerCallReceipt as receiptTable } from './schema/provider-call-receipt';
 import type { Database, DbLike } from './types';
@@ -15,13 +14,14 @@ import type {
 } from '../../application/ports/provider-accounting';
 import type { ProviderCallRecord } from '../../application/ports/provider-call-log';
 import type { ApplicationResult } from '../../application/result';
+import { actionableErrorCode } from '../../domain/errors/actionable-error-code';
 import { AppError } from '../../domain/errors/app-error';
 import { safeErrorDiagnostics } from '../../domain/errors/safe-error-diagnostics';
 import { toProviderCallId, toUserId } from '../../domain/ids';
 
-const accountingError = (cause: unknown) =>
+const accountingError = (cause: unknown, code = 'PROVIDER_ACCOUNTING_FAILED') =>
   new AppError({
-    code: 'PROVIDER_ACCOUNTING_FAILED',
+    code,
     category: 'system',
     status: 500,
     message: 'Provider accounting persistence failed',
@@ -37,9 +37,15 @@ const receiptValues = (receipt: ProviderCallReceipt) => {
     !Number.isFinite(startedAt.getTime()) ||
     (completedAt !== null && !Number.isFinite(completedAt.getTime()))
   )
-    throw accountingError('Invalid provider receipt timestamp');
+    throw accountingError(
+      'Invalid provider receipt timestamp',
+      'PROVIDER_RECEIPT_INVALID_TIMESTAMP'
+    );
   if (receipt.providerRequestId?.includes('://'))
-    throw accountingError('Provider request identity must not be a URL');
+    throw accountingError(
+      'Provider request identity must not be a URL',
+      'PROVIDER_RECEIPT_INVALID_IDENTITY'
+    );
   return {
     ...receipt,
     userId: receipt.userId ?? null,
@@ -52,7 +58,38 @@ const receiptValues = (receipt: ProviderCallReceipt) => {
   };
 };
 
-/** Transaction-scoped capture only: never deliver into provider_call here. */
+type ReceiptRow = typeof receiptTable.$inferSelect;
+type ReceiptValues = ReturnType<typeof receiptValues>;
+const sameIdentity = (saved: ReceiptRow, expected: ReceiptValues) =>
+  saved.id === expected.id &&
+  saved.provider === expected.provider &&
+  saved.endpoint === expected.endpoint &&
+  saved.providerRequestId === expected.providerRequestId &&
+  saved.purpose === expected.purpose &&
+  saved.subjectId === expected.subjectId &&
+  saved.designId === expected.designId &&
+  saved.userId === expected.userId &&
+  saved.startedAt.getTime() === expected.startedAt.getTime();
+
+/** A canonical terminal success wins replay, but identity alone never proves promotion. */
+const satisfiesCapture = (
+  saved: ReceiptRow | undefined,
+  expected: ReceiptValues
+) => {
+  if (!saved || !sameIdentity(saved, expected)) return false;
+  if (saved.status === 'succeeded') return true;
+  if (expected.status === 'submitted' && saved.status === 'failed') return true;
+  return (
+    saved.status === expected.status &&
+    (expected.costUsdMicros === null ||
+      (saved.costUsdMicros === expected.costUsdMicros &&
+        saved.costSource === expected.costSource)) &&
+    (saved.status === 'failed' ||
+      saved.completedAt?.getTime() === expected.completedAt?.getTime())
+  );
+};
+
+/** Transaction-scoped capture only: never deliver or enqueue work here. */
 export const createProviderReceiptStore = ({ db }: { db: DbLike }) => ({
   async capture(
     receipt: ProviderCallReceipt
@@ -60,34 +97,51 @@ export const createProviderReceiptStore = ({ db }: { db: DbLike }) => ({
     try {
       const values = receiptValues(receipt);
       await db.insert(receiptTable).values(values).onConflictDoNothing();
-      const [saved] = await db
-        .select()
-        .from(receiptTable)
-        .where(eq(receiptTable.id, receipt.id));
-      if (
-        !saved ||
-        saved.provider !== receipt.provider ||
-        saved.endpoint !== receipt.endpoint ||
-        saved.providerRequestId !== (receipt.providerRequestId ?? null) ||
-        saved.purpose !== receipt.purpose ||
-        saved.subjectId !== (receipt.subjectId ?? null) ||
-        saved.designId !== (receipt.designId ?? null)
-      )
+      const read = async () =>
+        (
+          await db
+            .select()
+            .from(receiptTable)
+            .where(eq(receiptTable.id, receipt.id))
+        )[0];
+      let saved = await read();
+      if (!saved || !sameIdentity(saved, values))
         return Result.Error(
-          accountingError('Provider receipt identity mismatch')
+          accountingError(
+            'Provider receipt identity mismatch',
+            'PROVIDER_RECEIPT_IDENTITY_MISMATCH'
+          )
         );
-      // Terminal success is immutable. An earlier submitted/failed record can advance.
-      if (saved.status !== 'succeeded' && receipt.status === 'succeeded') {
+      if (
+        saved.status !== 'succeeded' &&
+        (receipt.status === 'succeeded' ||
+          (saved.status === 'submitted' && receipt.status === 'failed'))
+      ) {
         await db
           .update(receiptTable)
-          .set({ ...values, deliveredAt: null })
+          .set({
+            status: values.status,
+            costUsdMicros: values.costUsdMicros ?? saved.costUsdMicros,
+            costSource:
+              values.costUsdMicros === null && saved.costUsdMicros !== null
+                ? saved.costSource
+                : values.costSource,
+            completedAt: values.completedAt,
+            details: values.details,
+            deliveredAt: null,
+          })
           .where(
             and(
               eq(receiptTable.id, receipt.id),
               sql`${receiptTable.status} <> 'succeeded'`
             )
           );
+        saved = await read();
       }
+      if (!satisfiesCapture(saved, values))
+        return Result.Error(
+          accountingError('Provider receipt state was not captured')
+        );
       return Result.Ok({
         type: 'receipt_captured' as const,
         receiptId: receipt.id,
@@ -108,7 +162,10 @@ const toCall = (row: typeof receiptTable.$inferSelect): ProviderCallRecord => {
     !['submitted', 'succeeded', 'failed'].includes(row.status) ||
     !['reported', 'price_table', 'unavailable'].includes(row.costSource)
   )
-    throw accountingError('Invalid provider receipt');
+    throw accountingError(
+      'Invalid provider receipt',
+      'PROVIDER_RECEIPT_INVALID'
+    );
   return {
     id: id.get(),
     userId: userId?.isOk() ? userId.get() : undefined,
@@ -131,12 +188,10 @@ export const createProviderAccounting = ({
   db,
   clock,
   logger,
-  schedule,
 }: {
   db: Database;
   clock: Clock;
   logger: Logger;
-  schedule?: (receiptId: ProviderCallRecord['id']) => Promise<void>;
 }): ProviderAccounting => {
   const deliver: ProviderAccounting['deliver'] = async (receiptId) => {
     try {
@@ -196,7 +251,7 @@ export const createProviderAccounting = ({
         await db
           .update(receiptTable)
           .set({
-            lastErrorCode: error.code,
+            lastErrorCode: actionableErrorCode(cause, error.code),
             deliveryAttempts: sql`${receiptTable.deliveryAttempts} + 1`,
           })
           .where(
@@ -227,15 +282,7 @@ export const createProviderAccounting = ({
             .select()
             .from(receiptTable)
             .where(eq(receiptTable.id, receipt.id));
-          if (
-            found &&
-            found.provider === expected.provider &&
-            found.endpoint === expected.endpoint &&
-            found.providerRequestId === expected.providerRequestId &&
-            found.purpose === expected.purpose &&
-            found.subjectId === expected.subjectId &&
-            found.designId === expected.designId
-          )
+          if (satisfiesCapture(found, expected))
             saved = Result.Ok({
               type: 'receipt_captured',
               receiptId: receipt.id,
@@ -251,20 +298,6 @@ export const createProviderAccounting = ({
           });
         }
         if (saved.isError()) return Result.Error(original);
-      }
-      if (schedule) {
-        try {
-          await dispatchProviderReceipt(schedule, saved.get().receiptId);
-        } catch (cause) {
-          logger.warn({
-            event: 'provider_accounting.dispatch_failed',
-            details: {
-              receiptId: receipt.id,
-              code: accountingError(cause).code,
-              ...safeErrorDiagnostics(cause),
-            },
-          });
-        }
       }
       return saved;
     },

@@ -22,6 +22,7 @@ describe.each(['validateServerConfig', 'validateServerBuildConfig'] as const)(
       vi.resetModules();
       vi.unstubAllEnvs();
       vi.stubEnv('SKIP_ENV_VALIDATION', undefined);
+      vi.stubEnv('CRON_SECRET', makeStrongTestSecret('cron'));
     });
 
     it('throws ConfigurationError in production when AUTH_SECRET is missing', async () => {

@@ -1,8 +1,10 @@
 import { FatalError, getWorkflowMetadata, sleep } from 'workflow';
 
 import { failureCode } from '@/modules/kernel/domain/errors/failure-code';
-import { toRenderResultId } from '@/modules/kernel/domain/ids';
+import { toObjectKey, toRenderResultId } from '@/modules/kernel/domain/ids';
 import { unwrapStepResult } from '@/modules/kernel/transport/workflow/step-result-mapper';
+
+import type { AcceptedRenderSubmission } from '../../application/ports/ports';
 
 export const MAX_POLLS = 150;
 export const pollDelayMs = (poll: number) => Math.min(10, 2 + poll) * 1000;
@@ -33,6 +35,23 @@ async function submitStep(input: Execution) {
     ).submit({ ...input, resultId: resultIdOrFail(input.resultId) })
   );
 }
+async function persistSubmissionStep(input: AcceptedRenderSubmission) {
+  'use step';
+  return unwrapStepResult(await (await pipeline()).persistSubmission(input));
+}
+async function cleanupOutputStep(objectKey: string, input: Execution) {
+  'use step';
+  return unwrapStepResult(
+    await (
+      await pipeline()
+    ).discardOutput({
+      ...input,
+      resultId: resultIdOrFail(input.resultId),
+      objectKey: unwrapStepResult(toObjectKey(objectKey)),
+    })
+  );
+}
+
 async function pollStep(input: Execution & { providerRequestId: string }) {
   'use step';
   return unwrapStepResult(
@@ -66,7 +85,19 @@ async function runResult(input: Execution): Promise<string> {
       : failed.type;
   };
   try {
-    const submitted = await submitStep(input);
+    const accepted = await submitStep(input);
+    let submitted:
+      | Awaited<ReturnType<typeof persistSubmissionStep>>
+      | Exclude<typeof accepted, { type: 'result_accepted' }>;
+    if (accepted.type === 'result_accepted') {
+      providerRequestId = accepted.submission.providerRequestId;
+      try {
+        submitted = await persistSubmissionStep(accepted.submission);
+      } catch {
+        // Acceptance is durable; preserve this attempt and its existing Retry deadline.
+        return 'result_submission_unresolved';
+      }
+    } else submitted = accepted;
     if (
       submitted.type !== 'result_submitted' &&
       submitted.type !== 'result_already_submitted'
@@ -105,12 +136,20 @@ export async function renderWorkflow(input: {
 export async function renderResultWorkflow(input: {
   resultId: string;
   attempt: number;
+  replacedObjectKey?: string;
 }) {
   'use workflow';
+  const execution = {
+    resultId: input.resultId,
+    attempt: input.attempt,
+    workflowRunId: getWorkflowMetadata().workflowRunId,
+  };
+  const result = runResult(execution);
+  const cleanup = input.replacedObjectKey
+    ? cleanupOutputStep(input.replacedObjectKey, execution)
+    : Promise.resolve();
+  const [rendered] = await Promise.allSettled([result, cleanup]);
   return {
-    result: await runResult({
-      ...input,
-      workflowRunId: getWorkflowMetadata().workflowRunId,
-    }),
+    result: rendered.status === 'fulfilled' ? rendered.value : 'result_failed',
   };
 }

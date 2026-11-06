@@ -65,4 +65,36 @@ describe('accounting recovery workflows', () => {
     });
     expect(state.deliver).toHaveBeenCalledTimes(3);
   });
+  it('caps delivery concurrency at five while paging past a full batch and isolating failures', async () => {
+    const ids = Array.from({ length: 100 }, (_, i) => `receipt-${i}`);
+    state.list
+      .mockResolvedValueOnce(Result.Ok({ type: 'pending_receipts', ids }))
+      .mockResolvedValueOnce(
+        Result.Ok({ type: 'pending_receipts', ids: ['last-receipt'] })
+      )
+      .mockResolvedValueOnce(Result.Ok({ type: 'pending_receipts', ids: [] }));
+    let active = 0;
+    let maximum = 0;
+    state.deliver.mockImplementation(async (id: string) => {
+      active++;
+      maximum = Math.max(maximum, active);
+      await Promise.resolve();
+      active--;
+      return id === 'receipt-2'
+        ? Result.Error(
+            new AppError({ code: 'SINK_DOWN', category: 'system', status: 500 })
+          )
+        : Result.Ok({ type: 'receipt_delivered' });
+    });
+    expect(await accountingReconcileWorkflow()).toEqual({
+      delivered: 100,
+      failed: 1,
+      pending: 1,
+    });
+    expect(maximum).toBe(5);
+    expect(state.list).toHaveBeenNthCalledWith(2, {
+      before: '2026-11-06T07:00:00.000Z',
+      after: ids.at(-1),
+    });
+  });
 });

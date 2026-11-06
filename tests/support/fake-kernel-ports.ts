@@ -7,6 +7,7 @@ import type {
   ProviderCallRecord,
   UploadIntentStore,
 } from '@/modules/kernel';
+import { AppError } from '@/modules/kernel';
 
 type StoredObject = { bytes: Uint8Array; contentType: string };
 
@@ -201,8 +202,37 @@ export const createFakeProviderCallLog = () => {
   const delivered = new Set<string>();
   const accounting: ProviderAccounting = {
     async capture(receipt) {
-      if (!receipts.has(receipt.id)) receipts.set(receipt.id, receipt);
-      await accounting.deliver(receipt.id);
+      const existing = receipts.get(receipt.id);
+      if (
+        existing &&
+        (existing.provider !== receipt.provider ||
+          existing.endpoint !== receipt.endpoint ||
+          existing.providerRequestId !== receipt.providerRequestId ||
+          existing.purpose !== receipt.purpose ||
+          existing.subjectId !== receipt.subjectId ||
+          existing.designId !== receipt.designId ||
+          existing.userId !== receipt.userId ||
+          existing.startedAt !== receipt.startedAt)
+      )
+        return Result.Error(
+          new AppError({
+            code: 'PROVIDER_RECEIPT_IDENTITY_MISMATCH',
+            category: 'system',
+            status: 500,
+          })
+        );
+      if (
+        !existing ||
+        (existing.status !== 'succeeded' &&
+          (receipt.status === 'succeeded' ||
+            (existing.status === 'submitted' && receipt.status === 'failed')))
+      ) {
+        receipts.set(receipt.id, {
+          ...receipt,
+          costUsdMicros: receipt.costUsdMicros ?? existing?.costUsdMicros,
+        });
+        delivered.delete(receipt.id);
+      }
       return Result.Ok({ type: 'receipt_captured', receiptId: receipt.id });
     },
     async deliver(id) {

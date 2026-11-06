@@ -22,6 +22,8 @@ import type { RenderRecipe } from '@/modules/rendering/domain/recipe';
 import type { ModelSettings } from '@/modules/rendering/domain/render';
 import type { RenderOutputCheckpoint } from '@/modules/rendering/domain/render-output';
 
+import type { RenderAccountingIdentity } from '../../application/ports/ports';
+
 /** Autosaved unfinished edits, one per render source. */
 export const renderDraft = pgTable(
   'render_draft',
@@ -82,10 +84,8 @@ export const renderResult = pgTable(
       .notNull(),
     providerRequestId: text('providerRequestId'),
     workflowRunId: text('workflowRunId'),
-    accountingIdentity: jsonb('accountingIdentity').$type<{
-      invocationId: string;
-      providerRequestId?: string;
-    }>(),
+    accountingIdentity:
+      jsonb('accountingIdentity').$type<RenderAccountingIdentity>(),
     outputCheckpoint: jsonb('outputCheckpoint').$type<RenderOutputCheckpoint>(),
     modelVersion: text('modelVersion'),
     settings: jsonb('settings').$type<ModelSettings>().default({}).notNull(),
