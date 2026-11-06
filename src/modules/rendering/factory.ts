@@ -1,7 +1,3 @@
-import { Result } from '@bloodyowl/boxed';
-
-import type { ObjectKey } from '@/modules/kernel/domain/ids';
-
 import {
   copyDraftPlacements,
   discardLostOutput,
@@ -29,6 +25,7 @@ import type {
   RenderingPipelineDeps,
   RenderingUseCaseDeps,
 } from './application/use-cases/types';
+import type { RenderOutputTarget } from './domain/render-output-target';
 
 type Input<TFn extends (deps: never, input: never) => unknown> =
   Parameters<TFn>[1];
@@ -63,11 +60,22 @@ export function createRenderingPipelineUseCases(deps: RenderingPipelineDeps) {
     persistSubmission: (input: Input<typeof persistSubmission>) =>
       persistSubmission(deps, input),
     poll: (input: Input<typeof pollResult>) => pollResult(deps, input),
-    discardOutput: async (
-      input: Parameters<typeof discardLostOutput>[1] & { objectKey: ObjectKey }
-    ) => {
-      await discardLostOutput(deps, input, input.objectKey);
-      return Result.Ok({ type: 'output_cleanup_finished' as const });
+    discardOutput: (input: RenderOutputTarget) =>
+      discardLostOutput(
+        deps,
+        { ...input, workflowRunId: 'cleanup' },
+        input.objectKey
+      ),
+    reportSubmissionUnresolved: (input: {
+      resultId: string;
+      attempt: number;
+      workflowRunId: string;
+      code: string;
+    }) => {
+      deps.logger.warn({
+        event: 'rendering.result.submission_unresolved',
+        details: input,
+      });
     },
     markFailed: (input: Input<typeof markResultFailed>) =>
       markResultFailed(deps, input),

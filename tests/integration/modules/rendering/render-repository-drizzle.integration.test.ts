@@ -1,4 +1,3 @@
-import { errorCauses } from '@/modules/kernel/domain/errors/error-causes';
 import { makeUserRow } from '@tests/server/db-fixtures';
 import { createRecoveryTestDatabase } from '@tests/server/recovery-database';
 import { makeProviderReceipt } from '@tests/support/provider-receipt';
@@ -17,6 +16,7 @@ import {
 
 import { toDesignName } from '@/modules/design';
 import { createDesignRepository } from '@/modules/design/testing';
+import { errorCauses } from '@/modules/kernel/domain/errors/error-causes';
 import {
   toDesignId,
   toImageId,
@@ -32,7 +32,10 @@ import {
 } from '@/modules/kernel/infrastructure/db/schema';
 import { unwrapParseResult } from '@/modules/kernel/testing';
 import type { RenderRecipe } from '@/modules/rendering';
-import { createRenderRepository } from '@/modules/rendering/testing';
+import {
+  createRenderRepository,
+  renderOutputCleanup,
+} from '@/modules/rendering/testing';
 
 const ownerId = unwrapParseResult(toUserId('owner-1'));
 const designId = unwrapParseResult(toDesignId('design-1'));
@@ -391,6 +394,7 @@ describe('RenderRepositoryDrizzle', () => {
           ...input,
           settings: {},
           prompt: '',
+          attemptDeadlineAt: '2026-11-06T19:30:00.000Z',
           submittedAt: startedAt.toISOString(),
           accountingIdentity: {
             invocationId: 'test-invocation',
@@ -533,6 +537,7 @@ describe('RenderRepositoryDrizzle', () => {
             ...input,
             settings: {},
             prompt: '',
+            attemptDeadlineAt: '2026-11-06T19:30:00.000Z',
             submittedAt: next.toISOString(),
             accountingIdentity: {
               invocationId: 'test-invocation',
@@ -733,8 +738,11 @@ describe('RenderRepositoryDrizzle', () => {
     );
     expect(retry).toMatchObject({
       type: 'result_retry_claimed',
-      replacedObjectKey: first.objectKey,
+      cleanupId: first.objectKey,
     });
+    expect(await database.db.select().from(renderOutputCleanup)).toMatchObject([
+      { objectKey: first.objectKey, resultId: input.resultId, attempt: 1 },
+    ]);
     const losing = {
       ...first,
       receipt: makeProviderReceipt({
@@ -752,9 +760,100 @@ describe('RenderRepositoryDrizzle', () => {
       2
     );
     await database.db.execute(sql`delete from design where id = ${designId}`);
+    expect(await database.db.select().from(renderOutputCleanup)).toHaveLength(
+      1
+    );
     expect(await database.db.select().from(providerCallReceipt)).toHaveLength(
       2
     );
+  });
+  it.skipIf(!process.env.RECOVERY_TEST_DATABASE_URL)(
+    'rolls back Retry and checkpoint clearing when cleanup enqueue fails',
+    async () => {
+      const { input, startedAt } = await newAttempt('submitted');
+      okValue(
+        await repository.saveOutput({
+          ...input,
+          checkpoint: checkpointFor(startedAt),
+        })
+      );
+      await database.db.execute(
+        sql`alter table render_output_cleanup add constraint reject_cleanup check (attempt < 0)`
+      );
+      try {
+        expect(
+          (
+            await repository.retryAttempt({
+              resultId: input.resultId,
+              expectedAttempt: 1,
+              startedAt: new Date(startedAt.getTime() + 31 * 60000),
+              expiredBeforeMs: startedAt.getTime(),
+            })
+          ).isError()
+        ).toBe(true);
+        expect(
+          okValue(await repository.publicationContext(input.resultId))
+        ).toMatchObject({
+          context: {
+            result: { attempt: 1, status: 'submitted' },
+            checkpoint: { objectKey: checkpointFor(startedAt).objectKey },
+          },
+        });
+      } finally {
+        await database.db.execute(
+          sql`alter table render_output_cleanup drop constraint reject_cleanup`
+        );
+      }
+    }
+  );
+  it('fails only the owner when a journaled request was not persisted', async () => {
+    const { input, startedAt } = await newAttempt();
+    okValue(await repository.claimExecution(input));
+    expect(
+      okValue(
+        await repository.failResultAttempt({
+          ...input,
+          workflowRunId: 'intruder',
+          submissionPersistenceFailure: true,
+          reason: 'identity',
+          now: startedAt,
+        })
+      ).type
+    ).toBe('result_attempt_superseded');
+    expect(
+      okValue(
+        await repository.failResultAttempt({
+          ...input,
+          submissionPersistenceFailure: true,
+          reason: 'identity',
+          now: startedAt,
+        })
+      ).type
+    ).toBe('result_marked_failed');
+  });
+  it('requires the expected request before failing submitted work', async () => {
+    const { input, startedAt } = await newAttempt('submitted');
+    expect(
+      okValue(
+        await repository.failResultAttempt({
+          ...input,
+          providerRequestId: undefined,
+          reason: 'unknown request',
+          now: startedAt,
+        })
+      ).type
+    ).toBe('result_attempt_superseded');
+    expect(
+      okValue(
+        await repository.failResultAttempt({
+          ...input,
+          providerRequestId: 'other-request',
+          submissionPersistenceFailure: true,
+          reason: 'identity',
+          now: startedAt,
+        })
+      ).type
+    ).toBe('result_attempt_superseded');
   });
   it('replays a lost checkpoint commit reply with one durable receipt', async () => {
     const { input, startedAt } = await newAttempt('submitted');
@@ -796,6 +895,7 @@ describe('RenderRepositoryDrizzle', () => {
         ...input,
         settings: {},
         prompt: 'test',
+        attemptDeadlineAt: '2026-11-06T19:30:00.000Z',
         submittedAt: startedAt.toISOString(),
         accountingIdentity: {
           invocationId: 'accepted-invocation',

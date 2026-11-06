@@ -144,6 +144,7 @@
     "auth:password": "dotenv -- node ./run-jiti ./scripts/auth-password.ts",
     "smoke:model": "dotenv -- tsx scripts/smoke-model.ts",
     "db:seed": "dotenv -- cross-env node ./run-jiti ./drizzle/seed/index.ts",
+    "rendering:cleanup": "dotenv -- node ./run-jiti ./scripts/rendering-cleanup.ts",
     "accounting:reconcile": "dotenv -- tsx scripts/accounting-reconcile.ts"
   },
   "dependencies": {

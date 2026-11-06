@@ -1,4 +1,7 @@
+export type * from './application/ports/output-cleanup';
 export type * from './application/ports/ports';
+export type { OutputCleanupDeps } from './application/use-cases/output-cleanup';
+export { cleanupRenderOutput } from './application/use-cases/output-cleanup';
 export type {
   RenderResultView,
   RenderSourceView,
@@ -17,6 +20,7 @@ export * from './domain/prompt-builder';
 export * from './domain/recipe';
 export * from './domain/render';
 export type { RenderOutputCheckpoint } from './domain/render-output';
+export * from './domain/render-output-target';
 export * from './domain/render-plan';
 export * from './domain/render-retry-policy';
 export {

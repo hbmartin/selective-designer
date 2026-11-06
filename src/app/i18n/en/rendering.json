@@ -32,7 +32,8 @@
     "too_many_references": "Too many reference images for this model ({{references}} of {{limit}})"
   },
   "errors": {
-    "retryFailed": "Could not retry this model."
+    "retryFailed": "Could not retry this model.",
+    "recoveryFailed": "This render could not be recovered."
   },
   "editor": {
     "title": "Edit {{name}}",

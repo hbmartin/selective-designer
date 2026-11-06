@@ -26,6 +26,7 @@ const accountingError = (cause: unknown, code = 'PROVIDER_ACCOUNTING_FAILED') =>
     status: 500,
     message: 'Provider accounting persistence failed',
     cause,
+    retryable: code === 'PROVIDER_ACCOUNTING_FAILED' ? undefined : false,
   });
 
 /** JSON timestamps are parsed exactly once at this persistence boundary. */
@@ -147,7 +148,9 @@ export const createProviderReceiptStore = ({ db }: { db: DbLike }) => ({
         receiptId: receipt.id,
       });
     } catch (cause) {
-      return Result.Error(accountingError(cause));
+      return Result.Error(
+        cause instanceof AppError ? cause : accountingError(cause)
+      );
     }
   },
 });

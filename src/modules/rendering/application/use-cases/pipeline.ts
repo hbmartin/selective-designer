@@ -32,6 +32,8 @@ import { buildPrompt } from '../../domain/prompt-builder';
 import { recipeReferences, targetBoxes } from '../../domain/recipe';
 import type { Render, RenderResult } from '../../domain/render';
 import type { RenderOutputCheckpoint } from '../../domain/render-output';
+import { validateRenderOutputTarget } from '../../domain/render-output-target';
+import { RENDER_RETRY_AFTER_MS } from '../../domain/render-retry-policy';
 
 const OUTPUT_MAX_BYTES = 40 * 1024 * 1024;
 const OUTPUT_TYPES = ['image/png', 'image/jpeg', 'image/webp'] as const;
@@ -170,6 +172,9 @@ export async function submitResult(
     type: 'result_accepted',
     submission: {
       ...input,
+      attemptDeadlineAt: new Date(
+        result.attemptStartedAt.getTime() + RENDER_RETRY_AFTER_MS
+      ).toISOString(),
       providerRequestId: submission.providerRequestId,
       settings: submission.settings,
       prompt: request.get().prompt,
@@ -273,48 +278,48 @@ const failPoll = async (
 };
 
 export const discardLostOutput = async (
-  deps: RenderingPipelineDeps,
+  deps: Pick<
+    RenderingPipelineDeps,
+    'logger' | 'resultOutputReferences' | 'objectStorage'
+  >,
   input: RenderExecution,
   objectKey: ObjectKey
-) => {
+): Promise<
+  RenderingResult<{ type: 'output_deleted' } | { type: 'output_retained' }>
+> => {
+  const target = validateRenderOutputTarget({ ...input, objectKey });
+  if (target.isError()) return Result.Error(target.getError());
   const referenced = await deps.resultOutputReferences.check(objectKey);
   if (referenced.isError()) {
     deps.logger.warn({
       event: 'rendering.result.cleanup_failed',
       details: { ...renderLogContext(input), code: referenced.getError().code },
     });
-    return;
+    return Result.Error(referenced.getError());
   }
-  if (referenced.get().type === 'output_referenced') return;
+  if (referenced.get().type === 'output_referenced')
+    return Result.Ok({ type: 'output_retained' as const });
   const deleted = await deps.objectStorage.deleteObject(objectKey);
-  if (deleted.isError())
+  if (deleted.isError()) {
     deps.logger.warn({
       event: 'rendering.result.cleanup_failed',
       details: { ...renderLogContext(input), code: deleted.getError().code },
     });
+    return Result.Error(deleted.getError());
+  }
+  return Result.Ok({ type: 'output_deleted' as const });
 };
 
 const outputReceipt = (
-  context: RenderPublicationContext,
+  original: ProviderCallReceipt,
   checkpoint: Omit<RenderOutputCheckpoint, 'receipt'>
-): RenderingResult<ProviderCallReceipt> => {
-  const original = context.accountingIdentity?.receipt;
-  if (!original)
-    return Result.Error(
-      new AppError({
-        code: 'RENDER_ACCOUNTING_IDENTITY_MISSING',
-        category: 'system',
-        status: 500,
-      })
-    );
-  return Result.Ok({
-    ...original,
-    status: 'succeeded',
-    costUsdMicros: checkpoint.costUsdMicros ?? undefined,
-    costSource: checkpoint.costSource,
-    completedAt: checkpoint.completedAt,
-  });
-};
+): ProviderCallReceipt => ({
+  ...original,
+  status: 'succeeded',
+  costUsdMicros: checkpoint.costUsdMicros ?? undefined,
+  costSource: checkpoint.costSource,
+  completedAt: checkpoint.completedAt,
+});
 const recordOutput = (
   deps: RenderingPipelineDeps,
   checkpoint: RenderOutputCheckpoint
@@ -363,7 +368,9 @@ const outputKeyFor = (
 const checkpointProviderOutput = async (
   deps: RenderingPipelineDeps,
   input: PollExecution,
-  context: RenderPublicationContext
+  context: RenderPublicationContext & {
+    accountingIdentity: { receipt: ProviderCallReceipt };
+  }
 ): Promise<
   RenderingResult<
     | {
@@ -403,14 +410,6 @@ const checkpointProviderOutput = async (
     return Result.Ok({ type: 'result_pending' });
   if (poll.type === 'model_failed') {
     const receipt = context.accountingIdentity?.receipt;
-    if (!receipt)
-      return Result.Error(
-        new AppError({
-          code: 'RENDER_ACCOUNTING_IDENTITY_MISSING',
-          category: 'system',
-          status: 500,
-        })
-      );
     const captured = await deps.providerAccounting.capture({
       ...receipt,
       status: 'failed',
@@ -445,11 +444,9 @@ const checkpointProviderOutput = async (
     costSource,
     completedAt: now.toISOString(),
   };
-  const receipt = outputReceipt(context, metadata);
-  if (receipt.isError()) return Result.Error(receipt.getError());
   const checkpoint: RenderOutputCheckpoint = {
     ...metadata,
-    receipt: receipt.get(),
+    receipt: outputReceipt(context.accountingIdentity.receipt, metadata),
   };
   if (!poll.outputBytes && !poll.outputUrl) {
     const logged = await recordOutput(deps, checkpoint);
@@ -492,10 +489,6 @@ const checkpointProviderOutput = async (
     if (logged.isError()) warnCostRecord(deps, input, logged.getError().code);
     if (createdKey) await discardLostOutput(deps, input, createdKey);
     return recoverCompletedResult(deps, input);
-  }
-  if (checkpoint.receipt?.id !== savedValue.checkpoint.receipt?.id) {
-    const logged = await recordOutput(deps, checkpoint);
-    if (logged.isError()) warnCostRecord(deps, input, logged.getError().code);
   }
   if (createdKey && savedValue.checkpoint.objectKey !== createdKey) {
     await discardLostOutput(deps, input, createdKey);
@@ -541,24 +534,22 @@ export async function pollResult(
         code: 'RENDER_ACCOUNTING_IDENTITY_MISSING',
         category: 'system',
         status: 500,
+        retryable: false,
       })
     );
 
   let checkpoint = context.checkpoint;
   let createdKey: ObjectKey | undefined;
   if (!checkpoint) {
-    const prepared = await checkpointProviderOutput(deps, input, context);
+    const prepared = await checkpointProviderOutput(deps, input, {
+      ...context,
+      accountingIdentity: context.accountingIdentity,
+    });
     if (prepared.isError()) return Result.Error(prepared.getError());
     const output = prepared.get();
     if (output.type !== 'output_checkpointed') return Result.Ok(output);
     checkpoint = output.checkpoint;
     createdKey = output.createdKey;
-  }
-
-  const logged = await recordOutput(deps, checkpoint);
-  if (logged.isError()) {
-    // The checkpoint already committed its receipt atomically.
-    warnCostRecord(deps, input, logged.getError().code);
   }
 
   // An interrupted publication must never depend on the provider link again.
@@ -621,7 +612,11 @@ export async function pollResult(
 
 export async function markResultFailed(
   deps: Pick<RenderingPipelineDeps, 'renderRepository' | 'clock' | 'logger'>,
-  input: RenderExecution & { reason: string; providerRequestId?: string }
+  input: RenderExecution & {
+    reason: string;
+    providerRequestId?: string;
+    submissionPersistenceFailure?: true;
+  }
 ): Promise<
   RenderingResult<
     { type: 'result_marked_failed' } | { type: 'result_attempt_superseded' }

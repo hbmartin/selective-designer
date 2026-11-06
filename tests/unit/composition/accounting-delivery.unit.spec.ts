@@ -6,9 +6,14 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import type { ApplicationResult } from '@/modules/kernel';
 
-const host = vi.hoisted(() => ({ getDeadline: vi.fn(), waitUntil: vi.fn() }));
+const host = vi.hoisted(() => ({ getEnv: vi.fn(), waitUntil: vi.fn() }));
 vi.mock('@vercel/functions', () => host);
+vi.mock('workflow/api', () => ({ start: vi.fn(async () => ({})) }));
+vi.mock('@/modules/kernel/workflows/backend', () => ({
+  accountingDeliveryWorkflow: vi.fn(),
+}));
 import {
+  createAccountingFacade,
   deferAccountingDelivery,
   withAccountingDelivery,
 } from '@/composition/accounting-delivery';
@@ -25,36 +30,33 @@ afterEach(() => {
   vi.resetAllMocks();
 });
 describe('accounting dispatch ownership', () => {
-  it.each(['render', 'cutout', 'interactive SAM'])(
-    'returns published %s before an HTTP background dispatch resolves',
-    async () => {
-      const gateway = createFakeProviderCallLog();
-      const receipt = makeProviderReceipt();
-      const tasks: (() => Promise<void>)[] = [];
-      let published = false;
-      const schedule = vi.fn(() => new Promise<void>(() => {}));
-      const result = await withAccountingDelivery({
-        accounting: gateway.accounting,
-        logger: logger(),
-        owner: 'http',
-        schedule,
-        defer: (task) => {
-          tasks.push(task);
-        },
-        operation: async (accounting) => {
-          await accounting.capture(receipt);
-          published = true;
-          return Result.Ok({ type: 'published' });
-        },
-      });
-      expect(okValue(result)).toEqual({ type: 'published' });
-      expect(published).toBe(true);
-      expect(gateway.receipts.size).toBe(1);
-      expect(gateway.calls.size).toBe(0);
-      expect(tasks).toHaveLength(1);
-      expect(schedule).not.toHaveBeenCalled();
-    }
-  );
+  it('returns the operation result before an HTTP background dispatch resolves', async () => {
+    const gateway = createFakeProviderCallLog();
+    const receipt = makeProviderReceipt();
+    const tasks: (() => Promise<void>)[] = [];
+    let published = false;
+    const schedule = vi.fn(() => new Promise<void>(() => {}));
+    const result = await withAccountingDelivery({
+      accounting: gateway.accounting,
+      logger: logger(),
+      owner: 'http',
+      schedule,
+      defer: (task) => {
+        tasks.push(task);
+      },
+      operation: async (accounting) => {
+        await accounting.capture(receipt);
+        published = true;
+        return Result.Ok({ type: 'published' });
+      },
+    });
+    expect(okValue(result)).toEqual({ type: 'published' });
+    expect(published).toBe(true);
+    expect(gateway.receipts.size).toBe(1);
+    expect(gateway.calls.size).toBe(0);
+    expect(tasks).toHaveLength(1);
+    expect(schedule).not.toHaveBeenCalled();
+  });
   it.each(['failed', 'superseded'])(
     'dispatches captured %s calls after the operation settles',
     async (outcome) => {
@@ -116,10 +118,28 @@ describe('accounting dispatch ownership', () => {
     );
     expect(vi.getTimerCount()).toBe(0);
   });
+  it('wraps newly exposed facade operations without a method allowlist', async () => {
+    const gateway = createFakeProviderCallLog();
+    host.getEnv.mockReturnValue({ VERCEL: '1', VERCEL_ENV: 'production' });
+    const facade = createAccountingFacade({
+      accounting: gateway.accounting,
+      logger: logger(),
+      owner: 'http',
+      create: (accounting) => ({
+        newlyAdded: async () => {
+          await accounting.capture(makeProviderReceipt());
+          return 'published';
+        },
+      }),
+    });
+    expect(await facade.newlyAdded()).toBe('published');
+    expect(host.waitUntil).toHaveBeenCalledOnce();
+    // Finish the bounded background dispatch without opening a real queue.
+  });
   it('registers HTTP work with the supported host owner and skips unsupported lifetimes', async () => {
     const task = vi.fn(async () => {});
     const log = logger();
-    host.getDeadline.mockReturnValue(undefined);
+    host.getEnv.mockReturnValue({});
     deferAccountingDelivery(task, log);
     expect(task).not.toHaveBeenCalled();
     expect(log.info).toHaveBeenCalledWith(
@@ -127,13 +147,13 @@ describe('accounting dispatch ownership', () => {
         event: 'provider_accounting.dispatch_deferred',
       })
     );
-    host.getDeadline.mockReturnValue(new Date());
+    host.getEnv.mockReturnValue({ VERCEL: '1', VERCEL_ENV: 'production' });
     deferAccountingDelivery(task, log);
     expect(task).toHaveBeenCalledOnce();
     expect(host.waitUntil).toHaveBeenCalledWith(expect.any(Promise));
   });
   it('preserves an HTTP result when host task registration throws', async () => {
-    host.getDeadline.mockReturnValue(new Date());
+    host.getEnv.mockReturnValue({ VERCEL: '1', VERCEL_ENV: 'production' });
     host.waitUntil.mockImplementation(() => {
       throw new Error('host unavailable');
     });

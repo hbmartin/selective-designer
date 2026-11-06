@@ -17,7 +17,7 @@ import {
   createItemRepository,
 } from '@/modules/moodboard/backend';
 
-import { withAccountingDelivery } from './accounting-delivery';
+import { createAccountingFacade } from './accounting-delivery';
 import { getPipelineKernel, type PipelineKernel } from './pipeline-kernel';
 import { createCachedFactory } from './shared/singleton';
 
@@ -97,23 +97,13 @@ const buildPipelineUseCases = (overrides?: MoodboardPipelineOverrides) => {
     clock: kernel.clock,
     logger: kernel.logger,
   };
-  const useCases = createMoodboardPipelineUseCases(deps);
-  return {
-    ...useCases,
-    removeBackground: (
-      input: Parameters<typeof useCases.removeBackground>[0]
-    ) =>
-      withAccountingDelivery({
-        accounting: deps.providerAccounting,
-        logger: kernel.logger,
-        owner: 'workflow',
-        operation: (providerAccounting) =>
-          createMoodboardPipelineUseCases({
-            ...deps,
-            providerAccounting,
-          }).removeBackground(input),
-      }),
-  };
+  return createAccountingFacade({
+    accounting: deps.providerAccounting,
+    logger: kernel.logger,
+    owner: 'workflow',
+    create: (providerAccounting) =>
+      createMoodboardPipelineUseCases({ ...deps, providerAccounting }),
+  });
 };
 
 const pipelineFactory = createCachedFactory(buildPipelineUseCases);

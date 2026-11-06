@@ -16,6 +16,7 @@ import {
   toDesignId,
   toGeneratedId,
   toImageId,
+  toRenderResultId,
   toObjectKey,
   toUserId,
 } from '@/modules/kernel/domain/ids';
@@ -98,7 +99,7 @@ const setup = (options: { enabledModelIds?: readonly string[] } = {}) => {
   let counter = 0;
   const storage = createFakeObjectStorage();
   const calls = createFakeProviderCallLog();
-  const renders = createFakeRenderRepository(() => now);
+  const renders = createFakeRenderRepository(() => now, calls.accounting);
   const images = new Map<string, SourceImage>([
     [
       baseImageId,
@@ -581,7 +582,13 @@ describe('render pipeline', () => {
       'result_submitted',
     ]);
     expect(ctx.models.get('krea-3')!.requests).toHaveLength(1);
-    okValue(await ctx.pipeline.markFailed({ ...first, reason: 'failed' }));
+    okValue(
+      await ctx.pipeline.markFailed({
+        ...first,
+        providerRequestId: result.providerRequestId!,
+        reason: 'failed',
+      })
+    );
     const claims = await Promise.all([
       ctx.useCases.retryResult({ currentUserId: ownerId, resultId: result.id }),
       ctx.useCases.retryResult({ currentUserId: ownerId, resultId: result.id }),
@@ -1671,11 +1678,41 @@ describe('independent render accounting', () => {
       expect(result.attempt).toBe(2);
       // Retry returns after scheduling; the workflow owns reference checks/deletion.
       expect(ctx.storage.objects.has(objectKey)).toBe(true);
-      okValue(
-        await ctx.pipeline.discardOutput({ ...execution(result), objectKey })
+      const cleaned = await ctx.pipeline.discardOutput({
+        resultId: result.id,
+        attempt: 1,
+        objectKey,
+      });
+      expect(cleaned.isError()).toBe(
+        state === 'unknown' || state === 'delete failure'
       );
       expect(ctx.storage.objects.has(objectKey)).toBe(state !== 'unreferenced');
       expect(ctx.calls.receipts.size).toBe(1);
+    }
+  );
+  it.each([
+    'item-cutouts/a.png',
+    'region-masks/a.png',
+    'item-photos/a.png',
+    'results/other/1/raw.png',
+    'results/result-1/2/raw.png',
+  ])(
+    'rejects cleanup of %s before reading references or storage',
+    async (value) => {
+      const ctx = setup();
+      const refs = vi.spyOn(ctx.resultOutputReferences, 'check');
+      const remove = vi.spyOn(ctx.storage.storage, 'deleteObject');
+      expect(
+        (
+          await ctx.pipeline.discardOutput({
+            resultId: okValue(toRenderResultId('result-1')),
+            attempt: 1,
+            objectKey: key(value),
+          })
+        ).isError()
+      ).toBe(true);
+      expect(refs).not.toHaveBeenCalled();
+      expect(remove).not.toHaveBeenCalled();
     }
   );
   it('keeps polling locators out of durable accounting receipts', async () => {

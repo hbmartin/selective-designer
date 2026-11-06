@@ -97,4 +97,26 @@ describe('accounting recovery workflows', () => {
       after: ids.at(-1),
     });
   });
+  it('replenishes four slots while a fifth delivery is still suspended', async () => {
+    state.list
+      .mockResolvedValueOnce(
+        Result.Ok({
+          type: 'pending_receipts',
+          ids: ['slow', 'a', 'b', 'c', 'd', 'e', 'f'],
+        })
+      )
+      .mockResolvedValue(Result.Ok({ type: 'pending_receipts', ids: [] }));
+    let release!: () => void;
+    state.deliver.mockImplementation(async (id: string) => {
+      if (id === 'slow')
+        await new Promise<void>((resolve) => {
+          release = resolve;
+        });
+      return Result.Ok({ type: 'receipt_delivered' });
+    });
+    const running = accountingReconcileWorkflow();
+    await vi.waitFor(() => expect(state.deliver).toHaveBeenCalledWith('f'));
+    release();
+    expect(await running).toMatchObject({ delivered: 7, failed: 0 });
+  });
 });

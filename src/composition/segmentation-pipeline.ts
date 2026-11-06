@@ -18,7 +18,7 @@ import {
   createRegionRepository,
 } from '@/modules/segmentation/backend';
 
-import { withAccountingDelivery } from './accounting-delivery';
+import { createAccountingFacade } from './accounting-delivery';
 import { getPipelineKernel, type PipelineKernel } from './pipeline-kernel';
 import { createCachedFactory } from './shared/singleton';
 
@@ -98,21 +98,13 @@ const build = (overrides?: SegmentationPipelineOverrides) => {
     clock: kernel.clock,
     logger: kernel.logger,
   };
-  const useCases = createSegmentationPipelineUseCases(deps);
-  return {
-    ...useCases,
-    detectConcept: (input: Parameters<typeof useCases.detectConcept>[0]) =>
-      withAccountingDelivery({
-        accounting: deps.providerAccounting,
-        logger: kernel.logger,
-        owner: 'workflow',
-        operation: (providerAccounting) =>
-          createSegmentationPipelineUseCases({
-            ...deps,
-            providerAccounting,
-          }).detectConcept(input),
-      }),
-  };
+  return createAccountingFacade({
+    accounting: deps.providerAccounting,
+    logger: kernel.logger,
+    owner: 'workflow',
+    create: (providerAccounting) =>
+      createSegmentationPipelineUseCases({ ...deps, providerAccounting }),
+  });
 };
 
 const factory = createCachedFactory(build);
