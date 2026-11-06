@@ -11,7 +11,9 @@
     "continue": "Continue from this result",
     "viewResults": "View results",
     "continuedFrom": "Continued from a {{model}} result",
-    "sourceAlt": "Render source"
+    "sourceAlt": "Render source",
+    "delayed": "This attempt is taking longer than expected.",
+    "retryHint": "Retry starts a new attempt and may incur another charge."
   },
   "models": {
     "krea-3": "Krea 3",
@@ -36,7 +38,7 @@
     "title": "Edit {{name}}",
     "fromResult": "Editing a render result",
     "back": "Back to design",
-    "saving": "Saving…",
+    "saving": "Saving\u2026",
     "saved": "Saved",
     "unsaved": "Unsaved changes",
     "draftReloaded": "This draft changed in another tab; showing the latest version.",
@@ -44,7 +46,7 @@
     "undo": "Undo",
     "redo": "Redo",
     "canvasLabel": "Image editor",
-    "loadingImage": "Loading image…",
+    "loadingImage": "Loading image\u2026",
     "imageFailed": "The image could not be loaded."
   },
   "tools": {
@@ -72,8 +74,8 @@
     "title": "Regions",
     "empty": "No regions yet. Use Select region, Lasso or Brush.",
     "remove": "Remove",
-    "replace": "Replace with…",
-    "material": "Change material…",
+    "replace": "Replace with\u2026",
+    "material": "Change material\u2026",
     "chooseItem": "Choose an item",
     "chooseSwatch": "Swatch",
     "materialText": "Or describe the material",
@@ -101,12 +103,12 @@
     "open": "Render",
     "needsEdit": "Add at least one edit to render.",
     "title": "Render with every model",
-    "checking": "Checking the edits…",
+    "checking": "Checking the edits\u2026",
     "willRender": "Will render",
     "skipped": "Skipped",
     "tooManyReferences": "Needs {{references}} reference images; takes at most {{limit}}.",
     "smallItems": "Small targets",
-    "smallItem": "{{item}} is {{width}}×{{height}} px; {{model}} works best from {{minWidth}}×{{minHeight}} px.",
+    "smallItem": "{{item}} is {{width}}\u00d7{{height}} px; {{model}} works best from {{minWidth}}\u00d7{{minHeight}} px.",
     "noModels": "No enabled model can take these edits. Remove some reference items.",
     "problem": {
       "item_missing": "An item in the edits no longer exists.",
@@ -155,7 +157,7 @@
   },
   "check": {
     "title": "Change check",
-    "checking": "Checking for changes outside the edits…",
+    "checking": "Checking for changes outside the edits\u2026",
     "result": "{{percent}}% changed outside the edits",
     "warning": "Change warning",
     "ok": "No unexpected changes",

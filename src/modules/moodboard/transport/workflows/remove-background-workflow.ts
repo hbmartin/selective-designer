@@ -1,5 +1,6 @@
 import { FatalError } from 'workflow';
 
+import { failureCode } from '@/modules/kernel/domain/errors/failure-code';
 import { toItemVersionId } from '@/modules/kernel/domain/ids';
 import { unwrapStepResult } from '@/modules/kernel/transport/workflow/step-result-mapper';
 
@@ -48,11 +49,7 @@ export async function removeBackgroundWorkflow(input: {
     return await removeBackgroundStep(input.itemVersionId, input.attemptId);
   } catch (error) {
     // AppError step failures carry a stable code. Avoid persisting provider messages.
-    const failureCode =
-      error instanceof Error
-        ? /^([A-Z][A-Z0-9_]{2,63}):/u.exec(error.message)?.[1]
-        : undefined;
-    const code = failureCode ?? 'WORKFLOW_STEP_FAILED';
+    const code = failureCode(error, 'WORKFLOW_STEP_FAILED');
     try {
       const failed = await markCutoutFailedStep(
         input.itemVersionId,

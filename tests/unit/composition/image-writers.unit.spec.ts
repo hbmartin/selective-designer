@@ -9,7 +9,10 @@ import {
   writeImageWithDetection,
   writeRenderImageWithDetection,
 } from '@/composition/image-detection-intent';
-import { createResultImages } from '@/composition/rendering-pipeline';
+import {
+  createResultOutputReferences,
+  createResultImages,
+} from '@/composition/rendering-pipeline';
 import { toDesignName } from '@/modules/design';
 import {
   AppError,
@@ -101,6 +104,7 @@ it('allocates a render image before handing its write to transaction recovery', 
   vi.mocked(findRegisteredRenderImage).mockResolvedValueOnce(
     Result.Ok({ type: 'result_image_not_registered' })
   );
+  const read = vi.spyOn(kernel.objectStorage, 'getObjectBytes');
   const result = await createResultImages(kernel, scheduler).register({
     resultId: okValue(toRenderResultId('result')),
     attempt: 1,
@@ -115,8 +119,9 @@ it('allocates a render image before handing its write to transaction recovery', 
     designId: okValue(toDesignId('design')),
     renderSourceImageId: okValue(toImageId('source')),
     objectKey,
-    contentType: 'image/png',
+    contentType: 'image/webp',
   });
+  expect(read).toHaveBeenCalledTimes(1);
   expect(result.isError() && result.getError()).toBe(failure);
   expect(writeRenderImageWithDetection).toHaveBeenLastCalledWith(
     kernel,
@@ -124,6 +129,7 @@ it('allocates a render image before handing its write to transaction recovery', 
       image: expect.objectContaining({
         kind: 'result',
         originalKey: objectKey,
+        originalContentType: 'image/png',
       }),
     })
   );
@@ -141,7 +147,11 @@ it('uses paired rendering persistence overrides without touching the kernel data
   const resultImages = { findRegistered: vi.fn(), register: vi.fn() };
   const pipeline = getRenderingPipelineUseCases({
     kernel,
-    persistence: { renderRepository: renders.repository, resultImages },
+    persistence: {
+      renderRepository: renders.repository,
+      resultImages,
+      resultOutputReferences: { check: vi.fn() },
+    },
   });
   expect(
     okValue(
@@ -155,4 +165,43 @@ it('uses paired rendering persistence overrides without touching the kernel data
   ).toEqual({ type: 'result_not_runnable' });
   expect(publicationContext).toHaveBeenCalledExactlyOnceWith('missing');
   expect(resultImages.register).not.toHaveBeenCalled();
+});
+
+it.each([
+  'image',
+  'checkpoint',
+  'none',
+  'image error',
+  'checkpoint error',
+] as const)('checks global render references: %s', async (state) => {
+  const key = okValue(toObjectKey('results/attempt/raw.png'));
+  const images = {
+    referencedImageKeys: vi.fn(async () =>
+      state === 'image error'
+        ? Result.Error(failure)
+        : Result.Ok({
+            type: 'referenced_image_keys' as const,
+            keys: state === 'image' ? [key] : [],
+          })
+    ),
+  };
+  const outputs = {
+    referencedOutputKeys: vi.fn(async () =>
+      state === 'checkpoint error'
+        ? Result.Error(failure)
+        : Result.Ok({
+            type: 'referenced_output_keys' as const,
+            keys: state === 'checkpoint' ? [key] : [],
+          })
+    ),
+  };
+  const result = await createResultOutputReferences(images, outputs).check(key);
+  expect(images.referencedImageKeys).toHaveBeenCalledWith([key]);
+  expect(outputs.referencedOutputKeys).toHaveBeenCalledWith([key]);
+  if (state.endsWith('error'))
+    expect(result.isError() && result.getError()).toBe(failure);
+  else
+    expect(okValue(result).type).toBe(
+      state === 'none' ? 'output_unreferenced' : 'output_referenced'
+    );
 });

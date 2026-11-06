@@ -65,6 +65,18 @@ export const createFakeObjectStorage = () => {
         contentType: source.contentType,
       });
     },
+    async getObjectMetadata(objectKey) {
+      const object = objects.get(objectKey);
+      return Result.Ok(
+        object
+          ? {
+              type: 'object_found',
+              contentType: object.contentType,
+              byteLength: object.bytes.byteLength,
+            }
+          : { type: 'object_not_found' }
+      );
+    },
     async getObjectBytes(objectKey) {
       const object = objects.get(objectKey);
       return Result.Ok(
@@ -180,7 +192,17 @@ export const createFakeProviderCallLog = () => {
   const calls = new Map<string, ProviderCallRecord>();
   const log: ProviderCallLog = {
     async record(call) {
-      calls.set(call.id, call);
+      calls.set(call.id, {
+        ...call,
+        startedAt:
+          typeof call.startedAt === 'string'
+            ? new Date(call.startedAt)
+            : call.startedAt,
+        completedAt:
+          typeof call.completedAt === 'string'
+            ? new Date(call.completedAt)
+            : call.completedAt,
+      });
       return Result.Ok({ type: 'provider_call_recorded' });
     },
   };

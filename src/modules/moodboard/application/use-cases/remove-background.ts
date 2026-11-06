@@ -1,8 +1,7 @@
 import { Result } from '@bloodyowl/boxed';
 
 import { AppError } from '@/modules/kernel/domain/errors/app-error';
-import { ObjectCopySourceError } from '@/modules/kernel/domain/errors/object-copy-source-error';
-import { safeErrorDiagnostics } from '@/modules/kernel/domain/errors/safe-error-diagnostics';
+import { sourceErrorDiagnostics } from '@/modules/kernel/domain/errors/source-error-diagnostics';
 import {
   type DesignId,
   type ItemVersionId,
@@ -18,6 +17,8 @@ import type {
   BackgroundRemovalFailed,
   BackgroundRemovalResult,
 } from '../ports/background-remover';
+import type { VersionFound, VersionNotFound } from '../ports/item-repository';
+import type { CutoutOutputCheckpoint } from '../../domain/cutout-output';
 
 type CutoutAttempt = { versionId: ItemVersionId; attemptId: string };
 
@@ -54,6 +55,14 @@ const cleanAbandonedCutout = async (
   const deleted = await deps.objectStorage.deleteObject(cutoutKey);
   if (deleted.isError()) warn(deleted.getError().code);
 };
+
+const isCompletedCutout = (
+  value: VersionFound | VersionNotFound,
+  attemptId: string
+) =>
+  value.type === 'item_version_found' &&
+  value.cutoutAttemptId === attemptId &&
+  value.version.cutoutStatus === 'ready';
 
 const CUTOUT_MAX_BYTES = 30 * 1024 * 1024;
 const CUTOUT_TYPES = ['image/png', 'image/webp'] as const;
@@ -100,6 +109,107 @@ const recordRemoval = async (
   });
 };
 
+const publishCutout = async (
+  deps: MoodboardPipelineDeps,
+  input: CutoutAttempt,
+  checkpoint: CutoutOutputCheckpoint,
+  markFailed: (
+    reason: string
+  ) => Promise<MoodboardResult<RemoveBackgroundOutcome>>
+): Promise<MoodboardResult<RemoveBackgroundOutcome>> => {
+  const logFailure = (
+    phase: 'storage' | 'copy' | 'publication',
+    error: AppError
+  ) =>
+    deps.logger.warn({
+      event: 'moodboard.cutout.output_failed',
+      details: {
+        ...input,
+        phase,
+        code: error.code,
+        ...sourceErrorDiagnostics(error),
+      },
+    });
+  const stored = await deps.objectStorage.getObjectMetadata(
+    checkpoint.objectKey
+  );
+  if (stored.isError()) {
+    logFailure('storage', stored.getError());
+    return Result.Error(stored.getError());
+  }
+  if (stored.get().type === 'object_not_found') {
+    if (checkpoint.source.kind !== 'url') return markFailed('output_missing');
+    const copied = await deps.objectStorage.copyNewObjectFromUrl({
+      sourceUrl: checkpoint.source.url,
+      objectKey: checkpoint.objectKey,
+      acceptedContentTypes: CUTOUT_TYPES,
+      maxBytes: CUTOUT_MAX_BYTES,
+      cacheControl: IMMUTABLE_OBJECT_CACHE_CONTROL,
+    });
+    if (copied.isError()) {
+      logFailure('copy', copied.getError());
+      return Result.Error(copied.getError());
+    }
+    if (
+      copied.get().type !== 'object_created' &&
+      copied.get().type !== 'object_already_exists'
+    )
+      return markFailed(`copy_${copied.get().type}`);
+  }
+  const saved = await deps.itemRepository.finishCutoutAttempt({
+    ...input,
+    cutoutStatus: 'ready',
+    cutoutKey: checkpoint.objectKey,
+  });
+  if (saved.isError()) {
+    logFailure('publication', saved.getError());
+    return Result.Error(saved.getError());
+  }
+  if (saved.get().type === 'cutout_attempt_skipped') {
+    await cleanAbandonedCutout(deps, input);
+    return Result.Ok({ type: 'cutout_skipped' });
+  }
+  return Result.Ok({ type: 'cutout_ready' });
+};
+
+const recordCutoutCheckpoint = async (
+  deps: MoodboardPipelineDeps,
+  input: CutoutAttempt,
+  value: VersionFound,
+  output: CutoutOutputCheckpoint
+) => {
+  const { versionId, attemptId } = input;
+
+  let userId = output.userId ?? undefined;
+  if (output.userId === undefined) {
+    const owner = await deps.designAccess.ownerOf(value.designId);
+    if (owner.isError()) return Result.Error(owner.getError());
+    const actor = owner.get();
+    userId = actor.type === 'owner' ? actor.userId : undefined;
+  }
+  const id = toProviderCallId(`bg-${versionId}-${attemptId}`);
+  if (id.isError()) return Result.Error(id.getError());
+  return deps.providerCallLog.record({
+    id: id.get(),
+    userId,
+    designId: value.designId,
+    purpose: 'background_removal',
+    provider: output.provider,
+    endpoint: output.endpoint,
+    subjectId: versionId,
+    providerRequestId: output.providerRequestId,
+    status: 'succeeded',
+    costUsdMicros: output.costUsdMicros,
+    costSource: output.costSource,
+    details: {},
+    startedAt:
+      output.startedAt ??
+      value.version.cutoutAttemptStartedAt ??
+      output.completedAt,
+    completedAt: output.completedAt,
+  });
+};
+
 /** Recover this attempt's paid output before invoking background removal. */
 export async function removeBackgroundForVersion(
   deps: MoodboardPipelineDeps,
@@ -109,6 +219,8 @@ export async function removeBackgroundForVersion(
   const found = await deps.itemRepository.findVersion(versionId);
   if (found.isError()) return Result.Error(found.getError());
   const value = found.get();
+  if (isCompletedCutout(value, attemptId))
+    return Result.Ok({ type: 'cutout_ready' });
   if (
     value.type !== 'item_version_found' ||
     value.version.cutoutStatus !== 'pending' ||
@@ -118,7 +230,7 @@ export async function removeBackgroundForVersion(
     return Result.Ok({ type: 'cutout_skipped' });
   }
   const logFailure = (
-    phase: 'copy' | 'storage' | 'publication',
+    phase: 'copy' | 'storage' | 'publication' | 'accounting',
     error: AppError
   ) =>
     deps.logger.warn({
@@ -127,10 +239,7 @@ export async function removeBackgroundForVersion(
         ...input,
         phase,
         code: error.code,
-        ...safeErrorDiagnostics(error),
-        ...(error instanceof ObjectCopySourceError
-          ? { attempts: error.attempts, sourceStatus: error.sourceStatus }
-          : {}),
+        ...sourceErrorDiagnostics(error),
       },
     });
   const markFailed = async (
@@ -151,6 +260,8 @@ export async function removeBackgroundForVersion(
     });
     return Result.Ok({ type: 'cutout_failed', reason });
   };
+  const recordCheckpoint = (output: CutoutOutputCheckpoint) =>
+    recordCutoutCheckpoint(deps, input, value, output);
   let checkpoint = value.cutoutOutput;
   if (!checkpoint) {
     const owner = await deps.designAccess.ownerOf(value.designId);
@@ -167,115 +278,104 @@ export async function removeBackgroundForVersion(
     });
     if (removed.isError()) return Result.Error(removed.getError());
     const removal = removed.get();
-    const ownerValue = owner.get();
-    const logged = await recordRemoval(
-      deps,
-      input,
-      {
-        designId: value.designId,
-        userId: ownerValue.type === 'owner' ? ownerValue.userId : undefined,
-        startedAt,
-      },
-      removal
-    );
-    if (logged.isError()) return Result.Error(logged.getError());
-    if (removal.type === 'background_removal_failed')
+    const actor = owner.get();
+    if (removal.type === 'background_removal_failed') {
+      const logged = await recordRemoval(
+        deps,
+        input,
+        {
+          designId: value.designId,
+          userId: actor.type === 'owner' ? actor.userId : undefined,
+          startedAt,
+        },
+        removal
+      );
+      if (logged.isError()) return Result.Error(logged.getError());
       return markFailed(removal.reason);
-    // Check the fence again after the provider performed paid work.
-    const current = await deps.itemRepository.findVersion(versionId);
-    if (current.isError()) {
-      logFailure('publication', current.getError());
-      return Result.Error(current.getError());
-    }
-    const latest = current.get();
-    if (
-      latest.type !== 'item_version_found' ||
-      latest.version.cutoutStatus !== 'pending' ||
-      latest.cutoutAttemptId !== attemptId
-    ) {
-      await cleanAbandonedCutout(deps, input);
-      return Result.Ok({ type: 'cutout_skipped' });
     }
     const key = cutoutObjectKey(input);
     if (key.isError()) return Result.Error(key.getError());
+    const output: CutoutOutputCheckpoint = {
+      source:
+        removal.result.kind === 'url'
+          ? { kind: 'url', url: removal.result.url }
+          : { kind: 'object' },
+      objectKey: key.get(),
+      contentType:
+        removal.result.kind === 'bytes' ? removal.result.contentType : null,
+      provider: removal.provider,
+      endpoint: removal.endpoint,
+      providerRequestId: removal.providerRequestId,
+      costUsdMicros: removal.costUsdMicros,
+      costSource: removal.costSource,
+      startedAt: startedAt.toISOString(),
+      userId: actor.type === 'owner' ? actor.userId : null,
+      completedAt: deps.clock.now().toISOString(),
+    };
+    const recordPerformed = async () => {
+      const logged = await recordCheckpoint(output);
+      if (logged.isError()) logFailure('accounting', logged.getError());
+    };
     if (removal.result.kind === 'bytes') {
+      // URL checkpoints use their atomic save as the first post-provider fence.
+      const current = await deps.itemRepository.findVersion(versionId);
+      if (current.isError()) {
+        await recordPerformed();
+        return Result.Error(current.getError());
+      }
+      const latest = current.get();
+      if (
+        latest.type !== 'item_version_found' ||
+        latest.cutoutAttemptId !== attemptId ||
+        latest.version.cutoutStatus !== 'pending'
+      ) {
+        await recordPerformed();
+        return Result.Ok({
+          type: isCompletedCutout(latest, attemptId)
+            ? 'cutout_ready'
+            : 'cutout_skipped',
+        });
+      }
       const stored = await deps.objectStorage.createObject({
-        objectKey: key.get(),
+        objectKey: output.objectKey,
         body: removal.result.bytes,
         contentType: removal.result.contentType,
         cacheControl: IMMUTABLE_OBJECT_CACHE_CONTROL,
       });
       if (stored.isError()) {
+        await recordPerformed();
         logFailure('storage', stored.getError());
         return Result.Error(stored.getError());
       }
     }
     const saved = await deps.itemRepository.saveCutoutOutput({
       ...input,
-      checkpoint: {
-        source:
-          removal.result.kind === 'url'
-            ? { kind: 'url', url: removal.result.url }
-            : { kind: 'object' },
-        objectKey: key.get(),
-        contentType:
-          removal.result.kind === 'bytes' ? removal.result.contentType : null,
-        provider: removal.provider,
-        endpoint: removal.endpoint,
-        providerRequestId: removal.providerRequestId,
-        costUsdMicros: removal.costUsdMicros,
-        costSource: removal.costSource,
-        completedAt: deps.clock.now().toISOString(),
-      },
+      checkpoint: output,
     });
     if (saved.isError()) {
+      await recordPerformed();
       logFailure('publication', saved.getError());
       return Result.Error(saved.getError());
     }
     const savedValue = saved.get();
-    if (savedValue.type === 'cutout_attempt_skipped') {
+    if (savedValue.type !== 'cutout_output_saved') {
+      await recordPerformed();
       await cleanAbandonedCutout(deps, input);
-      return Result.Ok({ type: 'cutout_skipped' });
+      return Result.Ok({
+        type:
+          savedValue.type === 'cutout_already_ready'
+            ? 'cutout_ready'
+            : 'cutout_skipped',
+      });
     }
     checkpoint = savedValue.checkpoint;
   }
-  const stored = await deps.objectStorage.getObjectBytes(checkpoint.objectKey);
-  if (stored.isError()) {
-    logFailure('storage', stored.getError());
-    return Result.Error(stored.getError());
+  const logged = await recordCheckpoint(checkpoint);
+  if (logged.isError()) {
+    logFailure('accounting', logged.getError());
+    return Result.Error(logged.getError());
   }
-  if (stored.get().type === 'object_not_found') {
-    if (checkpoint.source.kind === 'object')
-      return markFailed('output_missing');
-    const copied = await deps.objectStorage.copyNewObjectFromUrl({
-      sourceUrl: checkpoint.source.url,
-      objectKey: checkpoint.objectKey,
-      acceptedContentTypes: CUTOUT_TYPES,
-      maxBytes: CUTOUT_MAX_BYTES,
-      cacheControl: IMMUTABLE_OBJECT_CACHE_CONTROL,
-    });
-    if (copied.isError()) {
-      logFailure('copy', copied.getError());
-      return Result.Error(copied.getError());
-    }
-    const copy = copied.get();
-    if (copy.type !== 'object_created' && copy.type !== 'object_already_exists')
-      return markFailed(`copy_${copy.type}`);
-  }
-  const saved = await deps.itemRepository.finishCutoutAttempt({
-    ...input,
-    cutoutStatus: 'ready',
-    cutoutKey: checkpoint.objectKey,
-  });
-  if (saved.isError()) {
-    logFailure('publication', saved.getError());
-    return Result.Error(saved.getError());
-  }
-  if (saved.get().type === 'cutout_attempt_skipped') {
-    await cleanAbandonedCutout(deps, input);
-    return Result.Ok({ type: 'cutout_skipped' });
-  }
-  return Result.Ok({ type: 'cutout_ready' });
+  return publishCutout(deps, input, checkpoint, markFailed);
 }
 
 /**

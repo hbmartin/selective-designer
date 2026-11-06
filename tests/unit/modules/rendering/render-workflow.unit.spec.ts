@@ -77,6 +77,23 @@ describe('render workflow', () => {
       reason: 'MODEL_UNAVAILABLE',
     });
   });
+  it('keeps the original code when the SDK exhausts retries', async () => {
+    const original = new Error('OBJECT_COPY_SOURCE_FAILED: safe source error');
+    pipeline.poll.mockRejectedValue(
+      new Error(
+        'Step "pollStep" failed after 3 retries: OBJECT_COPY_SOURCE_FAILED: safe source error',
+        { cause: original }
+      )
+    );
+    expect(await renderResultWorkflow(attempt)).toEqual({
+      result: 'result_failed',
+    });
+    expect(pipeline.markFailed).toHaveBeenCalledWith({
+      ...execution,
+      providerRequestId: 'request-1',
+      reason: 'OBJECT_COPY_SOURCE_FAILED',
+    });
+  });
   it('does not report a stale failure as failure of its replacement', async () => {
     pipeline.poll.mockRejectedValue(new Error('lost connection'));
     pipeline.markFailed.mockImplementation(() =>

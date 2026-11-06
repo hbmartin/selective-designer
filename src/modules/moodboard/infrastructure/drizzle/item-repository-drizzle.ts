@@ -426,6 +426,12 @@ export const createItemRepository = ({
         if (
           value.type === 'item_version_found' &&
           value.cutoutAttemptId === input.attemptId &&
+          value.version.cutoutStatus === 'ready'
+        )
+          return Result.Ok({ type: 'cutout_already_ready' });
+        if (
+          value.type === 'item_version_found' &&
+          value.cutoutAttemptId === input.attemptId &&
           value.version.cutoutStatus === 'pending' &&
           value.cutoutOutput
         )
@@ -442,7 +448,11 @@ export const createItemRepository = ({
       try {
         const [saved] = await db
           .update(versionTable)
-          .set({ cutoutStatus: input.cutoutStatus, cutoutKey: input.cutoutKey })
+          .set({
+            cutoutStatus: input.cutoutStatus,
+            cutoutKey: input.cutoutKey,
+            cutoutOutput: sql`case when ${versionTable.cutoutOutput} is null then null else jsonb_set(${versionTable.cutoutOutput}, '{source}', '{"kind":"retired"}'::jsonb) end`,
+          })
           .where(
             and(
               eq(versionTable.id, input.versionId),
@@ -453,6 +463,17 @@ export const createItemRepository = ({
             )
           )
           .returning({ id: versionTable.id });
+        if (!saved && input.cutoutStatus === 'ready') {
+          const current = await repository.findVersion(input.versionId);
+          if (current.isError()) return Result.Error(current.getError());
+          const value = current.get();
+          if (
+            value.type === 'item_version_found' &&
+            value.cutoutAttemptId === input.attemptId &&
+            value.version.cutoutStatus === 'ready'
+          )
+            return Result.Ok({ type: 'cutout_already_ready' });
+        }
         return Result.Ok({
           type: saved ? 'cutout_result_saved' : 'cutout_attempt_skipped',
         });

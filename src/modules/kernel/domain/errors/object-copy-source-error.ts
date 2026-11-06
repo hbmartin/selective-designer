@@ -5,8 +5,6 @@ export class ObjectCopySourceError extends AppError {
   readonly reason: 'network' | 'timeout' | 'http';
   readonly attempts: number;
   readonly sourceStatus?: number;
-  readonly retryable: boolean;
-  readonly retryAfterMs?: number;
 
   constructor(input: {
     reason: 'network' | 'timeout' | 'http';
@@ -22,11 +20,11 @@ export class ObjectCopySourceError extends AppError {
       status: 502,
       message: 'The image source could not be downloaded. Try again.',
       cause: input.cause,
+      retryable: input.retryable ?? true,
+      retryAfterMs: input.retryAfterMs,
     });
     this.reason = input.reason;
     this.attempts = input.attempts;
     this.sourceStatus = input.status;
-    this.retryable = input.retryable ?? true;
-    this.retryAfterMs = input.retryAfterMs;
   }
 }

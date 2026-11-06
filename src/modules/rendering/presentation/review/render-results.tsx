@@ -209,17 +209,25 @@ const ResultCard = (props: {
             : skip.reason}
         </p>
       )}
-      {result.status === 'failed' && (
+      {result.retryable && (
+        <p className="text-xs text-muted-foreground">
+          {t('rendering:history.retryHint')}
+        </p>
+      )}
+      {result.retryable && (
         <div className="flex items-center justify-between gap-2">
           <p
             className="truncate text-xs text-muted-foreground"
             title={result.errorMessage ?? undefined}
           >
-            {result.errorMessage}
+            {result.status === 'failed'
+              ? result.errorMessage
+              : t('rendering:history.delayed')}
           </p>
           <Button
             size="xs"
             variant="ghost"
+            title={t('rendering:history.retryHint')}
             loading={retry.isPending}
             onClick={() => retry.mutate({ resultId: result.id })}
           >

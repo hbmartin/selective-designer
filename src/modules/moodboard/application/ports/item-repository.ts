@@ -101,6 +101,7 @@ export interface ItemRepository {
   }): Promise<
     ApplicationResult<
       | { type: 'cutout_output_saved'; checkpoint: CutoutOutputCheckpoint }
+      | { type: 'cutout_already_ready' }
       | { type: 'cutout_attempt_skipped' }
     >
   >;
@@ -111,7 +112,9 @@ export interface ItemRepository {
     )
   ): Promise<
     ApplicationResult<
-      { type: 'cutout_result_saved' } | { type: 'cutout_attempt_skipped' }
+      | { type: 'cutout_result_saved' }
+      | { type: 'cutout_already_ready' }
+      | { type: 'cutout_attempt_skipped' }
     >
   >;
   checkAbandonedCutout(input: {

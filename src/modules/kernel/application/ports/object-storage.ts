@@ -58,6 +58,14 @@ export type ObjectBytesOutcome =
 
 export type SignedReadUrlOutcome = { type: 'signed_read_url'; url: string };
 
+export type ObjectMetadataOutcome =
+  | {
+      type: 'object_found';
+      contentType: string | undefined;
+      byteLength: number | undefined;
+    }
+  | { type: 'object_not_found' };
+
 export type ObjectCopyOutcome =
   | {
       type: 'object_copied';
@@ -98,6 +106,10 @@ export type ObjectCopyNewOutcome =
   | ObjectCreateOutcome;
 
 export type ObjectStoragePort = {
+  /** Existence and metadata only; never downloads the object's body. */
+  getObjectMetadata: (
+    objectKey: string
+  ) => Promise<ApplicationResult<ObjectMetadataOutcome>>;
   /**
    * Build an HTTP handler that serves presigned uploads for the given named
    * routes.

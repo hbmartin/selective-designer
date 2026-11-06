@@ -103,7 +103,8 @@ const toRenderView = {
   render_updated: (outcome: { render: RenderView }) => outcome.render,
   result_not_retryable: {
     code: 'BAD_REQUEST',
-    message: 'Only failed results can be retried.',
+    message:
+      'Retry is available after failure or after an active attempt has waited 30 minutes.',
   },
   result_not_ready: {
     code: 'BAD_REQUEST',

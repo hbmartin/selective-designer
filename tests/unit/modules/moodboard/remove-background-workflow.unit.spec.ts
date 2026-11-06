@@ -49,4 +49,29 @@ describe('background removal workflow', () => {
       failureCode: 'PROVIDER_UNAVAILABLE',
     });
   });
+  it('keeps the original code after SDK retry exhaustion', async () => {
+    const original = new Error('OBJECT_COPY_SOURCE_FAILED: safe source error');
+    pipeline.removeBackground.mockRejectedValue(
+      new Error(
+        'Step "removeBackgroundStep" failed after 3 retries: OBJECT_COPY_SOURCE_FAILED: safe source error',
+        { cause: original }
+      )
+    );
+    pipeline.markCutoutFailed.mockResolvedValue(
+      Result.Ok({ type: 'cutout_marked_failed' })
+    );
+    await expect(
+      removeBackgroundWorkflow({
+        itemVersionId: 'version',
+        attemptId: 'attempt',
+      })
+    ).rejects.toThrow(
+      'OBJECT_COPY_SOURCE_FAILED: Background removal workflow failed'
+    );
+    expect(pipeline.markCutoutFailed).toHaveBeenCalledWith({
+      versionId: 'version',
+      attemptId: 'attempt',
+      failureCode: 'OBJECT_COPY_SOURCE_FAILED',
+    });
+  });
 });

@@ -1,10 +1,10 @@
 import { Result } from '@bloodyowl/boxed';
 
-import { ObjectCopySourceError } from '@/modules/kernel/application/ports/object-storage';
-import { safeErrorDiagnostics } from '@/modules/kernel/domain/errors/safe-error-diagnostics';
+import { sourceErrorDiagnostics } from '@/modules/kernel/domain/errors/source-error-diagnostics';
 import {
   type DesignId,
   type ImageId,
+  type ObjectKey,
   type RenderResultId,
   toObjectKey,
   toProviderCallId,
@@ -178,13 +178,88 @@ const failPoll = async (
   );
 };
 
+const discardLostOutput = async (
+  deps: RenderingPipelineDeps,
+  input: PollExecution,
+  objectKey: ObjectKey
+) => {
+  const referenced = await deps.resultOutputReferences.check(objectKey);
+  if (referenced.isError()) {
+    deps.logger.warn({
+      event: 'rendering.result.cleanup_failed',
+      details: { ...input, code: referenced.getError().code },
+    });
+    return;
+  }
+  if (referenced.get().type === 'output_referenced') return;
+  const deleted = await deps.objectStorage.deleteObject(objectKey);
+  if (deleted.isError())
+    deps.logger.warn({
+      event: 'rendering.result.cleanup_failed',
+      details: { ...input, code: deleted.getError().code },
+    });
+};
+
+const recordOutput = async (
+  deps: RenderingPipelineDeps,
+  input: PollExecution,
+  context: RenderPublicationContext,
+  checkpoint: RenderOutputCheckpoint
+) => {
+  const spec = MODEL_CATALOG[context.result.modelId];
+  const id = toProviderCallId(`render:${input.resultId}:${input.attempt}`);
+  if (id.isError()) return Result.Error(id.getError());
+  return deps.providerCallLog.record({
+    id: id.get(),
+    userId: undefined,
+    designId: context.designId,
+    purpose: 'render',
+    provider: checkpoint.provider ?? spec.provider,
+    endpoint: checkpoint.endpoint ?? spec.endpoint,
+    subjectId: input.resultId,
+    providerRequestId: input.providerRequestId,
+    status: 'succeeded',
+    costUsdMicros: checkpoint.costUsdMicros ?? undefined,
+    costSource: checkpoint.costSource,
+    details: { modelId: context.result.modelId, attempt: input.attempt },
+    startedAt:
+      checkpoint.startedAt ??
+      context.result.submittedAt ??
+      checkpoint.completedAt,
+    completedAt: checkpoint.completedAt,
+  });
+};
+
+const recoverCompletedResult = async (
+  deps: RenderingPipelineDeps,
+  input: PollExecution
+): Promise<
+  RenderingResult<
+    { type: 'result_succeeded' } | { type: 'result_attempt_superseded' }
+  >
+> => {
+  const recovered = await deps.resultImages.findRegistered(input);
+  if (recovered.isError()) return Result.Error(recovered.getError());
+  return Result.Ok({
+    type:
+      recovered.get().type === 'result_image_registered'
+        ? 'result_succeeded'
+        : 'result_attempt_superseded',
+  });
+};
+
 const checkpointProviderOutput = async (
   deps: RenderingPipelineDeps,
   input: PollExecution,
   context: RenderPublicationContext
 ): Promise<
   RenderingResult<
-    | { type: 'output_checkpointed'; checkpoint: RenderOutputCheckpoint }
+    | {
+        type: 'output_checkpointed';
+        checkpoint: RenderOutputCheckpoint;
+        createdKey?: ObjectKey;
+      }
+    | { type: 'result_succeeded' }
     | { type: 'result_pending' }
     | { type: 'result_failed'; reason: string }
     | { type: 'result_attempt_superseded' }
@@ -208,31 +283,32 @@ const checkpointProviderOutput = async (
         ? 'price_table'
         : 'unavailable';
   const now = deps.clock.now();
-  const callId = toProviderCallId(`render:${input.resultId}:${input.attempt}`);
-  if (callId.isError()) return Result.Error(callId.getError());
-  const logged = await deps.providerCallLog.record({
-    id: callId.get(),
-    userId: undefined,
-    designId: context.designId,
-    purpose: 'render',
-    provider: spec.provider,
-    endpoint: spec.endpoint,
-    subjectId: input.resultId,
-    providerRequestId: input.providerRequestId,
-    status: 'succeeded',
-    costUsdMicros: costUsdMicros ?? undefined,
-    costSource,
-    details: { modelId: result.modelId, attempt: input.attempt },
-    startedAt: result.submittedAt ?? now,
-    completedAt: now,
-  });
-  if (logged.isError()) return Result.Error(logged.getError());
-  if (!poll.outputBytes && !poll.outputUrl)
-    return failPoll(deps, input, 'no_output');
   const key = toObjectKey(
     `results/${input.resultId}/${input.attempt}/raw.${poll.outputBytes ? (EXTENSION[poll.outputBytes.contentType] ?? 'png') : 'img'}`
   );
   if (key.isError()) return Result.Error(key.getError());
+  const checkpoint: RenderOutputCheckpoint = {
+    source: poll.outputBytes
+      ? { kind: 'object' }
+      : poll.outputUrl
+        ? { kind: 'url', url: poll.outputUrl }
+        : { kind: 'retired' },
+    objectKey: key.get(),
+    contentType: poll.outputBytes?.contentType ?? null,
+    provider: spec.provider,
+    endpoint: spec.endpoint,
+    startedAt: (result.submittedAt ?? now).toISOString(),
+    modelVersion: poll.modelVersion,
+    costUsdMicros,
+    costSource,
+    completedAt: now.toISOString(),
+  };
+  if (!poll.outputBytes && !poll.outputUrl) {
+    const logged = await recordOutput(deps, input, context, checkpoint);
+    if (logged.isError()) return Result.Error(logged.getError());
+    return failPoll(deps, input, 'no_output');
+  }
+  let createdKey: ObjectKey | undefined;
   if (poll.outputBytes) {
     const stored = await deps.objectStorage.createObject({
       objectKey: key.get(),
@@ -240,29 +316,47 @@ const checkpointProviderOutput = async (
       contentType: poll.outputBytes.contentType,
       cacheControl: IMMUTABLE_OBJECT_CACHE_CONTROL,
     });
-    if (stored.isError()) return Result.Error(stored.getError());
+    if (stored.isError()) {
+      const logged = await recordOutput(deps, input, context, checkpoint);
+      if (logged.isError())
+        deps.logger.warn({
+          event: 'rendering.result.cost_record_failed',
+          details: { ...input, code: logged.getError().code },
+        });
+      return Result.Error(stored.getError());
+    }
+    if (stored.get().type === 'object_created') createdKey = key.get();
   }
   const saved = await deps.renderRepository.saveOutput({
     ...input,
-    checkpoint: {
-      source: poll.outputBytes
-        ? { kind: 'object' }
-        : { kind: 'url', url: poll.outputUrl! },
-      objectKey: key.get(),
-      contentType: poll.outputBytes?.contentType ?? null,
-      modelVersion: poll.modelVersion,
-      costUsdMicros,
-      costSource,
-      completedAt: now.toISOString(),
-    },
+    checkpoint,
   });
-  if (saved.isError()) return Result.Error(saved.getError());
+  if (saved.isError() || saved.get().type === 'result_attempt_superseded') {
+    // Even a losing response describes performed work. Do not replace the write error.
+    const logged = await recordOutput(deps, input, context, checkpoint);
+    if (logged.isError())
+      deps.logger.warn({
+        event: 'rendering.result.cost_record_failed',
+        details: { ...input, code: logged.getError().code },
+      });
+    if (saved.isError()) return Result.Error(saved.getError());
+    if (createdKey) await discardLostOutput(deps, input, createdKey);
+    return Result.Ok({ type: 'result_attempt_superseded' });
+  }
   const savedValue = saved.get();
-  if (savedValue.type === 'result_attempt_superseded')
-    return Result.Ok(savedValue);
+  if (savedValue.type === 'result_already_completed') {
+    if (createdKey) await discardLostOutput(deps, input, createdKey);
+    return recoverCompletedResult(deps, input);
+  }
+  if (savedValue.type !== 'result_output_saved') return Result.Ok(savedValue);
+  if (createdKey && savedValue.checkpoint.objectKey !== createdKey) {
+    await discardLostOutput(deps, input, createdKey);
+    createdKey = undefined;
+  }
   return Result.Ok({
     type: 'output_checkpointed',
     checkpoint: savedValue.checkpoint,
+    createdKey,
   });
 };
 
@@ -286,33 +380,31 @@ export async function pollResult(
     context.workflowRunId !== input.workflowRunId
   )
     return Result.Ok({ type: 'result_attempt_superseded' });
-  if (result.status === 'succeeded') {
-    const recovered = await deps.resultImages.findRegistered(input);
-    if (recovered.isError()) return Result.Error(recovered.getError());
-    return Result.Ok({
-      type:
-        recovered.get().type === 'result_image_registered'
-          ? 'result_succeeded'
-          : 'result_attempt_superseded',
-    });
-  }
+  if (result.status === 'succeeded') return recoverCompletedResult(deps, input);
   if (result.status !== 'submitted')
     return Result.Ok({ type: 'result_not_runnable' });
 
   let checkpoint = context.checkpoint;
+  let createdKey: ObjectKey | undefined;
   if (!checkpoint) {
     const prepared = await checkpointProviderOutput(deps, input, context);
     if (prepared.isError()) return Result.Error(prepared.getError());
     const output = prepared.get();
     if (output.type !== 'output_checkpointed') return Result.Ok(output);
     checkpoint = output.checkpoint;
+    createdKey = output.createdKey;
   }
 
+  const logged = await recordOutput(deps, input, context, checkpoint);
+  if (logged.isError()) return Result.Error(logged.getError());
+
   // An interrupted publication must never depend on the provider link again.
-  let object = await deps.objectStorage.getObjectBytes(checkpoint.objectKey);
+  const object = await deps.objectStorage.getObjectMetadata(
+    checkpoint.objectKey
+  );
   if (object.isError()) return Result.Error(object.getError());
   if (object.get().type === 'object_not_found') {
-    if (checkpoint.source.kind === 'object')
+    if (checkpoint.source.kind !== 'url')
       return failPoll(deps, input, 'output_unreadable');
     const copied = await deps.objectStorage.copyNewObjectFromUrl({
       sourceUrl: checkpoint.source.url,
@@ -329,10 +421,7 @@ export async function pollResult(
           resultId: input.resultId,
           attempt: input.attempt,
           code: error.code,
-          ...safeErrorDiagnostics(error),
-          ...(error instanceof ObjectCopySourceError
-            ? { attempts: error.attempts, sourceStatus: error.sourceStatus }
-            : {}),
+          ...sourceErrorDiagnostics(error),
         },
       });
       return Result.Error(error);
@@ -340,21 +429,15 @@ export async function pollResult(
     const copy = copied.get();
     if (copy.type !== 'object_created' && copy.type !== 'object_already_exists')
       return failPoll(deps, input, `output_${copy.type}`);
-    object = await deps.objectStorage.getObjectBytes(checkpoint.objectKey);
-    if (object.isError()) return Result.Error(object.getError());
+    if (copy.type === 'object_created') createdKey = checkpoint.objectKey;
   }
-  const stored = object.get();
-  if (stored.type !== 'object_found')
-    return failPoll(deps, input, 'output_unreadable');
-  const contentType = stored.contentType ?? checkpoint.contentType;
-  if (!contentType) return failPoll(deps, input, 'output_unreadable');
   const registered = await deps.resultImages.register({
     ...input,
     designId: context.designId,
     renderSourceImageId: context.renderSourceImageId,
     sourceSize: context.sourceSize,
     objectKey: checkpoint.objectKey,
-    contentType,
+    contentType: checkpoint.contentType ?? undefined,
     completion: {
       modelVersion: checkpoint.modelVersion,
       costUsdMicros: checkpoint.costUsdMicros,
@@ -364,8 +447,10 @@ export async function pollResult(
   });
   if (registered.isError()) return Result.Error(registered.getError());
   const registration = registered.get();
-  if (registration.type === 'result_attempt_superseded')
+  if (registration.type === 'result_attempt_superseded') {
+    if (createdKey) await discardLostOutput(deps, input, createdKey);
     return Result.Ok(registration);
+  }
   if (registration.type === 'result_image_unreadable')
     return failPoll(deps, input, 'output_unreadable');
   return Result.Ok({ type: 'result_succeeded' });

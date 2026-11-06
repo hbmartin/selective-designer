@@ -32,6 +32,10 @@ import { enabledModels } from '../../domain/model-catalog';
 import type { RenderRecipe } from '../../domain/recipe';
 import type { Draft, Render, RenderResult } from '../../domain/render';
 import { planRender, type RenderPlan } from '../../domain/render-plan';
+import {
+  isRenderRetryable,
+  renderRetryCutoff,
+} from '../../domain/render-retry-policy';
 
 // ---- Access -------------------------------------------------------------
 
@@ -347,6 +351,7 @@ const createAndSchedule = async (
     batchOptionItemId: input.batchOptionItemId,
     recipe: input.recipe,
     results,
+    attemptStartedAt: deps.clock.now(),
   });
   if (created.isError()) return Result.Error(created.getError());
   const scheduled = await deps.renderScheduler.scheduleRender({
@@ -459,6 +464,7 @@ export async function submitBatch(
 
 /** Provider request ids stay server-side. */
 export type RenderResultView = Omit<RenderResult, 'providerRequestId'> & {
+  retryable: boolean;
   outputUrl: string | null;
   outputSize: { width: number; height: number } | null;
 };
@@ -500,6 +506,7 @@ const toRenderView = async (
   render: Render
 ): Promise<RenderingResult<RenderView>> => {
   const results: RenderResultView[] = [];
+  const cutoff = renderRetryCutoff(deps.clock.now());
   for (const result of render.results) {
     let output: {
       url: string;
@@ -514,6 +521,7 @@ const toRenderView = async (
     const { providerRequestId: _providerRequestId, ...visible } = result;
     results.push({
       ...visible,
+      retryable: isRenderRetryable(result, cutoff),
       outputUrl: output?.url ?? null,
       outputSize: output?.size ?? null,
     });
@@ -619,7 +627,7 @@ const reloadView = async (
   return Result.Ok({ type: 'render_updated', render: view.get() });
 };
 
-/** Re-run one failed model without touching the others. */
+/** Start a fresh attempt for a failed or expired result. */
 export async function retryResult(
   deps: RenderingUseCaseDeps,
   input: { currentUserId: UserId; resultId: RenderResultId }
@@ -628,11 +636,15 @@ export async function retryResult(
   if (owned.isError()) return Result.Error(owned.getError());
   const ownedOutcome = owned.get();
   if (ownedOutcome.type !== 'ok') return Result.Ok(ownedOutcome);
-  if (ownedOutcome.result.status !== 'failed')
+  const startedAt = deps.clock.now();
+  const expiredBeforeMs = renderRetryCutoff(startedAt);
+  if (!isRenderRetryable(ownedOutcome.result, expiredBeforeMs))
     return Result.Ok({ type: 'result_not_retryable' });
   const reset = await deps.renderRepository.retryAttempt({
     resultId: input.resultId,
     expectedAttempt: ownedOutcome.result.attempt,
+    startedAt,
+    expiredBeforeMs,
   });
   if (reset.isError()) return Result.Error(reset.getError());
   const claimed = reset.get();

@@ -16,6 +16,7 @@ import type {
   ObjectCopyOutcome,
   ObjectCreateOutcome,
   ObjectDeleteOutcome,
+  ObjectMetadataOutcome,
   ObjectStoragePort,
   ObjectStoredOutcome,
   ObjectUploadRequestHandler,
@@ -26,6 +27,7 @@ import type {
 import type { ApplicationResult } from '@/modules/kernel/application/result';
 import { AppError } from '@/modules/kernel/domain/errors/app-error';
 import { ObjectCopySourceError } from '@/modules/kernel/domain/errors/object-copy-source-error';
+import { isExcessiveRetryDelay } from '@/modules/kernel/domain/errors/retry-policy';
 import { getStorageConfig } from '@/modules/kernel/infrastructure/config/storage';
 
 import {
@@ -96,6 +98,57 @@ const toBetterUploadRoute = (definition: ObjectUploadRouteDefinition) =>
  * This adapter is the ONLY place allowed to import `@better-upload/server`.
  */
 export class BetterUploadObjectStorage implements ObjectStoragePort {
+  async getObjectMetadata(
+    objectKey: string
+  ): Promise<ApplicationResult<ObjectMetadataOutcome>> {
+    const controller = new AbortController();
+    const timeoutId = setTimeout(
+      () => controller.abort(),
+      OBJECT_DELETE_TIMEOUT_MS
+    );
+    try {
+      const config = getStorageConfig();
+      const client = createUploadClient();
+      const response = await client.s3.fetch(
+        `${client.buildBucketUrl(config.bucketName)}/${objectKey}`,
+        {
+          method: 'HEAD',
+          signal: controller.signal,
+        }
+      );
+      await discardResponseBody(response);
+      if (response.status === 404)
+        return Result.Ok({ type: 'object_not_found' });
+      if (!response.ok)
+        return Result.Error(
+          storageError(
+            'OBJECT_STORAGE_HEAD_FAILED',
+            `Object metadata failed with status ${response.status}`
+          )
+        );
+      const length = response.headers.get('content-length');
+      return Result.Ok({
+        type: 'object_found',
+        contentType: response.headers.get('content-type') ?? undefined,
+        byteLength:
+          length !== null &&
+          Number.isSafeInteger(Number(length)) &&
+          Number(length) >= 0
+            ? Number(length)
+            : undefined,
+      });
+    } catch (cause) {
+      return Result.Error(
+        storageError(
+          'OBJECT_STORAGE_HEAD_FAILED',
+          'Object metadata read failed',
+          cause
+        )
+      );
+    } finally {
+      clearTimeout(timeoutId);
+    }
+  }
   createUploadRequestHandler(
     routes: Record<string, ObjectUploadRouteDefinition>
   ): ObjectUploadRequestHandler {
@@ -416,6 +469,17 @@ export class BetterUploadObjectStorage implements ObjectStoragePort {
               ),
             });
             requestedDelay = lastError.retryAfterMs ?? 0;
+            if (isExcessiveRetryDelay(requestedDelay)) {
+              return Result.Error(
+                new ObjectCopySourceError({
+                  reason: 'http',
+                  attempts: attempt + 1,
+                  status: response.status,
+                  retryable: false,
+                  cause: lastError,
+                })
+              );
+            }
             continue;
           }
           return Result.Ok({

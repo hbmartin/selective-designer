@@ -1,5 +1,5 @@
 import { makeUserRow } from '@tests/server/db-fixtures';
-import { createPgliteTestDatabase } from '@tests/server/pglite';
+import { createRecoveryTestDatabase } from '@tests/server/recovery-database';
 import { okValue } from '@tests/support/result';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 
@@ -24,11 +24,11 @@ const key = (value: string) => unwrapParseResult(toObjectKey(value));
 const versionId = (value: string) => unwrapParseResult(toItemVersionId(value));
 
 describe('ItemRepositoryDrizzle', () => {
-  let database: Awaited<ReturnType<typeof createPgliteTestDatabase>>;
+  let database: Awaited<ReturnType<typeof createRecoveryTestDatabase>>;
   let repository: ReturnType<typeof createItemRepository>;
 
   beforeAll(async () => {
-    database = await createPgliteTestDatabase();
+    database = await createRecoveryTestDatabase();
     repository = createItemRepository({ db: database.db });
   });
 
@@ -331,6 +331,71 @@ describe('ItemRepositoryDrizzle', () => {
           cutoutKey: `item-cutouts/retry-v1/${winner}.png`,
         },
       });
+    }
+  );
+  it.each(['ready', 'failed'] as const)(
+    'retires the source at %s while retaining accounting metadata and successful replay',
+    async (status) => {
+      await create('retirement', 'Furniture', {
+        id: 'attempt',
+        startedAt: new Date(),
+      });
+      const input = {
+        versionId: versionId('retirement-v1'),
+        attemptId: 'attempt',
+      };
+      const checkpoint = {
+        source: {
+          kind: 'url' as const,
+          url: 'https://provider.test/private?token=secret',
+        },
+        objectKey: key('item-cutouts/retirement.png'),
+        contentType: 'image/png',
+        provider: 'fal',
+        endpoint: 'birefnet',
+        providerRequestId: 'paid',
+        costUsdMicros: 123,
+        costSource: 'reported' as const,
+        completedAt: new Date().toISOString(),
+      };
+      okValue(await repository.saveCutoutOutput({ ...input, checkpoint }));
+      if (status === 'ready')
+        okValue(
+          await repository.finishCutoutAttempt({
+            ...input,
+            cutoutStatus: 'ready',
+            cutoutKey: checkpoint.objectKey,
+          })
+        );
+      else
+        okValue(
+          await repository.finishCutoutAttempt({
+            ...input,
+            cutoutStatus: 'failed',
+            cutoutKey: null,
+          })
+        );
+      const found = okValue(await repository.findVersion(input.versionId));
+      expect(found).toMatchObject({
+        cutoutOutput: { ...checkpoint, source: { kind: 'retired' } },
+      });
+      expect(JSON.stringify(found)).not.toContain('token=secret');
+      expect(
+        okValue(await repository.saveCutoutOutput({ ...input, checkpoint }))
+          .type
+      ).toBe(
+        status === 'ready' ? 'cutout_already_ready' : 'cutout_attempt_skipped'
+      );
+      if (status === 'ready')
+        expect(
+          okValue(
+            await repository.finishCutoutAttempt({
+              ...input,
+              cutoutStatus: 'ready',
+              cutoutKey: checkpoint.objectKey,
+            })
+          ).type
+        ).toBe('cutout_already_ready');
     }
   );
 });

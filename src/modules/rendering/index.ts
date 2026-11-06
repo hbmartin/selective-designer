@@ -18,6 +18,7 @@ export * from './domain/recipe';
 export * from './domain/render';
 export type { RenderOutputCheckpoint } from './domain/render-output';
 export * from './domain/render-plan';
+export * from './domain/render-retry-policy';
 export {
   createRenderingPipelineUseCases,
   createRenderingUseCases,

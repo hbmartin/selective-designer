@@ -49,6 +49,9 @@ export type ProviderCallRecordedOutcome = { type: 'provider_call_recorded' };
 export interface ProviderCallLog {
   /** Insert or update by `id`; safe to repeat when a workflow step retries. */
   record(
-    call: ProviderCallRecord
+    call: Omit<ProviderCallRecord, 'startedAt' | 'completedAt'> & {
+      startedAt: Date | string;
+      completedAt: Date | string | undefined;
+    }
   ): Promise<ApplicationResult<ProviderCallRecordedOutcome>>;
 }

@@ -1,5 +1,6 @@
 import { Result } from '@bloodyowl/boxed';
 
+import { isRenderRetryable } from '@/modules/rendering';
 import { AppError } from '@/modules/kernel';
 import type { ImageId } from '@/modules/kernel/domain/ids';
 import type {
@@ -74,6 +75,7 @@ export const createFakeRenderRepository = (now: () => Date) => {
           status: result.status,
           skipReason: result.skipReason,
           attempt: 1,
+          attemptStartedAt: input.attemptStartedAt,
           providerRequestId: null,
           modelVersion: null,
           settings: {},
@@ -178,6 +180,12 @@ export const createFakeRenderRepository = (now: () => Date) => {
     async saveOutput(input) {
       const found = findResult(input.resultId);
       if (
+        found?.result.attempt === input.attempt &&
+        found.result.providerRequestId === input.providerRequestId &&
+        found.result.status === 'succeeded'
+      )
+        return Result.Ok({ type: 'result_already_completed' });
+      if (
         !found ||
         found.result.attempt !== input.attempt ||
         found.result.providerRequestId !== input.providerRequestId ||
@@ -196,12 +204,13 @@ export const createFakeRenderRepository = (now: () => Date) => {
       if (
         !found ||
         found.result.attempt !== input.expectedAttempt ||
-        found.result.status !== 'failed'
+        !isRenderRetryable(found.result, input.expiredBeforeMs)
       )
         return Result.Ok({ type: 'result_attempt_superseded' });
       Object.assign(found.result, {
         status: 'pending',
         attempt: input.expectedAttempt + 1,
+        attemptStartedAt: input.startedAt,
         providerRequestId: null,
         outputImageId: null,
         errorMessage: null,
@@ -225,11 +234,22 @@ export const createFakeRenderRepository = (now: () => Date) => {
         !found ||
         !['pending', 'submitted'].includes(found.result.status) ||
         found.result.attempt !== input.attempt ||
-        owners.get(input.resultId) !== input.workflowRunId ||
+        (owners.get(input.resultId) !== input.workflowRunId &&
+          !(
+            found.result.status === 'pending' &&
+            !owners.has(input.resultId) &&
+            found.result.providerRequestId === null
+          )) ||
         (input.providerRequestId !== undefined &&
           found.result.providerRequestId !== input.providerRequestId)
       )
         return Result.Ok({ type: 'result_attempt_superseded' });
+      const checkpoint = checkpoints.get(input.resultId);
+      if (checkpoint)
+        checkpoints.set(input.resultId, {
+          ...checkpoint,
+          source: { kind: 'retired' },
+        });
       Object.assign(found.result, {
         status: 'failed',
         errorMessage: input.reason.slice(0, 500),
@@ -264,16 +284,27 @@ export const createFakeRenderRepository = (now: () => Date) => {
         found.result.status !== 'submitted'
       )
         return Result.Ok({ type: 'result_attempt_superseded' });
+      const checkpoint = checkpoints.get(input.resultId);
+      if (checkpoint)
+        checkpoints.set(input.resultId, {
+          ...checkpoint,
+          source: { kind: 'retired' },
+        });
       Object.assign(found.result, input.completion, {
         status: 'succeeded',
         outputImageId: input.imageId,
       });
       return Result.Ok({ type: 'result_completed' });
     },
-    async updateResult(input) {
-      const found = findResult(input.resultId);
-      if (found) Object.assign(found.result, input.changes);
-      return Result.Ok({ type: 'result_updated' });
+    async referencedOutputKeys(keys) {
+      return Result.Ok({
+        type: 'referenced_output_keys',
+        keys: keys.filter((key) =>
+          [...checkpoints.values()].some(
+            (checkpoint) => checkpoint.objectKey === key
+          )
+        ),
+      });
     },
     async setPreferredResult(input) {
       const render = renders.find((r) => r.id === input.renderId);

@@ -91,7 +91,7 @@ The image one model returned for a render.
 _Avoid_: Variant, fork, output
 
 **Render attempt**:
-One request to a model to produce a render result. Retrying a failed result starts another attempt; recovering the response from the same attempt preserves its image and reuses the result already returned by the model.
+One attempt to obtain a render result from a model, including the time spent waiting to start. Retrying a failed or expired attempt starts a fresh attempt that may incur another charge; automatic recovery continues the same attempt and reuses its returned output.
 
 **Preferred result**:
 The one render result per render that the user marks as best. The other results stay available for comparison and further editing.

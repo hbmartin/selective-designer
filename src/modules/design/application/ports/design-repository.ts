@@ -52,6 +52,11 @@ export type ImageAddedOutcome = { type: 'image_added'; image: DesignImage };
 
 /** Persistence for designs and the images that belong to them. */
 export interface DesignRepository {
+  referencedImageKeys(
+    keys: ObjectKey[]
+  ): Promise<
+    ApplicationResult<{ type: 'referenced_image_keys'; keys: ObjectKey[] }>
+  >;
   list(query: DesignListQuery): Promise<ApplicationResult<DesignListedOutcome>>;
   /** A design visible to `ownerId`; other owners' designs are not found. */
   findOwned(input: {

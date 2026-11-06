@@ -43,6 +43,7 @@ export type RenderResult = {
   status: RenderResultStatus;
   skipReason: string | null;
   attempt: number;
+  attemptStartedAt: Date;
   providerRequestId: string | null;
   modelVersion: string | null;
   settings: ModelSettings;

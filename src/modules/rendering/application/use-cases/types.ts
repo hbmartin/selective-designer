@@ -15,6 +15,7 @@ import type {
   RenderRepository,
   RenderScheduler,
   ResultImages,
+  ResultOutputReferences,
 } from '../ports/ports';
 
 export type RenderingUseCaseDeps = {
@@ -37,6 +38,7 @@ export type RenderingPipelineDeps = {
   maskCompositor: MaskCompositor;
   imageModels: ImageModels;
   resultImages: ResultImages;
+  resultOutputReferences: ResultOutputReferences;
   objectStorage: ObjectStoragePort;
   providerCallLog: ProviderCallLog;
   idGenerator: IdGenerator;
