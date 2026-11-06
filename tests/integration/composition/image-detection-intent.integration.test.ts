@@ -1,3 +1,4 @@
+import { updateRenderResultFixture } from '@tests/support/render-result-fixture';
 import { Result } from '@bloodyowl/boxed';
 import { makeUserRow } from '@tests/server/db-fixtures';
 import { createPgliteTestDatabase } from '@tests/server/pglite';
@@ -18,7 +19,10 @@ import {
   writeImageWithDetection,
   writeRenderImageWithDetection,
 } from '@/composition/image-detection-intent';
-import { createResultImages } from '@/composition/rendering-pipeline';
+import {
+  createResultOutputReferences,
+  createResultImages,
+} from '@/composition/rendering-pipeline';
 import { toDesignName } from '@/modules/design';
 import * as designBackend from '@/modules/design/backend';
 import { createDesignRepository } from '@/modules/design/testing';
@@ -374,6 +378,7 @@ describe('atomic image and detection writes', () => {
     const sourceId = image().id;
     okValue(
       await renders.createRender({
+        attemptStartedAt: new Date('2026-11-02T12:00:00Z'),
         id: okValue(toRenderId('render')),
         designId,
         renderSourceImageId: sourceId,
@@ -397,7 +402,7 @@ describe('atomic image and detection writes', () => {
       })
     );
     okValue(
-      await renders.updateResult({
+      await updateRenderResultFixture(ctx.kernel.db, {
         resultId,
         changes: { status: 'submitted', providerRequestId: 'paid-request' },
       })
@@ -434,6 +439,10 @@ describe('atomic image and detection writes', () => {
       ...kernel,
       renderRepository: renders,
       resultImages,
+      resultOutputReferences: createResultOutputReferences(
+        createDesignRepository({ db: ctx.kernel.db }),
+        renders
+      ),
       renderInputs: { sourceImage: vi.fn(), item: vi.fn(), region: vi.fn() },
       maskCompositor: {
         composeEditMask: vi.fn<MaskCompositor['composeEditMask']>(),
@@ -578,6 +587,8 @@ describe('atomic image and detection writes', () => {
     const claims = await Promise.all(
       [1, 2].map(() =>
         ctx.renders.retryAttempt({
+          startedAt: new Date(),
+          expiredBeforeMs: 0,
           resultId: ctx.identity.resultId,
           expectedAttempt: 1,
         })
@@ -810,7 +821,7 @@ describe('atomic image and detection writes', () => {
     const ctx = await renderSetup();
     okValue(await ctx.pipeline.poll(ctx.identity));
     okValue(
-      await ctx.renders.updateResult({
+      await updateRenderResultFixture(ctx.kernel.db, {
         resultId: ctx.identity.resultId,
         changes: {
           attempt: 2,

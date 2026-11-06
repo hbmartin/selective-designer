@@ -19,6 +19,7 @@ import {
   type RenderInputs,
   type RenderRepository,
   type ResultImages,
+  type ResultOutputReferences,
 } from '@/modules/rendering';
 import {
   contentTypeForFormat,
@@ -53,6 +54,7 @@ export type RenderingPipelineOverrides = {
   persistence?: {
     renderRepository: RenderRepository;
     resultImages: ResultImages;
+    resultOutputReferences: ResultOutputReferences;
   };
   renderInputs?: RenderInputs;
   maskCompositor?: MaskCompositor;
@@ -191,7 +193,8 @@ export const createResultImages = (
           originalContentType:
             contentTypeForFormat(dimensions.format) ??
             found.contentType ??
-            input.contentType,
+            input.contentType ??
+            'application/octet-stream',
           original: size,
           workingKey: input.objectKey,
           working: size,
@@ -254,12 +257,39 @@ export const createImageModels = (): ImageModels => {
   };
 };
 
+export const createResultOutputReferences = (
+  designs: Pick<DesignRepository, 'referencedImageKeys'>,
+  renders: Pick<RenderRepository, 'referencedOutputKeys'>
+): ResultOutputReferences => ({
+  async check(key) {
+    const [images, outputs] = await Promise.all([
+      designs.referencedImageKeys([key]),
+      renders.referencedOutputKeys([key]),
+    ]);
+    if (images.isError()) return Result.Error(images.getError());
+    if (outputs.isError()) return Result.Error(outputs.getError());
+    return Result.Ok({
+      type:
+        images.get().keys.length || outputs.get().keys.length
+          ? 'output_referenced'
+          : 'output_unreferenced',
+    });
+  },
+});
+
 const build = (overrides?: RenderingPipelineOverrides) => {
   const kernel = overrides?.kernel ?? getPipelineKernel();
+  const renderRepository =
+    overrides?.persistence?.renderRepository ??
+    createRenderRepository({ db: kernel.db });
   return createRenderingPipelineUseCases({
-    renderRepository:
-      overrides?.persistence?.renderRepository ??
-      createRenderRepository({ db: kernel.db }),
+    renderRepository,
+    resultOutputReferences:
+      overrides?.persistence?.resultOutputReferences ??
+      createResultOutputReferences(
+        createDesignRepository({ db: kernel.db }),
+        renderRepository
+      ),
     renderInputs: overrides?.renderInputs ?? createRenderInputs(kernel),
     maskCompositor:
       overrides?.maskCompositor ??

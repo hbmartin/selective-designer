@@ -17,7 +17,6 @@ import type {
   ModelSettings,
   Render,
   RenderResult,
-  RenderResultStatus,
 } from '../../domain/render';
 import type { RenderOutputCheckpoint } from '../../domain/render-output';
 
@@ -84,12 +83,15 @@ export interface RenderRepository {
   ): Promise<
     ApplicationResult<
       | { type: 'result_output_saved'; checkpoint: RenderOutputCheckpoint }
+      | { type: 'result_already_completed' }
       | { type: 'result_attempt_superseded' }
     >
   >;
   retryAttempt(input: {
     resultId: RenderResultId;
     expectedAttempt: number;
+    startedAt: Date;
+    expiredBeforeMs: number;
   }): Promise<
     ApplicationResult<
       | { type: 'result_retry_claimed'; attempt: number }
@@ -127,6 +129,11 @@ export interface RenderRepository {
       { type: 'result_completed' } | { type: 'result_attempt_superseded' }
     >
   >;
+  referencedOutputKeys(
+    keys: ObjectKey[]
+  ): Promise<
+    ApplicationResult<{ type: 'referenced_output_keys'; keys: ObjectKey[] }>
+  >;
   findDraft(
     renderSourceImageId: ImageId
   ): Promise<
@@ -154,6 +161,7 @@ export interface RenderRepository {
     batchOptionItemId: string | null;
     recipe: RenderRecipe;
     results: NewRenderResult[];
+    attemptStartedAt: Date;
   }): Promise<ApplicationResult<{ type: 'render_created'; render: Render }>>;
   findRender(
     renderId: RenderId
@@ -193,24 +201,6 @@ export interface RenderRepository {
       | { type: 'result_not_found' }
     >
   >;
-  updateResult(input: {
-    resultId: RenderResultId;
-    changes: Partial<{
-      status: RenderResultStatus;
-      attempt: number;
-      providerRequestId: string | null;
-      modelVersion: string | null;
-      settings: ModelSettings;
-      prompt: string | null;
-      outputImageId: ImageId | null;
-      framingChanged: boolean;
-      errorMessage: string | null;
-      costUsdMicros: number | null;
-      costSource: ProviderCostSource | null;
-      submittedAt: Date | null;
-      completedAt: Date | null;
-    }>;
-  }): Promise<ApplicationResult<{ type: 'result_updated' }>>;
   setPreferredResult(input: {
     renderId: RenderId;
     resultId: RenderResultId | null;
@@ -296,7 +286,7 @@ export interface ResultImages {
       designId: DesignId;
       renderSourceImageId: ImageId;
       objectKey: ObjectKey;
-      contentType: string;
+      contentType: string | undefined;
       completion: Omit<RenderCompletion, 'framingChanged' | 'completedAt'> & {
         completedAt: string;
       };
@@ -396,4 +386,15 @@ export interface RenderScheduler {
     resultId: RenderResultId;
     attempt: number;
   }): Promise<ApplicationResult<{ type: 'render_scheduled' }>>;
+}
+
+/** Global references for render-owned output keys; publication loss is checked separately. */
+export interface ResultOutputReferences {
+  check(
+    objectKey: ObjectKey
+  ): Promise<
+    ApplicationResult<
+      { type: 'output_referenced' } | { type: 'output_unreferenced' }
+    >
+  >;
 }

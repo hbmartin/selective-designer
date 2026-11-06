@@ -17,6 +17,8 @@ export type AppErrorOptions = {
   details?: AppErrorDetails;
   exposeDetails?: boolean;
   cause?: unknown;
+  retryable?: boolean;
+  retryAfterMs?: number;
 };
 
 export class AppError extends Error {
@@ -25,6 +27,8 @@ export class AppError extends Error {
   readonly status: number;
   readonly details?: AppErrorDetails;
   readonly exposeDetails: boolean;
+  readonly retryable?: boolean;
+  readonly retryAfterMs?: number;
 
   constructor(options: AppErrorOptions) {
     super(options.message ?? options.code, { cause: options.cause });
@@ -34,6 +38,8 @@ export class AppError extends Error {
     this.status = options.status;
     this.details = options.details;
     this.exposeDetails = options.exposeDetails ?? false;
+    this.retryable = options.retryable;
+    this.retryAfterMs = options.retryAfterMs;
   }
 }
 

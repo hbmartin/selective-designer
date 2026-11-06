@@ -1,5 +1,5 @@
 import { type Result as BoxedResult, Result } from '@bloodyowl/boxed';
-import { and, asc, desc, eq, inArray, isNull, or, sql } from 'drizzle-orm';
+import { and, asc, desc, eq, inArray, isNull, lte, or, sql } from 'drizzle-orm';
 
 import type { ProviderCostSource } from '@/modules/kernel';
 import { AppError } from '@/modules/kernel/domain/errors/app-error';
@@ -95,6 +95,7 @@ const toResult = (
     status: row.status,
     skipReason: row.skipReason,
     attempt: row.attempt,
+    attemptStartedAt: row.attemptStartedAt,
     providerRequestId: row.providerRequestId,
     modelVersion: row.modelVersion,
     settings: row.settings,
@@ -273,6 +274,7 @@ export const createRenderRepository = ({
               input.results.map((result) => ({
                 id: result.id,
                 renderId: input.id,
+                attemptStartedAt: input.attemptStartedAt,
                 modelId: result.modelId,
                 status: result.status,
                 skipReason: result.skipReason,
@@ -488,6 +490,13 @@ export const createRenderRepository = ({
           value.type === 'publication_context' &&
           value.context.result.attempt === input.attempt &&
           value.context.result.providerRequestId === input.providerRequestId &&
+          value.context.result.status === 'succeeded'
+        )
+          return Result.Ok({ type: 'result_already_completed' });
+        if (
+          value.type === 'publication_context' &&
+          value.context.result.attempt === input.attempt &&
+          value.context.result.providerRequestId === input.providerRequestId &&
           value.context.result.status === 'submitted' &&
           value.context.checkpoint
         )
@@ -507,6 +516,7 @@ export const createRenderRepository = ({
           .set({
             status: 'pending',
             attempt: input.expectedAttempt + 1,
+            attemptStartedAt: input.startedAt,
             providerRequestId: null,
             workflowRunId: null,
             outputCheckpoint: null,
@@ -523,7 +533,16 @@ export const createRenderRepository = ({
             and(
               eq(resultTable.id, input.resultId),
               eq(resultTable.attempt, input.expectedAttempt),
-              eq(resultTable.status, 'failed')
+              or(
+                eq(resultTable.status, 'failed'),
+                and(
+                  inArray(resultTable.status, ['pending', 'submitted']),
+                  lte(
+                    resultTable.attemptStartedAt,
+                    new Date(input.expiredBeforeMs)
+                  )
+                )
+              )
             )
           )
           .returning({ attempt: resultTable.attempt });
@@ -543,13 +562,21 @@ export const createRenderRepository = ({
           .set({
             status: 'failed',
             errorMessage: input.reason.slice(0, 500),
+            outputCheckpoint: sql`case when ${resultTable.outputCheckpoint} is null then null else jsonb_set(${resultTable.outputCheckpoint}, '{source}', '{"kind":"retired"}'::jsonb) end`,
             completedAt: input.now,
           })
           .where(
             and(
               eq(resultTable.id, input.resultId),
               eq(resultTable.attempt, input.attempt),
-              eq(resultTable.workflowRunId, input.workflowRunId),
+              or(
+                eq(resultTable.workflowRunId, input.workflowRunId),
+                and(
+                  eq(resultTable.status, 'pending'),
+                  isNull(resultTable.workflowRunId),
+                  isNull(resultTable.providerRequestId)
+                )
+              ),
               inArray(resultTable.status, ['pending', 'submitted']),
               input.providerRequestId === undefined
                 ? undefined
@@ -613,6 +640,7 @@ export const createRenderRepository = ({
             ...input.completion,
             status: 'succeeded',
             outputImageId: input.imageId,
+            outputCheckpoint: sql`case when ${resultTable.outputCheckpoint} is null then null else jsonb_set(${resultTable.outputCheckpoint}, '{source}', '{"kind":"retired"}'::jsonb) end`,
           })
           .where(
             and(
@@ -630,13 +658,22 @@ export const createRenderRepository = ({
         return Result.Error(dbError(error));
       }
     },
-    async updateResult(input) {
+    async referencedOutputKeys(keys) {
+      if (!keys.length)
+        return Result.Ok({ type: 'referenced_output_keys', keys: [] });
       try {
-        await db
-          .update(resultTable)
-          .set(input.changes)
-          .where(eq(resultTable.id, input.resultId));
-        return Result.Ok({ type: 'result_updated' });
+        const rows = await db
+          .select({
+            key: sql<string>`${resultTable.outputCheckpoint}->>'objectKey'`,
+          })
+          .from(resultTable)
+          .where(
+            inArray(sql`${resultTable.outputCheckpoint}->>'objectKey'`, keys)
+          );
+        return Result.Ok({
+          type: 'referenced_output_keys',
+          keys: keys.filter((key) => rows.some((row) => row.key === key)),
+        });
       } catch (error) {
         return Result.Error(dbError(error));
       }

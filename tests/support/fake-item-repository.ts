@@ -134,6 +134,11 @@ export const createFakeItemRepository = (now: () => Date) => {
     async saveCutoutOutput(input) {
       const version = versions.get(input.versionId);
       if (
+        version?.cutoutStatus === 'ready' &&
+        attempts.get(input.versionId) === input.attemptId
+      )
+        return Result.Ok({ type: 'cutout_already_ready' });
+      if (
         version?.cutoutStatus !== 'pending' ||
         attempts.get(input.versionId) !== input.attemptId
       )
@@ -148,11 +153,23 @@ export const createFakeItemRepository = (now: () => Date) => {
     async finishCutoutAttempt(input) {
       const version = versions.get(input.versionId);
       if (
+        input.cutoutStatus === 'ready' &&
+        version?.cutoutStatus === 'ready' &&
+        (attempts.get(input.versionId) ?? null) === input.attemptId
+      )
+        return Result.Ok({ type: 'cutout_already_ready' });
+      if (
         version?.cutoutStatus !== 'pending' ||
         (attempts.get(version.id) ?? null) !== input.attemptId
       ) {
         return Result.Ok({ type: 'cutout_attempt_skipped' });
       }
+      const checkpoint = checkpoints.get(input.versionId);
+      if (checkpoint)
+        checkpoints.set(input.versionId, {
+          ...checkpoint,
+          source: { kind: 'retired' },
+        });
       version.cutoutStatus = input.cutoutStatus;
       version.cutoutKey = input.cutoutKey;
       return Result.Ok({ type: 'cutout_result_saved' });

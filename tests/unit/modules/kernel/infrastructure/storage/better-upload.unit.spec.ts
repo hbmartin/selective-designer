@@ -323,7 +323,7 @@ it.each(['fake', 'adapter'] as const)(
   }
 );
 
-it.each(['ENOTFOUND', 'CERT_HAS_EXPIRED', 'ERR_TLS_CERT_ALTNAME_INVALID'])(
+it.each(['CERT_HAS_EXPIRED', 'ERR_TLS_CERT_ALTNAME_INVALID'])(
   'fails fast without a destination write for permanent source code %s',
   async (code) => {
     storageConfig();
@@ -346,34 +346,38 @@ it.each(['ENOTFOUND', 'CERT_HAS_EXPIRED', 'ERR_TLS_CERT_ALTNAME_INVALID'])(
   }
 );
 
-it('retries a temporary DNS error on the same source', async () => {
-  storageConfig();
-  vi.useFakeTimers();
-  const fetch = vi
-    .fn()
-    .mockRejectedValueOnce(
-      new TypeError('fetch failed', { cause: { code: 'EAI_AGAIN' } })
-    )
-    .mockResolvedValueOnce(
-      new Response(Uint8Array.of(1), {
-        headers: { 'content-type': 'image/png' },
-      })
-    )
-    .mockResolvedValueOnce(new Response(null, { status: 201 }));
-  vi.stubGlobal('fetch', fetch);
-  const pending = new BetterUploadObjectStorage().copyNewObjectFromUrl(
-    copyInput
-  );
-  await vi.runAllTimersAsync();
-  expect((await pending).isOk()).toBe(true);
-  expect(fetch).toHaveBeenCalledTimes(3);
-});
-
-it.each(['7', new Date(Date.now() + 7_000).toUTCString()])(
-  'honors Retry-After %s before reading the source again',
-  async (retryAfter) => {
+it.each(['EAI_AGAIN', 'ENOTFOUND'])(
+  'retries DNS code %s on the same source',
+  async (code) => {
     storageConfig();
     vi.useFakeTimers();
+    const fetch = vi
+      .fn()
+      .mockRejectedValueOnce(new TypeError('fetch failed', { cause: { code } }))
+      .mockResolvedValueOnce(
+        new Response(Uint8Array.of(1), {
+          headers: { 'content-type': 'image/png' },
+        })
+      )
+      .mockResolvedValueOnce(new Response(null, { status: 201 }));
+    vi.stubGlobal('fetch', fetch);
+    const pending = new BetterUploadObjectStorage().copyNewObjectFromUrl(
+      copyInput
+    );
+    await vi.runAllTimersAsync();
+    expect((await pending).isOk()).toBe(true);
+    expect(fetch).toHaveBeenCalledTimes(3);
+  }
+);
+
+it.each(['seconds', 'date'])(
+  'honors Retry-After %s before reading the source again',
+  async (format) => {
+    storageConfig();
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-11-05T00:00:00Z'));
+    const retryAfter =
+      format === 'seconds' ? '7' : new Date(Date.now() + 7_000).toUTCString();
     const fetch = vi
       .fn()
       .mockResolvedValueOnce(
@@ -425,3 +429,90 @@ it('defers Retry-After beyond the total budget without another source read', asy
   expect(cancel).toHaveBeenCalledOnce();
   expect(vi.getTimerCount()).toBe(0);
 });
+
+it.each([
+  '301',
+  '2592000',
+  '99999999999999999999999999999999999999999999999999999999999999',
+  'Wed, 01 Jan 2099 00:00:00 GMT',
+])(
+  'ends excessive Retry-After %s without retrying early',
+  async (retryAfter) => {
+    storageConfig();
+    vi.useFakeTimers();
+    const cancel = vi.fn();
+    const fetch = vi.fn().mockResolvedValue(
+      new Response(new ReadableStream({ cancel }), {
+        status: 503,
+        headers: { 'retry-after': retryAfter },
+      })
+    );
+    vi.stubGlobal('fetch', fetch);
+    const result = await new BetterUploadObjectStorage().copyNewObjectFromUrl(
+      copyInput
+    );
+    expect(result.isError() && result.getError()).toMatchObject({
+      retryable: false,
+      attempts: 1,
+      sourceStatus: 503,
+    });
+    expect(fetch).toHaveBeenCalledOnce();
+    expect(cancel).toHaveBeenCalledOnce();
+    expect(vi.getTimerCount()).toBe(0);
+  }
+);
+
+it('defers exactly five minutes through workflow recovery', async () => {
+  storageConfig();
+  vi.useFakeTimers();
+  const fetch = vi
+    .fn()
+    .mockResolvedValue(
+      new Response(null, { status: 429, headers: { 'retry-after': '300' } })
+    );
+  vi.stubGlobal('fetch', fetch);
+  const result = await new BetterUploadObjectStorage().copyNewObjectFromUrl(
+    copyInput
+  );
+  expect(result.isError() && result.getError()).toMatchObject({
+    retryable: true,
+    retryAfterMs: 300_000,
+    attempts: 1,
+  });
+  expect(fetch).toHaveBeenCalledOnce();
+  expect(vi.getTimerCount()).toBe(0);
+});
+
+it.each([200, 404, 403])(
+  'reads metadata with HEAD and distinguishes status %i',
+  async (status) => {
+    storageConfig();
+    const cancel = vi.fn();
+    const fetch = vi.fn().mockResolvedValue(
+      new Response(new ReadableStream({ cancel }), {
+        status,
+        headers: { 'content-type': 'image/webp', 'content-length': '27' },
+      })
+    );
+    vi.stubGlobal('fetch', fetch);
+    const result = await new BetterUploadObjectStorage().getObjectMetadata(
+      'results/attempt.png'
+    );
+    expect(fetch.mock.calls[0]?.[0].method).toBe('HEAD');
+    expect(cancel).toHaveBeenCalledOnce();
+    if (status === 200)
+      expect(result.isOk() && result.get()).toEqual({
+        type: 'object_found',
+        contentType: 'image/webp',
+        byteLength: 27,
+      });
+    else if (status === 404)
+      expect(result.isOk() && result.get()).toEqual({
+        type: 'object_not_found',
+      });
+    else
+      expect(result.isError() && result.getError().code).toBe(
+        'OBJECT_STORAGE_HEAD_FAILED'
+      );
+  }
+);

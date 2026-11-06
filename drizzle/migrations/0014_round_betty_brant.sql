@@ -1,0 +1,1 @@
+ALTER TABLE "render_result" ADD COLUMN "attemptStartedAt" timestamp (3) DEFAULT (now() at time zone 'UTC') NOT NULL;

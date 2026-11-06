@@ -369,7 +369,7 @@ describe('background removal pipeline', () => {
       }),
     ]);
 
-    // A retried step after success is a no-op.
+    // A retried step recognizes the same successful attempt.
     expect(
       okValue(
         await ctx.pipeline(remover).removeBackground({
@@ -378,7 +378,7 @@ describe('background removal pipeline', () => {
         })
       )
     ).toEqual({
-      type: 'cutout_skipped',
+      type: 'cutout_ready',
     });
   });
 
@@ -522,7 +522,12 @@ describe('background removal pipeline', () => {
 });
 
 describe('cutout output checkpoints', () => {
-  it.each(['source read', 'publication', 'checkpoint reply'] as const)(
+  it.each([
+    'source read',
+    'publication',
+    'checkpoint reply',
+    'accounting',
+  ] as const)(
     'recovers %s without invoking the paid provider again',
     async (phase) => {
       const ctx = setup();
@@ -557,6 +562,10 @@ describe('cutout output checkpoints', () => {
       const copy = vi.spyOn(ctx.storage.storage, 'copyNewObjectFromUrl');
       if (phase === 'source read')
         copy.mockResolvedValueOnce(Result.Error(failure));
+      if (phase === 'accounting')
+        vi.spyOn(ctx.calls.log, 'record').mockResolvedValueOnce(
+          Result.Error(failure)
+        );
       if (phase === 'publication')
         vi.spyOn(
           ctx.items.repository,

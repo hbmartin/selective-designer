@@ -1,3 +1,4 @@
+import { sql } from 'drizzle-orm';
 import {
   bigint,
   boolean,
@@ -73,6 +74,12 @@ export const renderResult = pgTable(
     status: text('status').notNull(),
     skipReason: text('skipReason'),
     attempt: integer('attempt').default(1).notNull(),
+    attemptStartedAt: timestamp('attemptStartedAt', {
+      precision: 3,
+      mode: 'date',
+    })
+      .default(sql`(now() at time zone 'UTC')`)
+      .notNull(),
     providerRequestId: text('providerRequestId'),
     workflowRunId: text('workflowRunId'),
     outputCheckpoint: jsonb('outputCheckpoint').$type<RenderOutputCheckpoint>(),

@@ -8,6 +8,16 @@ export const createFakeDesignRepository = (now: () => Date) => {
   const images = new Map<string, DesignImage>();
 
   const repository: DesignRepository = {
+    async referencedImageKeys(keys) {
+      return Result.Ok({
+        type: 'referenced_image_keys',
+        keys: keys.filter((key) =>
+          [...images.values()].some(
+            (image) => image.originalKey === key || image.workingKey === key
+          )
+        ),
+      });
+    },
     async list(query) {
       const items = [...designs.values()]
         .filter(

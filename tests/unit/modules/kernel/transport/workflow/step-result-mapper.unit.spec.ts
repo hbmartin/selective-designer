@@ -66,12 +66,54 @@ it('does not retry terminal source errors and propagates provider retry delays',
   } catch (error) {
     caught = error;
   }
-  expect(caught).toBeInstanceOf(RetryableError);
   try {
+    expect(caught).toBeInstanceOf(RetryableError);
     expect(caught).toMatchObject({
       retryAfter: new Date('2026-11-05T00:02:00Z'),
     });
   } finally {
     vi.useRealTimers();
+  }
+});
+
+it('honors base AppError retry metadata before status defaults', () => {
+  expect(() =>
+    unwrapStepResult(
+      Result.Error(
+        new AppError({
+          code: 'TERMINAL_SOURCE',
+          category: 'system',
+          status: 502,
+          retryable: false,
+        })
+      )
+    )
+  ).toThrow(FatalError);
+  expect(() =>
+    unwrapStepResult(
+      Result.Error(
+        new AppError({
+          code: 'TEMPORARY_SOURCE',
+          category: 'bad_request',
+          status: 400,
+          retryable: true,
+          retryAfterMs: 300_000,
+        })
+      )
+    )
+  ).toThrow(RetryableError);
+  for (const delay of [300_001, Infinity, NaN, -1, 9_000_000_000_000_000]) {
+    expect(() =>
+      unwrapStepResult(
+        Result.Error(
+          new AppError({
+            code: 'SOURCE_WAIT_TOO_LONG',
+            category: 'system',
+            status: 502,
+            retryAfterMs: delay,
+          })
+        )
+      )
+    ).toThrow(FatalError);
   }
 });

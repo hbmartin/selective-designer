@@ -1,5 +1,6 @@
 import { FatalError, getWorkflowMetadata, sleep } from 'workflow';
 
+import { failureCode } from '@/modules/kernel/domain/errors/failure-code';
 import { toRenderResultId } from '@/modules/kernel/domain/ids';
 import { unwrapStepResult } from '@/modules/kernel/transport/workflow/step-result-mapper';
 
@@ -81,11 +82,7 @@ async function runResult(input: Execution): Promise<string> {
     }
     return await fail('timed_out');
   } catch (error) {
-    const code =
-      error instanceof Error
-        ? /^([A-Z][A-Z0-9_]{2,63}):/u.exec(error.message)?.[1]
-        : undefined;
-    return fail(code ?? 'render_step_failed');
+    return fail(failureCode(error, 'render_step_failed'));
   }
 }
 

@@ -1,5 +1,14 @@
 import { type Result as BoxedResult, Result } from '@bloodyowl/boxed';
-import { and, desc, eq, isNotNull, isNull, sql } from 'drizzle-orm';
+import {
+  and,
+  desc,
+  eq,
+  inArray,
+  isNotNull,
+  isNull,
+  or,
+  sql,
+} from 'drizzle-orm';
 
 import type {
   DesignRepository,
@@ -147,6 +156,32 @@ export const createDesignRepository = ({
   };
 
   const repository: DesignRepository = {
+    async referencedImageKeys(keys) {
+      if (!keys.length)
+        return Result.Ok({ type: 'referenced_image_keys', keys: [] });
+      try {
+        const rows = await db
+          .select({
+            original: imageTable.originalKey,
+            working: imageTable.workingKey,
+          })
+          .from(imageTable)
+          .where(
+            or(
+              inArray(imageTable.originalKey, keys),
+              inArray(imageTable.workingKey, keys)
+            )
+          );
+        return Result.Ok({
+          type: 'referenced_image_keys',
+          keys: keys.filter((key) =>
+            rows.some((row) => row.original === key || row.working === key)
+          ),
+        });
+      } catch (error) {
+        return Result.Error(dbError(error));
+      }
+    },
     async list(query) {
       try {
         const ownerFilter = and(

@@ -27,8 +27,14 @@ export const createProviderCallLog = ({
           costUsdMicros: call.costUsdMicros ?? null,
           costSource: call.costSource,
           details: call.details,
-          startedAt: call.startedAt,
-          completedAt: call.completedAt ?? null,
+          startedAt:
+            typeof call.startedAt === 'string'
+              ? new Date(call.startedAt)
+              : call.startedAt,
+          completedAt:
+            typeof call.completedAt === 'string'
+              ? new Date(call.completedAt)
+              : (call.completedAt ?? null),
         };
         try {
           await db

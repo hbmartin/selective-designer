@@ -36,6 +36,7 @@ import {
   type RenderInputs,
   type RenderResult,
   type ResultImages,
+  type ResultOutputReferences,
   type SourceImage,
 } from '@/modules/rendering';
 import { createPngMaskCompositor } from '@/modules/rendering/testing';
@@ -223,6 +224,18 @@ const setup = (options: { enabledModelIds?: readonly string[] } = {}) => {
       });
     },
   };
+  const resultOutputReferences: ResultOutputReferences = {
+    check: async (objectKey) =>
+      Result.Ok({
+        type:
+          [...renders.checkpoints.values()].some(
+            (c) => c.objectKey === objectKey
+          ) ||
+          [...images.values()].some((image) => image.workingKey === objectKey)
+            ? 'output_referenced'
+            : 'output_unreferenced',
+      }),
+  };
   const pipeline = createRenderingPipelineUseCases({
     renderRepository: renders.repository,
     renderInputs,
@@ -238,6 +251,7 @@ const setup = (options: { enabledModelIds?: readonly string[] } = {}) => {
       },
     },
     resultImages,
+    resultOutputReferences,
     objectStorage: storage.storage,
     providerCallLog: calls.log,
     idGenerator,
@@ -278,6 +292,7 @@ const setup = (options: { enabledModelIds?: readonly string[] } = {}) => {
     useCases,
     pipeline,
     resultImages,
+    resultOutputReferences,
     storage,
     calls,
     renders,
@@ -565,7 +580,12 @@ describe('render pipeline', () => {
     expect(result.status).toBe('pending');
   });
 
-  it.each(['source read', 'publication'] as const)(
+  it.each([
+    'source read',
+    'publication',
+    'accounting',
+    'checkpoint reply',
+  ] as const)(
     'resumes checkpointed output after %s fails without polling or purchasing again',
     async (phase) => {
       const { ctx, resultFor } = await submitted();
@@ -596,7 +616,21 @@ describe('render pipeline', () => {
       const register = vi.spyOn(ctx.resultImages, 'register');
       if (phase === 'source read')
         copy.mockResolvedValueOnce(Result.Error(error));
-      else register.mockResolvedValueOnce(Result.Error(error));
+      else if (phase === 'publication')
+        register.mockResolvedValueOnce(Result.Error(error));
+      else if (phase === 'accounting')
+        vi.spyOn(ctx.calls.log, 'record').mockResolvedValueOnce(
+          Result.Error(error)
+        );
+      else {
+        const save = ctx.renders.repository.saveOutput;
+        vi.spyOn(ctx.renders.repository, 'saveOutput').mockImplementationOnce(
+          async (input) => {
+            await save(input);
+            return Result.Error(error);
+          }
+        );
+      }
       const failed = await ctx.pipeline.poll(polling(result));
       expect(failed.isError() && failed.getError()).toBe(error);
       expect(ctx.renders.checkpoints.has(result.id)).toBe(true);
@@ -1282,5 +1316,223 @@ describe('copying a design for a revised image', () => {
       edits: [{ ...placement('e1', 'chair-copy') }],
       prompt: 'Dusk',
     });
+  });
+});
+
+describe('expired render recovery and output cleanup', () => {
+  const prepared = async () => {
+    const ctx = setup({ enabledModelIds: ['krea-3'] });
+    ctx.addItem('chair');
+    await ctx.saveDraft({ edits: [placement('first', 'chair')], prompt: '' });
+    await ctx.submit();
+    const result = ctx.renders.renders[0]!.results[0]!;
+    return { ctx, result };
+  };
+  const output = {
+    type: 'model_completed' as const,
+    outputUrl: null,
+    outputBytes: { bytes: Uint8Array.of(1), contentType: 'image/png' },
+    modelVersion: null,
+    costUsdMicros: 123,
+    costSource: 'reported' as const,
+  };
+  it.each(['pending', 'submitted'] as const)(
+    'offers and atomically claims expired %s work only at the deadline',
+    async (status) => {
+      const { ctx, result } = await prepared();
+      if (status === 'submitted') await ctx.pipeline.submit(execution(result));
+      const old = execution(result);
+      result.attemptStartedAt = new Date(now.getTime() - 30 * 60_000 + 1);
+      const view = okValue(
+        await ctx.useCases.getRender({
+          currentUserId: ownerId,
+          renderId: result.renderId,
+        })
+      );
+      expect(
+        view.type === 'render_found' && view.render.results[0]!.retryable
+      ).toBe(false);
+      expect(
+        okValue(
+          await ctx.useCases.retryResult({
+            currentUserId: ownerId,
+            resultId: result.id,
+          })
+        ).type
+      ).toBe('result_not_retryable');
+      result.attemptStartedAt = new Date(now.getTime() - 30 * 60_000);
+      const expired = okValue(
+        await ctx.useCases.getRender({
+          currentUserId: ownerId,
+          renderId: result.renderId,
+        })
+      );
+      expect(
+        expired.type === 'render_found' && expired.render.results[0]!.retryable
+      ).toBe(true);
+      const outcomes = await Promise.all(
+        [1, 2].map(() =>
+          ctx.useCases.retryResult({
+            currentUserId: ownerId,
+            resultId: result.id,
+          })
+        )
+      );
+      expect(outcomes.map((value) => okValue(value).type).sort()).toEqual([
+        'render_updated',
+        'result_not_retryable',
+      ]);
+      expect(result.attemptStartedAt).toEqual(now);
+      expect(result.attempt).toBe(2);
+      expect(
+        okValue(
+          await ctx.pipeline.markFailed({ ...old, reason: 'late timeout' })
+        ).type
+      ).toBe('result_attempt_superseded');
+    }
+  );
+  it('fails matching unclaimed work and exposes Retry after submission never claimed', async () => {
+    const { ctx, result } = await prepared();
+    expect(
+      okValue(
+        await ctx.pipeline.markFailed({
+          ...execution(result),
+          reason: 'DATABASE_UNAVAILABLE',
+        })
+      ).type
+    ).toBe('result_marked_failed');
+    expect(
+      okValue(
+        await ctx.useCases.retryResult({
+          currentUserId: ownerId,
+          resultId: result.id,
+        })
+      ).type
+    ).toBe('render_updated');
+    expect(result.attempt).toBe(2);
+  });
+  it.each([
+    'unreferenced',
+    'image reference',
+    'uncertain reference',
+    'cleanup error',
+    'create conflict',
+    'uncertain checkpoint',
+  ] as const)(
+    'handles a losing byte object with %s conservatively',
+    async (state) => {
+      const { ctx, result } = await prepared();
+      await ctx.pipeline.submit(execution(result));
+      const objectKey = key(`results/${result.id}/1/raw.png`);
+      if (state === 'create conflict')
+        ctx.storage.objects.set(objectKey, {
+          bytes: Uint8Array.of(9),
+          contentType: 'image/png',
+        });
+      const failure = new AppError({
+        code: 'DB_UNAVAILABLE',
+        category: 'system',
+        status: 502,
+      });
+      vi.spyOn(ctx.renders.repository, 'saveOutput').mockResolvedValue(
+        state === 'uncertain checkpoint'
+          ? Result.Error(failure)
+          : Result.Ok({ type: 'result_attempt_superseded' })
+      );
+      if (state === 'image reference')
+        ctx.resultOutputReferences.check = async () =>
+          Result.Ok({ type: 'output_referenced' });
+      if (state === 'uncertain reference')
+        ctx.resultOutputReferences.check = async () => Result.Error(failure);
+      const remove = vi.spyOn(ctx.storage.storage, 'deleteObject');
+      if (state === 'cleanup error')
+        remove.mockResolvedValue(Result.Error(failure));
+      ctx.models.get('krea-3')!.adapter.poll = async () => Result.Ok(output);
+      const outcome = await ctx.pipeline.poll(polling(result));
+      if (state === 'uncertain checkpoint')
+        expect(outcome.isError() && outcome.getError()).toBe(failure);
+      else expect(okValue(outcome).type).toBe('result_attempt_superseded');
+      expect(ctx.storage.objects.has(objectKey)).toBe(state !== 'unreferenced');
+      expect(remove).toHaveBeenCalledTimes(
+        state === 'unreferenced' || state === 'cleanup error' ? 1 : 0
+      );
+    }
+  );
+  it('cleans only the newly created different-format loser, preserving the canonical output', async () => {
+    const { ctx, result } = await prepared();
+    await ctx.pipeline.submit(execution(result));
+    const winningKey = key(`results/${result.id}/1/raw.webp`);
+    ctx.storage.objects.set(winningKey, {
+      bytes: Uint8Array.of(7),
+      contentType: 'image/webp',
+    });
+    const save = ctx.renders.repository.saveOutput;
+    vi.spyOn(ctx.renders.repository, 'saveOutput').mockImplementationOnce(
+      (input) =>
+        save({
+          ...input,
+          checkpoint: {
+            ...input.checkpoint,
+            objectKey: winningKey,
+            contentType: 'image/webp',
+          },
+        })
+    );
+    ctx.models.get('krea-3')!.adapter.poll = async () => Result.Ok(output);
+    expect(okValue(await ctx.pipeline.poll(polling(result))).type).toBe(
+      'result_succeeded'
+    );
+    expect(ctx.storage.objects.has(`results/${result.id}/1/raw.png`)).toBe(
+      false
+    );
+    expect(ctx.storage.objects.get(winningKey)?.bytes).toEqual(
+      Uint8Array.of(7)
+    );
+    expect(ctx.renders.checkpoints.get(result.id)?.source).toEqual({
+      kind: 'retired',
+    });
+  });
+  it('recovers a same-attempt completion that wins during checkpoint persistence', async () => {
+    const { ctx, result } = await prepared();
+    await ctx.pipeline.submit(execution(result));
+    ctx.models.get('krea-3')!.adapter.poll = async () => Result.Ok(output);
+    const save = ctx.renders.repository.saveOutput;
+    vi.spyOn(ctx.renders.repository, 'saveOutput').mockImplementationOnce(
+      async (input) => {
+        await save(input);
+        await ctx.resultImages.register({
+          ...input,
+          designId,
+          renderSourceImageId: baseImageId,
+          sourceSize: { width: 40, height: 20 },
+          objectKey: input.checkpoint.objectKey,
+          contentType: input.checkpoint.contentType ?? undefined,
+          completion: input.checkpoint,
+        });
+        return save(input);
+      }
+    );
+    const recover = vi.spyOn(ctx.resultImages, 'findRegistered');
+    const remove = vi.spyOn(ctx.storage.storage, 'deleteObject');
+    expect(okValue(await ctx.pipeline.poll(polling(result))).type).toBe(
+      'result_succeeded'
+    );
+    expect(recover).toHaveBeenCalledOnce();
+    expect(remove).not.toHaveBeenCalled();
+    expect(ctx.storage.objects.has(`results/${result.id}/1/raw.png`)).toBe(
+      true
+    );
+  });
+  it('checks metadata without a byte read in the render pipeline', async () => {
+    const { ctx, result } = await prepared();
+    await ctx.pipeline.submit(execution(result));
+    ctx.models.get('krea-3')!.adapter.poll = async () => Result.Ok(output);
+    const read = vi.spyOn(ctx.storage.storage, 'getObjectBytes');
+    const metadata = vi.spyOn(ctx.storage.storage, 'getObjectMetadata');
+    expect(okValue(await ctx.pipeline.poll(polling(result))).type).toBe(
+      'result_succeeded'
+    );
+    expect(read).not.toHaveBeenCalled();
+    expect(metadata).toHaveBeenCalledOnce();
   });
 });

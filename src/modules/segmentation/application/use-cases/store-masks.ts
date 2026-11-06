@@ -6,7 +6,7 @@ import type {
 } from '@/modules/kernel/application/ports/object-storage';
 import { ObjectCopySourceError } from '@/modules/kernel/application/ports/object-storage';
 import { AppError } from '@/modules/kernel/domain/errors/app-error';
-import { safeErrorDiagnostics } from '@/modules/kernel/domain/errors/safe-error-diagnostics';
+import { sourceErrorDiagnostics } from '@/modules/kernel/domain/errors/source-error-diagnostics';
 import {
   type ObjectKey,
   type ProviderCallId,
@@ -136,14 +136,7 @@ export async function storeSegmentedMasks(
           source: input.source,
           objectKey,
           code: stored.getError().code,
-          ...safeErrorDiagnostics(error),
-          ...(error instanceof ObjectCopySourceError
-            ? {
-                reason: error.reason,
-                attempts: error.attempts,
-                status: error.sourceStatus,
-              }
-            : {}),
+          ...sourceErrorDiagnostics(error),
         },
       });
       if (
