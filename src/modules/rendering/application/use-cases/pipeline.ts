@@ -8,6 +8,7 @@ import {
   type DesignId,
   type ImageId,
   type ObjectKey,
+  type ProviderCallId,
   type RenderResultId,
   toObjectKey,
 } from '@/modules/kernel/domain/ids';
@@ -99,7 +100,11 @@ const buildRequest = async (
 
 export type SubmitResultOutcome =
   | { type: 'result_accepted'; submission: AcceptedRenderSubmission }
-  | { type: 'result_already_submitted'; providerRequestId: string }
+  | {
+      type: 'result_already_submitted';
+      providerRequestId: string;
+      receiptId?: ProviderCallId;
+    }
   | { type: 'result_failed'; reason: string }
   | { type: 'result_not_runnable' }
   | { type: 'result_attempt_superseded' };
@@ -124,11 +129,21 @@ export async function submitResult(
   if (
     (result.status === 'submitted' || result.status === 'succeeded') &&
     result.providerRequestId
-  )
+  ) {
+    const context = await deps.renderRepository.publicationContext(
+      input.resultId
+    );
+    if (context.isError()) return Result.Error(context.getError());
+    const current = context.get();
     return Result.Ok({
       type: 'result_already_submitted',
       providerRequestId: result.providerRequestId,
+      receiptId:
+        current.type === 'publication_context'
+          ? current.context.accountingIdentity?.receipt?.id
+          : undefined,
     });
+  }
   if (result.status !== 'pending')
     return Result.Ok({ type: 'result_not_runnable' });
   const request = await buildRequest(deps, render, result);

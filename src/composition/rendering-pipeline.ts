@@ -6,7 +6,11 @@ import {
 } from '@/modules/design';
 import { createDesignRepository } from '@/modules/design/backend';
 import { getAiProvidersConfig } from '@/modules/kernel/backend';
-import { toItemId, toRegionId } from '@/modules/kernel/domain/ids';
+import {
+  type ProviderCallId,
+  toItemId,
+  toRegionId,
+} from '@/modules/kernel/domain/ids';
 import { createItemRepository } from '@/modules/moodboard/backend';
 import type { RenderingPipelineDeps } from '@/modules/rendering';
 import {
@@ -37,7 +41,7 @@ import {
 import type { AutoDetectionScheduler } from '@/modules/segmentation';
 import { createRegionRepository } from '@/modules/segmentation/backend';
 
-import { withAccountingDelivery } from './accounting-delivery';
+import { dispatchAccountingReceipt } from './accounting-delivery';
 import {
   findRegisteredRenderImage,
   renderImageIdentity,
@@ -308,29 +312,8 @@ const build = (overrides?: RenderingPipelineOverrides) => {
   const useCases = createRenderingPipelineUseCases(deps);
   return {
     ...useCases,
-    persistSubmission: (
-      input: Parameters<typeof useCases.persistSubmission>[0]
-    ) =>
-      withAccountingDelivery({
-        accounting: deps.providerAccounting,
-        logger: kernel.logger,
-        owner: 'workflow',
-        operation: (providerAccounting) =>
-          createRenderingPipelineUseCases({
-            ...deps,
-            providerAccounting,
-          }).persistSubmission(input),
-      }),
-    poll: (input: Parameters<typeof useCases.poll>[0]) =>
-      withAccountingDelivery({
-        accounting: deps.providerAccounting,
-        logger: kernel.logger,
-        owner: 'workflow',
-        operation: (providerAccounting) =>
-          createRenderingPipelineUseCases({ ...deps, providerAccounting }).poll(
-            input
-          ),
-      }),
+    dispatchAccounting: (receiptId: ProviderCallId) =>
+      dispatchAccountingReceipt({ receiptId, logger: kernel.logger }),
   };
 };
 

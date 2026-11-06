@@ -1,7 +1,11 @@
 import { FatalError, getWorkflowMetadata, sleep } from 'workflow';
 
 import { failureCode } from '@/modules/kernel/domain/errors/failure-code';
-import { toObjectKey, toRenderResultId } from '@/modules/kernel/domain/ids';
+import {
+  toObjectKey,
+  toProviderCallId,
+  toRenderResultId,
+} from '@/modules/kernel/domain/ids';
 import { unwrapStepResult } from '@/modules/kernel/transport/workflow/step-result-mapper';
 
 import type { AcceptedRenderSubmission } from '../../application/ports/ports';
@@ -39,6 +43,12 @@ async function persistSubmissionStep(input: AcceptedRenderSubmission) {
   'use step';
   return unwrapStepResult(await (await pipeline()).persistSubmission(input));
 }
+async function dispatchAccountingStep(receiptId: string) {
+  'use step';
+  return (await pipeline()).dispatchAccounting(
+    unwrapStepResult(toProviderCallId(receiptId))
+  );
+}
 async function cleanupOutputStep(objectKey: string, input: Execution) {
   'use step';
   return unwrapStepResult(
@@ -75,6 +85,7 @@ async function markFailedStep(
 /** An execution owns one immutable attempt, never whichever attempt is current later. */
 async function runResult(input: Execution): Promise<string> {
   let providerRequestId: string | undefined;
+  let receiptId: string | undefined;
   const fail = async (reason: string) => {
     const failed = await markFailedStep(
       { ...input, ...(providerRequestId ? { providerRequestId } : {}) },
@@ -86,6 +97,10 @@ async function runResult(input: Execution): Promise<string> {
   };
   try {
     const accepted = await submitStep(input);
+    if (accepted.type === 'result_accepted')
+      receiptId = accepted.submission.accountingIdentity.receipt.id;
+    else if (accepted.type === 'result_already_submitted')
+      receiptId = accepted.receiptId;
     let submitted:
       | Awaited<ReturnType<typeof persistSubmissionStep>>
       | Exclude<typeof accepted, { type: 'result_accepted' }>;
@@ -113,7 +128,15 @@ async function runResult(input: Execution): Promise<string> {
     }
     return await fail('timed_out');
   } catch (error) {
-    return fail(failureCode(error, 'render_step_failed'));
+    return await fail(failureCode(error, 'render_step_failed'));
+  } finally {
+    if (receiptId) {
+      try {
+        await dispatchAccountingStep(receiptId);
+      } catch {
+        /* Receipt delivery remains recoverable through the daily backstop. */
+      }
+    }
   }
 }
 

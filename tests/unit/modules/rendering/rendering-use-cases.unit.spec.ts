@@ -725,6 +725,7 @@ describe('render pipeline', () => {
     expect(okValue(await ctx.pipeline.submit(execution(result)))).toEqual({
       type: 'result_already_submitted',
       providerRequestId: 'req-1',
+      receiptId: expect.any(String),
     });
     const krea = ctx.models.get('krea-3');
     expect(krea?.requests).toHaveLength(1);
@@ -1777,6 +1778,33 @@ describe('accepted submission handoff', () => {
       expect(ctx.calls.calls.size).toBe(0);
     }
   );
+  it('keeps completed historical registrations readable without a receipt', async () => {
+    const ctx = await acceptedSetup();
+    okValue(await ctx.rawPipeline.persistSubmission(ctx.accepted));
+    ctx.result.status = 'succeeded';
+    const original = ctx.renders.repository.publicationContext;
+    vi.spyOn(ctx.renders.repository, 'publicationContext').mockImplementation(
+      async (id) => {
+        const found = await original(id);
+        if (found.isOk()) {
+          const value = found.get();
+          if (
+            value.type === 'publication_context' &&
+            value.context.accountingIdentity
+          )
+            Reflect.deleteProperty(value.context.accountingIdentity, 'receipt');
+        }
+        return found;
+      }
+    );
+    expect(
+      okValue(await ctx.rawPipeline.submit(execution(ctx.result)))
+    ).toMatchObject({
+      type: 'result_already_submitted',
+      providerRequestId: 'req-1',
+    });
+    expect(ctx.models.get('krea-3')!.requests).toHaveLength(1);
+  });
   it('records provider-confirmed failure separately from local failure', async () => {
     const ctx = await acceptedSetup();
     okValue(await ctx.rawPipeline.persistSubmission(ctx.accepted));

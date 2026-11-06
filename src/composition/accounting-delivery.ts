@@ -38,6 +38,22 @@ export function deferAccountingDelivery(
   }
 }
 
+/** A workflow-owned post-operation step may dispatch a previously captured receipt. */
+export async function dispatchAccountingReceipt(input: {
+  receiptId: ProviderCallId;
+  logger: Logger;
+  schedule?: typeof schedule;
+}) {
+  try {
+    await dispatchProviderReceipt(input.schedule ?? schedule, input.receiptId);
+  } catch (error) {
+    input.logger.warn({
+      event: 'provider_accounting.dispatch_failed',
+      details: { receiptId: input.receiptId, ...safeErrorDiagnostics(error) },
+    });
+  }
+}
+
 /** Per-operation scope: receipt identifiers never become browser or workflow output data. */
 export async function withAccountingDelivery<T>(input: {
   accounting: ProviderAccounting;
@@ -61,19 +77,13 @@ export async function withAccountingDelivery<T>(input: {
   } finally {
     const dispatch = async () => {
       await Promise.allSettled(
-        [...ids].map(async (receiptId) => {
-          try {
-            await dispatchProviderReceipt(
-              input.schedule ?? schedule,
-              receiptId
-            );
-          } catch (error) {
-            input.logger.warn({
-              event: 'provider_accounting.dispatch_failed',
-              details: { receiptId, ...safeErrorDiagnostics(error) },
-            });
-          }
-        })
+        [...ids].map((receiptId) =>
+          dispatchAccountingReceipt({
+            receiptId,
+            logger: input.logger,
+            schedule: input.schedule,
+          })
+        )
       );
     };
     if (ids.size) {

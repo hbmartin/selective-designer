@@ -8,6 +8,7 @@ const pipeline = vi.hoisted(() => ({
   submit: vi.fn(),
   persistSubmission: vi.fn(),
   discardOutput: vi.fn(),
+  dispatchAccounting: vi.fn(),
   poll: vi.fn(),
   markFailed: vi.fn(),
 }));
@@ -132,7 +133,11 @@ describe('render workflow', () => {
     });
   });
   it('persists accepted metadata in a separate step and leaves exhausted acceptance unresolved', async () => {
-    const submission = { ...execution, providerRequestId: 'accepted-request' };
+    const submission = {
+      ...execution,
+      providerRequestId: 'accepted-request',
+      accountingIdentity: { receipt: { id: 'accepted-call' } },
+    };
     pipeline.submit.mockResolvedValue(
       Result.Ok({ type: 'result_accepted', submission })
     );
@@ -143,8 +148,51 @@ describe('render workflow', () => {
       result: 'result_submission_unresolved',
     });
     expect(pipeline.persistSubmission).toHaveBeenCalledWith(submission);
+    expect(pipeline.dispatchAccounting).toHaveBeenCalledWith('accepted-call');
     expect(pipeline.submit).toHaveBeenCalledTimes(1);
     expect(pipeline.poll).not.toHaveBeenCalled();
+    expect(pipeline.markFailed).not.toHaveBeenCalled();
+  });
+  it('starts polling before dispatch and dispatches only after output completion', async () => {
+    const submission = {
+      ...execution,
+      providerRequestId: 'accepted-request',
+      accountingIdentity: { receipt: { id: 'accepted-call' } },
+    };
+    pipeline.submit.mockResolvedValue(
+      Result.Ok({ type: 'result_accepted', submission })
+    );
+    pipeline.persistSubmission.mockResolvedValue(
+      Result.Ok({
+        type: 'result_submitted',
+        providerRequestId: 'accepted-request',
+      })
+    );
+    pipeline.poll.mockImplementation(async () => {
+      expect(pipeline.dispatchAccounting).not.toHaveBeenCalled();
+      return Result.Ok({ type: 'result_succeeded' });
+    });
+    expect(await renderResultWorkflow(attempt)).toEqual({
+      result: 'result_succeeded',
+    });
+    expect(pipeline.poll).toHaveBeenCalledBefore(pipeline.dispatchAccounting);
+    expect(pipeline.dispatchAccounting).toHaveBeenCalledWith('accepted-call');
+  });
+  it('preserves publication when post-publication dispatch exhausts', async () => {
+    pipeline.submit.mockResolvedValue(
+      Result.Ok({
+        type: 'result_already_submitted',
+        providerRequestId: 'request-1',
+        receiptId: 'accepted-call',
+      })
+    );
+    pipeline.poll.mockResolvedValue(Result.Ok({ type: 'result_succeeded' }));
+    pipeline.dispatchAccounting.mockRejectedValue(
+      new Error('Step dispatchAccountingStep failed')
+    );
+    expect(await renderResultWorkflow(attempt)).toEqual({
+      result: 'result_succeeded',
+    });
     expect(pipeline.markFailed).not.toHaveBeenCalled();
   });
   it('continues the replacement while cleanup fails', async () => {
