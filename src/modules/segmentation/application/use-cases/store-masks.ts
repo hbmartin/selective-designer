@@ -136,6 +136,10 @@ export async function storeSegmentedMasks(
           source: input.source,
           objectKey,
           code: stored.getError().code,
+          status:
+            error instanceof ObjectCopySourceError
+              ? error.sourceStatus
+              : error.status,
           ...sourceErrorDiagnostics(error),
         },
       });

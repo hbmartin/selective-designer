@@ -83,6 +83,7 @@ const scriptedModel = (polls: ModelPoll[] = []) => {
       return Result.Ok({
         type: 'model_submitted',
         providerRequestId: `req-${requests.length}`,
+        accountingRequestId: `req-${requests.length}`,
         settings: { quality: 'high' },
       });
     },
@@ -152,7 +153,20 @@ const setup = (options: { enabledModelIds?: readonly string[] } = {}) => {
       return toGeneratedId(`id${counter}`);
     },
   };
+  const resultOutputReferences: ResultOutputReferences = {
+    check: async (objectKey) =>
+      Result.Ok({
+        type:
+          [...renders.checkpoints.values()].some(
+            (c) => c.objectKey === objectKey
+          ) ||
+          [...images.values()].some((image) => image.workingKey === objectKey)
+            ? 'output_referenced'
+            : 'output_unreferenced',
+      }),
+  };
   const useCases = createRenderingUseCases({
+    resultOutputReferences,
     renderRepository: renders.repository,
     renderInputs,
     maskCompositor,
@@ -224,18 +238,6 @@ const setup = (options: { enabledModelIds?: readonly string[] } = {}) => {
       });
     },
   };
-  const resultOutputReferences: ResultOutputReferences = {
-    check: async (objectKey) =>
-      Result.Ok({
-        type:
-          [...renders.checkpoints.values()].some(
-            (c) => c.objectKey === objectKey
-          ) ||
-          [...images.values()].some((image) => image.workingKey === objectKey)
-            ? 'output_referenced'
-            : 'output_unreferenced',
-      }),
-  };
   const pipeline = createRenderingPipelineUseCases({
     renderRepository: renders.repository,
     renderInputs,
@@ -253,7 +255,7 @@ const setup = (options: { enabledModelIds?: readonly string[] } = {}) => {
     resultImages,
     resultOutputReferences,
     objectStorage: storage.storage,
-    providerCallLog: calls.log,
+    providerAccounting: calls.accounting,
     idGenerator,
     clock: { now: () => now },
     logger,
@@ -580,12 +582,7 @@ describe('render pipeline', () => {
     expect(result.status).toBe('pending');
   });
 
-  it.each([
-    'source read',
-    'publication',
-    'accounting',
-    'checkpoint reply',
-  ] as const)(
+  it.each(['source read', 'publication', 'checkpoint reply'] as const)(
     'resumes checkpointed output after %s fails without polling or purchasing again',
     async (phase) => {
       const { ctx, resultFor } = await submitted();
@@ -618,10 +615,6 @@ describe('render pipeline', () => {
         copy.mockResolvedValueOnce(Result.Error(error));
       else if (phase === 'publication')
         register.mockResolvedValueOnce(Result.Error(error));
-      else if (phase === 'accounting')
-        vi.spyOn(ctx.calls.log, 'record').mockResolvedValueOnce(
-          Result.Error(error)
-        );
       else {
         const save = ctx.renders.repository.saveOutput;
         vi.spyOn(ctx.renders.repository, 'saveOutput').mockImplementationOnce(
@@ -807,7 +800,7 @@ describe('render pipeline', () => {
     });
     expect([...ctx.calls.calls.values()]).toEqual([
       expect.objectContaining({
-        id: `render:${result.id}:1`,
+        id: expect.stringMatching(/^request:/u),
         purpose: 'render',
         provider: 'fal',
         costSource: 'price_table',
@@ -1391,7 +1384,7 @@ describe('expired render recovery and output cleanup', () => {
       ).toBe('result_attempt_superseded');
     }
   );
-  it('fails matching unclaimed work and exposes Retry after submission never claimed', async () => {
+  it('leaves unclaimed work pending until the existing expiry enables Retry', async () => {
     const { ctx, result } = await prepared();
     expect(
       okValue(
@@ -1400,7 +1393,17 @@ describe('expired render recovery and output cleanup', () => {
           reason: 'DATABASE_UNAVAILABLE',
         })
       ).type
-    ).toBe('result_marked_failed');
+    ).toBe('result_attempt_superseded');
+    expect(result.status).toBe('pending');
+    expect(
+      okValue(
+        await ctx.useCases.retryResult({
+          currentUserId: ownerId,
+          resultId: result.id,
+        })
+      ).type
+    ).toBe('result_not_retryable');
+    result.attemptStartedAt = new Date(now.getTime() - 30 * 60 * 1000);
     expect(
       okValue(
         await ctx.useCases.retryResult({
@@ -1534,5 +1537,159 @@ describe('expired render recovery and output cleanup', () => {
     );
     expect(read).not.toHaveBeenCalled();
     expect(metadata).toHaveBeenCalledOnce();
+  });
+});
+
+describe('independent render accounting', () => {
+  it('publishes through prolonged delivery failure and later delivers without provider work', async () => {
+    const ctx = setup({ enabledModelIds: ['krea-3'] });
+    ctx.addItem('chair');
+    await ctx.saveDraft({ edits: [placement('first', 'chair')], prompt: '' });
+    await ctx.submit();
+    const result = ctx.renders.renders[0]!.results[0]!;
+    await ctx.pipeline.submit(execution(result));
+    const model = ctx.models.get(result.modelId)!;
+    const poll = vi.fn<ImageModelAdapter['poll']>().mockResolvedValue(
+      Result.Ok({
+        type: 'model_completed',
+        outputUrl: 'https://provider.test/paid',
+        outputBytes: null,
+        modelVersion: 'v1',
+        costUsdMicros: 123,
+        costSource: 'reported',
+      })
+    );
+    model.adapter.poll = poll;
+    ctx.storage.addRemoteSource('https://provider.test/paid', {
+      bytes: Uint8Array.of(1),
+      contentType: 'image/png',
+    });
+    const sink = vi
+      .spyOn(ctx.calls.log, 'record')
+      .mockResolvedValue(
+        Result.Error(
+          new AppError({ code: 'LOG_DOWN', category: 'system', status: 500 })
+        )
+      );
+    expect(okValue(await ctx.pipeline.poll(polling(result))).type).toBe(
+      'result_succeeded'
+    );
+    expect(ctx.calls.calls.size).toBe(0);
+    expect(ctx.calls.receipts.size).toBe(1);
+    const receipt = [...ctx.calls.receipts.values()][0]!;
+    expect(ctx.renders.checkpoints.get(result.id)?.source).toEqual({
+      kind: 'retired',
+    });
+    sink.mockRestore();
+    expect(okValue(await ctx.calls.accounting.deliver(receipt.id)).type).toBe(
+      'receipt_delivered'
+    );
+    expect(ctx.calls.calls.size).toBe(1);
+    expect(poll).toHaveBeenCalledOnce();
+  });
+  it.each(['unreferenced', 'referenced', 'unknown', 'delete failure'] as const)(
+    'starts a fresh attempt while safely handling a replaced %s object',
+    async (state) => {
+      const ctx = setup({ enabledModelIds: ['krea-3'] });
+      ctx.addItem('chair');
+      await ctx.saveDraft({ edits: [placement('first', 'chair')], prompt: '' });
+      await ctx.submit();
+      const result = ctx.renders.renders[0]!.results[0]!;
+      await ctx.pipeline.submit(execution(result));
+      ctx.models.get('krea-3')!.adapter.poll = async () =>
+        Result.Ok({
+          type: 'model_completed',
+          outputBytes: { bytes: Uint8Array.of(1), contentType: 'image/png' },
+          outputUrl: null,
+          modelVersion: null,
+          costUsdMicros: 123,
+          costSource: 'reported',
+        });
+      vi.spyOn(ctx.resultImages, 'register').mockResolvedValueOnce(
+        Result.Error(
+          new AppError({
+            code: 'PUBLICATION_DOWN',
+            category: 'system',
+            status: 500,
+          })
+        )
+      );
+      expect((await ctx.pipeline.poll(polling(result))).isError()).toBe(true);
+      const objectKey = ctx.renders.checkpoints.get(result.id)!.objectKey;
+      result.attemptStartedAt = new Date(now.getTime() - 30 * 60_000);
+      if (state === 'referenced')
+        vi.spyOn(ctx.resultOutputReferences, 'check').mockResolvedValue(
+          Result.Ok({ type: 'output_referenced' })
+        );
+      if (state === 'unknown')
+        vi.spyOn(ctx.resultOutputReferences, 'check').mockResolvedValue(
+          Result.Error(
+            new AppError({
+              code: 'REFERENCE_DOWN',
+              category: 'system',
+              status: 500,
+            })
+          )
+        );
+      if (state === 'delete failure')
+        vi.spyOn(ctx.storage.storage, 'deleteObject').mockResolvedValue(
+          Result.Error(
+            new AppError({
+              code: 'DELETE_DOWN',
+              category: 'system',
+              status: 500,
+            })
+          )
+        );
+      expect(
+        okValue(
+          await ctx.useCases.retryResult({
+            currentUserId: ownerId,
+            resultId: result.id,
+          })
+        ).type
+      ).toBe('render_updated');
+      expect(result.attempt).toBe(2);
+      expect(ctx.storage.objects.has(objectKey)).toBe(state !== 'unreferenced');
+      expect(ctx.calls.receipts.size).toBe(1);
+    }
+  );
+  it('keeps polling locators out of durable accounting receipts', async () => {
+    const ctx = setup({ enabledModelIds: ['krea-3'] });
+    ctx.addItem('chair');
+    await ctx.saveDraft({ edits: [placement('first', 'chair')], prompt: '' });
+    await ctx.submit();
+    const result = ctx.renders.renders[0]!.results[0]!;
+    const model = scriptedModel();
+    ctx.models.set('krea-3', model);
+    const locator = `fake:krea-3:${encodeURIComponent('https://storage.test/private?signature=synthetic-locator-token')}`;
+    model.adapter.submit = async () =>
+      Result.Ok({
+        type: 'model_submitted',
+        providerRequestId: locator,
+        settings: {},
+      });
+    model.adapter.poll = async () =>
+      Result.Ok({
+        type: 'model_completed',
+        outputBytes: { bytes: Uint8Array.of(1), contentType: 'image/png' },
+        outputUrl: null,
+        modelVersion: null,
+        costUsdMicros: 123,
+        costSource: 'reported',
+      });
+    await ctx.pipeline.submit(execution(result));
+    expect(
+      okValue(
+        await ctx.pipeline.poll({
+          ...execution(result),
+          providerRequestId: locator,
+        })
+      ).type
+    ).toBe('result_succeeded');
+    const receipt = [...ctx.calls.receipts.values()][0]!;
+    expect(receipt.providerRequestId).toBeUndefined();
+    expect(receipt.id).toMatch(/^invocation:/u);
+    expect(JSON.stringify(receipt)).not.toContain('synthetic-locator-token');
   });
 });

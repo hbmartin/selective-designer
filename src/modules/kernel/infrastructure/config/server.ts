@@ -1,3 +1,4 @@
+import { getAccountingConfig } from './accounting';
 import {
   getAiProvidersConfig,
   validateAiProvidersBuildConfig,
@@ -13,6 +14,7 @@ import { getStorageConfig } from './storage';
 import { getTelemetryConfig } from './telemetry';
 
 function validateInfrastructureConfig() {
+  getAccountingConfig();
   getAuthConfig();
   getDatabaseConfig();
   getEmailConfig();

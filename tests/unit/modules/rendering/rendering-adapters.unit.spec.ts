@@ -118,6 +118,7 @@ describe('FLUX 3 (BFL direct)', () => {
     expect(okValue(await model.submit(request()))).toEqual({
       type: 'model_submitted',
       providerRequestId: 'https://api.bfl.ai/v1/get_result?id=task-1',
+      accountingRequestId: 'task-1',
       settings: {
         resolution: 'match_input',
         grounding: false,

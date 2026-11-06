@@ -1,6 +1,5 @@
 import { Result } from '@bloodyowl/boxed';
 
-import { isRenderRetryable } from '@/modules/rendering';
 import { AppError } from '@/modules/kernel';
 import type { ImageId } from '@/modules/kernel/domain/ids';
 import type {
@@ -9,12 +8,17 @@ import type {
   RenderOutputCheckpoint,
   RenderRepository,
 } from '@/modules/rendering';
+import { isRenderRetryable } from '@/modules/rendering';
 
 /** In-memory {@link RenderRepository} with the same revision semantics. */
 export const createFakeRenderRepository = (now: () => Date) => {
   const drafts = new Map<ImageId, Draft>();
   const renders: Render[] = [];
   const owners = new Map<string, string>();
+  const accountingIdentities = new Map<
+    string,
+    { invocationId: string; providerRequestId?: string }
+  >();
   const checkpoints = new Map<string, RenderOutputCheckpoint>();
 
   const findResult = (resultId: string) => {
@@ -168,6 +172,8 @@ export const createFakeRenderRepository = (now: () => Date) => {
         owners.get(input.resultId) !== input.workflowRunId
       )
         return Result.Ok({ type: 'result_attempt_superseded' });
+      if (input.accountingIdentity)
+        accountingIdentities.set(input.resultId, input.accountingIdentity);
       Object.assign(found.result, {
         status: 'submitted',
         providerRequestId: input.providerRequestId,
@@ -207,6 +213,9 @@ export const createFakeRenderRepository = (now: () => Date) => {
         !isRenderRetryable(found.result, input.expiredBeforeMs)
       )
         return Result.Ok({ type: 'result_attempt_superseded' });
+      const replacedObjectKey =
+        checkpoints.get(input.resultId)?.objectKey ?? null;
+      accountingIdentities.delete(input.resultId);
       Object.assign(found.result, {
         status: 'pending',
         attempt: input.expectedAttempt + 1,
@@ -226,6 +235,7 @@ export const createFakeRenderRepository = (now: () => Date) => {
       return Result.Ok({
         type: 'result_retry_claimed',
         attempt: found.result.attempt,
+        replacedObjectKey,
       });
     },
     async failResultAttempt(input) {
@@ -234,12 +244,7 @@ export const createFakeRenderRepository = (now: () => Date) => {
         !found ||
         !['pending', 'submitted'].includes(found.result.status) ||
         found.result.attempt !== input.attempt ||
-        (owners.get(input.resultId) !== input.workflowRunId &&
-          !(
-            found.result.status === 'pending' &&
-            !owners.has(input.resultId) &&
-            found.result.providerRequestId === null
-          )) ||
+        owners.get(input.resultId) !== input.workflowRunId ||
         (input.providerRequestId !== undefined &&
           found.result.providerRequestId !== input.providerRequestId)
       )
@@ -269,6 +274,7 @@ export const createFakeRenderRepository = (now: () => Date) => {
                 renderSourceImageId: found.render.renderSourceImageId,
                 workflowRunId: owners.get(resultId) ?? null,
                 checkpoint: checkpoints.get(resultId) ?? null,
+                accountingIdentity: accountingIdentities.get(resultId) ?? null,
                 sourceSize: found.render.recipe.source,
               },
             }

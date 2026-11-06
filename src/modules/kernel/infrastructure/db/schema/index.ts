@@ -37,3 +37,5 @@ export type UploadIntentRow = typeof uploadIntent.$inferSelect;
 export type NewUploadIntentRow = typeof uploadIntent.$inferInsert;
 export type ProviderCallRow = typeof providerCall.$inferSelect;
 export type NewProviderCallRow = typeof providerCall.$inferInsert;
+
+export * from './provider-call-receipt';

@@ -5,7 +5,7 @@ import type {
   Logger,
   ObjectStoragePort,
   PermissionChecker,
-  ProviderCallLog,
+  ProviderAccounting,
 } from '@/modules/kernel';
 
 import type {
@@ -23,6 +23,7 @@ export type RenderingUseCaseDeps = {
   renderInputs: RenderInputs;
   maskCompositor: MaskCompositor;
   renderScheduler: RenderScheduler;
+  resultOutputReferences: ResultOutputReferences;
   permissionChecker: PermissionChecker;
   objectStorage: ObjectStoragePort;
   /** Model ids enabled by configuration, in display order. */
@@ -40,7 +41,7 @@ export type RenderingPipelineDeps = {
   resultImages: ResultImages;
   resultOutputReferences: ResultOutputReferences;
   objectStorage: ObjectStoragePort;
-  providerCallLog: ProviderCallLog;
+  providerAccounting: ProviderAccounting;
   idGenerator: IdGenerator;
   clock: Clock;
   logger: Logger;

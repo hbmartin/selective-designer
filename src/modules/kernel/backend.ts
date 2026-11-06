@@ -1,3 +1,4 @@
+export { getAccountingConfig } from './infrastructure/config/accounting';
 export {
   DEFAULT_RENDER_MODEL_IDS,
   getAiProvidersConfig,
@@ -24,6 +25,12 @@ export {
   getDefaultDbClient,
 } from './infrastructure/db/client';
 export { getDatabaseErrorCode } from './infrastructure/db/db-error-details';
+export {
+  createProviderAccounting,
+  createProviderReceiptStore,
+  pendingProviderReceipts,
+  providerAccountingSummary,
+} from './infrastructure/db/provider-accounting-drizzle';
 export { createProviderCallLog } from './infrastructure/db/provider-call-log-drizzle';
 export { user } from './infrastructure/db/schema';
 export { isRootDatabase } from './infrastructure/db/types';
@@ -35,4 +42,5 @@ export {
   hasOversizedResponseBody,
   readLimitedBody,
 } from './infrastructure/storage/limited-response-body';
+export { handleAccountingReconcile } from './transport/http/accounting-reconcile-handler';
 export { appErrorToResponse } from './transport/http/error-mapper';

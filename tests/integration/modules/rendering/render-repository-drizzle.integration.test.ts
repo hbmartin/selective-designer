@@ -1,7 +1,9 @@
-import { updateRenderResultFixture } from '@tests/support/render-result-fixture';
 import { makeUserRow } from '@tests/server/db-fixtures';
 import { createRecoveryTestDatabase } from '@tests/server/recovery-database';
+import { makeProviderReceipt } from '@tests/support/provider-receipt';
+import { updateRenderResultFixture } from '@tests/support/render-result-fixture';
 import { okValue } from '@tests/support/result';
+import { sql } from 'drizzle-orm';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 
 import { toDesignName } from '@/modules/design';
@@ -14,6 +16,7 @@ import {
   toRenderResultId,
   toUserId,
 } from '@/modules/kernel/domain/ids';
+import { providerCallReceipt } from '@/modules/kernel/infrastructure/db/schema';
 import {
   image as imageTable,
   user as userTable,
@@ -386,6 +389,11 @@ describe('RenderRepositoryDrizzle', () => {
     return { input, startedAt };
   };
   const checkpointFor = (startedAt: Date) => ({
+    receipt: makeProviderReceipt({
+      designId,
+      subjectId: 'recovery',
+      providerRequestId: 'request-1',
+    }),
     source: {
       kind: 'url' as const,
       url: 'https://provider.test/image?private=token',
@@ -397,7 +405,7 @@ describe('RenderRepositoryDrizzle', () => {
     costSource: 'reported' as const,
     completedAt: startedAt.toISOString(),
   });
-  it('fails an unclaimed pending attempt without weakening claimed or submitted fences', async () => {
+  it('rejects unowned failure writes and preserves claimed fences', async () => {
     const { input, startedAt } = await newAttempt();
     expect(
       okValue(
@@ -405,6 +413,17 @@ describe('RenderRepositoryDrizzle', () => {
           ...input,
           providerRequestId: undefined,
           reason: 'claim unavailable',
+          now: startedAt,
+        })
+      ).type
+    ).toBe('result_attempt_superseded');
+    okValue(await repository.claimExecution(input));
+    expect(
+      okValue(
+        await repository.failResultAttempt({
+          ...input,
+          providerRequestId: undefined,
+          reason: 'owned failure',
           now: startedAt,
         })
       ).type
@@ -641,5 +660,102 @@ describe('RenderRepositoryDrizzle', () => {
     expect(
       legacy.context.result.attemptStartedAt.getTime()
     ).toBeLessThanOrEqual(Date.now());
+  });
+  it.skipIf(!process.env.RECOVERY_TEST_DATABASE_URL)(
+    'rolls back the receipt when checkpoint persistence is rejected',
+    async () => {
+      const { input, startedAt } = await newAttempt('submitted');
+      await database.db.execute(
+        sql`alter table render_result add constraint accounting_checkpoint_down check ("outputCheckpoint" is null)`
+      );
+      try {
+        expect(
+          (
+            await repository.saveOutput({
+              ...input,
+              checkpoint: checkpointFor(startedAt),
+            })
+          ).isError()
+        ).toBe(true);
+        expect(
+          await database.db.select().from(providerCallReceipt)
+        ).toHaveLength(0);
+        expect(
+          okValue(await repository.publicationContext(input.resultId))
+        ).toMatchObject({ context: { checkpoint: null } });
+      } finally {
+        await database.db.execute(
+          sql`alter table render_result drop constraint accounting_checkpoint_down`
+        );
+      }
+    }
+  );
+  it('retains losing paid receipts across Retry and parent deletion', async () => {
+    const { input, startedAt } = await newAttempt('submitted');
+    const first = checkpointFor(startedAt);
+    okValue(await repository.saveOutput({ ...input, checkpoint: first }));
+    const retry = okValue(
+      await repository.retryAttempt({
+        resultId: input.resultId,
+        expectedAttempt: 1,
+        startedAt: new Date(startedAt.getTime() + 31 * 60_000),
+        expiredBeforeMs: startedAt.getTime(),
+      })
+    );
+    expect(retry).toMatchObject({
+      type: 'result_retry_claimed',
+      replacedObjectKey: first.objectKey,
+    });
+    const losing = {
+      ...first,
+      receipt: makeProviderReceipt({
+        designId,
+        subjectId: 'recovery',
+        providerRequestId: 'second-paid-response',
+        costUsdMicros: 456,
+      }),
+    };
+    expect(
+      okValue(await repository.saveOutput({ ...input, checkpoint: losing }))
+        .type
+    ).toBe('result_attempt_superseded');
+    expect(await database.db.select().from(providerCallReceipt)).toHaveLength(
+      2
+    );
+    await database.db.execute(sql`delete from design where id = ${designId}`);
+    expect(await database.db.select().from(providerCallReceipt)).toHaveLength(
+      2
+    );
+  });
+  it('replays a lost checkpoint commit reply with one durable receipt', async () => {
+    const { input, startedAt } = await newAttempt('submitted');
+    const original = database.db.$runInTransaction!;
+    database.db.$runInTransaction = async (work, options) => {
+      await original(work, options);
+      throw new Error('lost commit reply');
+    };
+    try {
+      expect(
+        (
+          await repository.saveOutput({
+            ...input,
+            checkpoint: checkpointFor(startedAt),
+          })
+        ).isError()
+      ).toBe(true);
+    } finally {
+      database.db.$runInTransaction = original;
+    }
+    expect(
+      okValue(
+        await repository.saveOutput({
+          ...input,
+          checkpoint: checkpointFor(startedAt),
+        })
+      ).type
+    ).toBe('result_output_saved');
+    expect(await database.db.select().from(providerCallReceipt)).toHaveLength(
+      1
+    );
   });
 });

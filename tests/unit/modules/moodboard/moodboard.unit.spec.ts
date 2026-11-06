@@ -88,7 +88,7 @@ const setup = (clock = { now: () => now }) => {
       designAccess,
       objectStorage: storage.storage,
       backgroundRemover,
-      providerCallLog: calls.log,
+      providerAccounting: calls.accounting,
       idGenerator,
       clock,
       logger,
@@ -522,12 +522,7 @@ describe('background removal pipeline', () => {
 });
 
 describe('cutout output checkpoints', () => {
-  it.each([
-    'source read',
-    'publication',
-    'checkpoint reply',
-    'accounting',
-  ] as const)(
+  it.each(['source read', 'publication', 'checkpoint reply'] as const)(
     'recovers %s without invoking the paid provider again',
     async (phase) => {
       const ctx = setup();
@@ -562,10 +557,6 @@ describe('cutout output checkpoints', () => {
       const copy = vi.spyOn(ctx.storage.storage, 'copyNewObjectFromUrl');
       if (phase === 'source read')
         copy.mockResolvedValueOnce(Result.Error(failure));
-      if (phase === 'accounting')
-        vi.spyOn(ctx.calls.log, 'record').mockResolvedValueOnce(
-          Result.Error(failure)
-        );
       if (phase === 'publication')
         vi.spyOn(
           ctx.items.repository,
@@ -782,5 +773,56 @@ describe('copying a mood board', () => {
       },
     ]);
     expect(ctx.schedule).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('independent cutout accounting', () => {
+  it('publishes while delivery is down, retaining a receipt for later recovery', async () => {
+    const ctx = setup();
+    const item = await createProduct(ctx);
+    const attempt = {
+      versionId: item.currentVersion.id,
+      attemptId: latestAttempt(ctx),
+    };
+    const remove = vi
+      .fn<BackgroundRemover['removeBackground']>()
+      .mockResolvedValue(
+        Result.Ok({
+          type: 'background_removed',
+          result: { kind: 'url', url: 'https://provider.test/paid' },
+          provider: 'fal',
+          endpoint: 'birefnet',
+          providerRequestId: 'paid-one',
+          costUsdMicros: 123,
+          costSource: 'reported',
+        })
+      );
+    ctx.storage.addRemoteSource('https://provider.test/paid', {
+      bytes: Uint8Array.of(7),
+      contentType: 'image/png',
+    });
+    const sink = vi
+      .spyOn(ctx.calls.log, 'record')
+      .mockResolvedValue(
+        Result.Error(
+          new AppError({ code: 'LOG_DOWN', category: 'system', status: 500 })
+        )
+      );
+    const pipeline = ctx.pipeline({ removeBackground: remove });
+    expect(okValue(await pipeline.removeBackground(attempt)).type).toBe(
+      'cutout_ready'
+    );
+    expect(ctx.calls.calls.size).toBe(0);
+    expect(ctx.calls.receipts.size).toBe(1);
+    sink.mockRestore();
+    expect(
+      okValue(
+        await ctx.calls.accounting.deliver(
+          [...ctx.calls.receipts.values()][0]!.id
+        )
+      ).type
+    ).toBe('receipt_delivered');
+    expect(ctx.calls.calls.size).toBe(1);
+    expect(remove).toHaveBeenCalledOnce();
   });
 });

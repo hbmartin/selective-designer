@@ -8,7 +8,7 @@ const BFL_URL = 'https://api.bfl.ai/v1/flux-3-image';
 const TIMEOUT_MS = 30_000;
 
 const submitSchema = z.object({
-  id: z.string(),
+  id: z.string().min(1),
   polling_url: z.string().url(),
 });
 const pollSchema = z.object({
@@ -98,6 +98,7 @@ export const createBflFlux3Model = (config: {
           type: 'model_submitted',
           // The polling URL is what we need later; it embeds the task id.
           providerRequestId: parsed.data.polling_url,
+          accountingRequestId: parsed.data.id,
           settings: {
             resolution: body.resolution,
             grounding: false,

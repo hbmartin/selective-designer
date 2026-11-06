@@ -7,13 +7,10 @@ import {
   toRegionId,
   type UserId,
 } from '@/modules/kernel/domain/ids';
+import { providerCallIdentity } from '@/modules/kernel/domain/provider-call-identity';
 import { objectKeyMatchesPurpose } from '@/modules/kernel/domain/upload-policy';
 
-import {
-  discardUnpublishedMasks,
-  providerCallIdFor,
-  storeSegmentedMasks,
-} from './store-masks';
+import { discardUnpublishedMasks, storeSegmentedMasks } from './store-masks';
 import {
   type SegmentationResultOf,
   type SegmentationUseCaseDeps,
@@ -200,6 +197,8 @@ export async function segmentByPrompt(
   });
   if (imageUrl.isError()) return Result.Error(imageUrl.getError());
 
+  const invocationId = deps.idGenerator.createId();
+  if (invocationId.isError()) return Result.Error(invocationId.getError());
   const startedAt = deps.clock.now();
   const segmented = await deps.segmenter.segment({
     imageUrl: imageUrl.get().url,
@@ -212,13 +211,14 @@ export async function segmentByPrompt(
   if (segmented.isError()) return Result.Error(segmented.getError());
   const result = segmented.get();
 
-  const callId = providerCallIdFor(
-    'sam',
-    image.imageId,
-    String(startedAt.getTime())
-  );
+  const callId = providerCallIdentity({
+    provider: result.provider,
+    endpoint: result.endpoint,
+    providerRequestId: result.providerRequestId,
+    invocationId: invocationId.get(),
+  });
   if (callId.isError()) return Result.Error(callId.getError());
-  const logged = await deps.providerCallLog.record({
+  const logged = await deps.providerAccounting.capture({
     id: callId.get(),
     userId: input.currentUserId,
     designId: image.designId,
@@ -233,8 +233,8 @@ export async function segmentByPrompt(
       result.type === 'segmented' ? result.costUsdMicros : undefined,
     costSource: result.type === 'segmented' ? result.costSource : 'unavailable',
     details: { prompt: input.prompt.type },
-    startedAt,
-    completedAt: deps.clock.now(),
+    startedAt: startedAt.toISOString(),
+    completedAt: deps.clock.now().toISOString(),
   });
   if (logged.isError()) return Result.Error(logged.getError());
 

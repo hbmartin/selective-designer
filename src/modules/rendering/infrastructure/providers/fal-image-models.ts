@@ -126,6 +126,7 @@ export const createFalImageModel = (config: {
         return Result.Ok({
           type: 'model_submitted',
           providerRequestId: queued.request_id,
+          accountingRequestId: queued.request_id,
           settings: recordedSettings(input),
         });
       } catch (error) {

@@ -1,9 +1,10 @@
-import { updateRenderResultFixture } from '@tests/support/render-result-fixture';
 import { Result } from '@bloodyowl/boxed';
 import { makeUserRow } from '@tests/server/db-fixtures';
 import { createPgliteTestDatabase } from '@tests/server/pglite';
 import { createFakeObjectStorage } from '@tests/support/fake-kernel-ports';
+import { updateRenderResultFixture } from '@tests/support/render-result-fixture';
 import { okValue } from '@tests/support/result';
+import { getTableName } from 'drizzle-orm';
 import {
   afterAll,
   beforeAll,
@@ -20,8 +21,8 @@ import {
   writeRenderImageWithDetection,
 } from '@/composition/image-detection-intent';
 import {
-  createResultOutputReferences,
   createResultImages,
+  createResultOutputReferences,
 } from '@/composition/rendering-pipeline';
 import { toDesignName } from '@/modules/design';
 import * as designBackend from '@/modules/design/backend';
@@ -34,15 +35,15 @@ import {
   toItemId,
   toItemVersionId,
   toObjectKey,
+  toProviderCallId,
   toRenderId,
   toRenderResultId,
   toUserId,
 } from '@/modules/kernel';
-import { createProviderCallLog } from '@/modules/kernel/backend';
 import {
-  createMigrationDbClient,
-  migrateDatabase,
-} from '@/modules/kernel/infrastructure/db/migrate';
+  createProviderAccounting,
+  createProviderCallLog,
+} from '@/modules/kernel/backend';
 import { user as userTable } from '@/modules/kernel/infrastructure/db/schema';
 import {
   type BackgroundRemover,
@@ -62,6 +63,8 @@ import {
   RegionWriteError,
 } from '@/modules/segmentation';
 import { createRegionRepository } from '@/modules/segmentation/testing';
+
+import { createRecoveryTestDatabase } from '../../server/recovery-database';
 
 const ownerId = okValue(toUserId('owner'));
 const designId = okValue(toDesignId('design'));
@@ -93,8 +96,14 @@ async function installIntentFault(
       .spyOn(db, '$runInTransaction')
       .mockImplementation((work, options) =>
         transact(async (tx) => {
+          let targeted = false;
+          const insert = tx.insert;
+          tx.insert = ((...args: Parameters<typeof tx.insert>) => {
+            if (getTableName(args[0]) === table) targeted = true;
+            return insert.apply(tx, args);
+          }) as typeof tx.insert;
           const result = await work(tx);
-          if (remaining-- > 0)
+          if (targeted && remaining-- > 0)
             throw new AppError({
               code: 'WRAPPED_DRIVER_ERROR',
               category: 'system',
@@ -132,30 +141,7 @@ async function installIntentFault(
 describe('atomic image and detection writes', () => {
   let database: Awaited<ReturnType<typeof createPgliteTestDatabase>>;
   beforeAll(async () => {
-    if (nativeUrl) {
-      const target = new URL(nativeUrl);
-      if (
-        !['postgres:', 'postgresql:'].includes(target.protocol) ||
-        !['127.0.0.1', 'localhost', '[::1]'].includes(target.hostname) ||
-        !target.pathname.startsWith('/selective_designer_recovery_test_') ||
-        target.search
-      )
-        throw new Error(
-          'RECOVERY_TEST_DATABASE_URL must target a direct disposable loopback selective_designer_recovery_test_ database.'
-        );
-      const migration = await createMigrationDbClient({
-        databaseUrl: nativeUrl,
-        driver: 'node-pg',
-      });
-      try {
-        await migrateDatabase(migration);
-      } finally {
-        await migration.$close();
-      }
-    }
-    database = await createPgliteTestDatabase(
-      nativeUrl ? { databaseUrl: nativeUrl } : undefined
-    );
+    database = await createRecoveryTestDatabase();
   });
   beforeEach(async () => {
     await database.truncate();
@@ -417,7 +403,11 @@ describe('atomic image and detection writes', () => {
     const kernel = {
       ...ctx.kernel,
       objectStorage: storage.storage,
-      providerCallLog: createProviderCallLog({ db: database.db }),
+      providerAccounting: createProviderAccounting({
+        db: database.db,
+        clock: ctx.kernel.clock,
+        logger: ctx.kernel.logger,
+      }),
     };
     const scheduler = {
       schedule: vi.fn(async () =>
@@ -475,6 +465,85 @@ describe('atomic image and detection writes', () => {
       identity,
     };
   };
+
+  it('reuses existing accounting when recovering a pre-receipt render attempt', async () => {
+    const ctx = await renderSetup();
+    const legacyId = okValue(
+      toProviderCallId(
+        `render:${ctx.identity.resultId}:${ctx.identity.attempt}`
+      )
+    );
+    okValue(
+      await createProviderCallLog({ db: database.db }).record({
+        id: legacyId,
+        userId: undefined,
+        designId,
+        purpose: 'render',
+        provider: 'fal',
+        endpoint: 'krea/v3/edit',
+        subjectId: ctx.identity.resultId,
+        providerRequestId: ctx.identity.providerRequestId,
+        status: 'succeeded',
+        costUsdMicros: 123,
+        costSource: 'reported',
+        details: {},
+        startedAt: ctx.kernel.clock.now(),
+        completedAt: ctx.kernel.clock.now(),
+      })
+    );
+    const before = (
+      await database.db.$client.query('SELECT * FROM provider_call')
+    ).rows;
+    expect(okValue(await ctx.pipeline.poll(ctx.identity)).type).toBe(
+      'result_succeeded'
+    );
+    expect(
+      (await database.db.$client.query('SELECT * FROM provider_call')).rows
+    ).toEqual(before);
+    expect(
+      (await database.db.$client.query('SELECT id FROM provider_call_receipt'))
+        .rows
+    ).toHaveLength(1);
+  });
+
+  it.skipIf(!nativeUrl)(
+    'publishes paid output while cost-log delivery remains unavailable',
+    async () => {
+      const ctx = await renderSetup();
+      await database.db.$client.query(
+        `ALTER TABLE provider_call ADD CONSTRAINT accounting_publication_test_down CHECK (status <> 'succeeded')`
+      );
+      try {
+        expect(okValue(await ctx.pipeline.poll(ctx.identity)).type).toBe(
+          'result_succeeded'
+        );
+        expect(ctx.poll).toHaveBeenCalledOnce();
+        const { rows } = await database.db.$client.query(
+          'SELECT id, "deliveredAt" FROM provider_call_receipt'
+        );
+        expect(rows).toHaveLength(1);
+        expect(rows[0]?.deliveredAt).toBeNull();
+        expect(
+          (await database.db.$client.query('SELECT id FROM provider_call')).rows
+        ).toHaveLength(0);
+      } finally {
+        await database.db.$client.query(
+          'ALTER TABLE provider_call DROP CONSTRAINT accounting_publication_test_down'
+        );
+      }
+      const { rows } = await database.db.$client.query(
+        'SELECT id FROM provider_call_receipt'
+      );
+      expect(
+        okValue(
+          await ctx.kernel.providerAccounting.deliver(
+            okValue(toProviderCallId(String(rows[0]?.id)))
+          )
+        ).type
+      ).toBe('receipt_delivered');
+      expect(ctx.poll).toHaveBeenCalledOnce();
+    }
+  );
 
   it('recovers a stored URL render after publication failed and the provider URL expired', async () => {
     const ctx = await renderSetup();
@@ -742,6 +811,13 @@ describe('atomic image and detection writes', () => {
 
   it('reuses a committed render after every immediate reconciliation read failed', async () => {
     const ctx = await renderSetup();
+    // Prepare a paid checkpoint and accounting before injecting a lost publication reply.
+    const prepareFault = await installIntentFault(database.db, '23514', 1);
+    try {
+      expect((await ctx.pipeline.poll(ctx.identity)).isError()).toBe(true);
+    } finally {
+      await prepareFault();
+    }
     const transact = database.db.$runInTransaction!;
     const lost = Object.assign(new Error('lost reply'), { code: 'EPIPE' });
     let committed = false;

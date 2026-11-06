@@ -32,6 +32,7 @@ import { Route as ManagerAccountIndexRouteImport } from './routes/manager/accoun
 import { Route as ManagerDashboardIndexRouteImport } from './routes/manager/dashboard.index'
 import { Route as ManagerUsersIndexRouteImport } from './routes/manager/users/index'
 import { Route as ApiImagesImageIdDownloadRouteImport } from './routes/api/images.$imageId.download'
+import { Route as ApiInternalAccountingReconcileRouteImport } from './routes/api/internal.accounting.reconcile'
 import { Route as AppDesignsDesignIdIndexRouteImport } from './routes/app/designs/$designId/index'
 import { Route as AppDesignsDesignIdCompareRouteImport } from './routes/app/designs/$designId/compare'
 import { Route as AppDesignsDesignIdEditRouteImport } from './routes/app/designs/$designId/edit'
@@ -159,6 +160,12 @@ const ApiImagesImageIdDownloadRoute =
     path: '/api/images/$imageId/download',
     getParentRoute: () => rootRouteImport,
   } as any)
+const ApiInternalAccountingReconcileRoute =
+  ApiInternalAccountingReconcileRouteImport.update({
+    id: '/api/internal/accounting/reconcile',
+    path: '/api/internal/accounting/reconcile',
+    getParentRoute: () => rootRouteImport,
+  } as any)
 const AppDesignsDesignIdIndexRoute = AppDesignsDesignIdIndexRouteImport.update({
   id: '/designs/$designId/',
   path: '/designs/$designId/',
@@ -234,6 +241,7 @@ export interface FileRoutesByFullPath {
   '/manager/dashboard/': typeof ManagerDashboardIndexRoute
   '/manager/users/': typeof ManagerUsersIndexRoute
   '/api/images/$imageId/download': typeof ApiImagesImageIdDownloadRoute
+  '/api/internal/accounting/reconcile': typeof ApiInternalAccountingReconcileRoute
   '/app/designs/$designId/compare': typeof AppDesignsDesignIdCompareRoute
   '/app/designs/$designId/edit': typeof AppDesignsDesignIdEditRoute
   '/app/designs/$designId/': typeof AppDesignsDesignIdIndexRoute
@@ -264,6 +272,7 @@ export interface FileRoutesByTo {
   '/manager/dashboard': typeof ManagerDashboardIndexRoute
   '/manager/users': typeof ManagerUsersIndexRoute
   '/api/images/$imageId/download': typeof ApiImagesImageIdDownloadRoute
+  '/api/internal/accounting/reconcile': typeof ApiInternalAccountingReconcileRoute
   '/app/designs/$designId/compare': typeof AppDesignsDesignIdCompareRoute
   '/app/designs/$designId/edit': typeof AppDesignsDesignIdEditRoute
   '/app/designs/$designId': typeof AppDesignsDesignIdIndexRoute
@@ -299,6 +308,7 @@ export interface FileRoutesById {
   '/manager/dashboard/': typeof ManagerDashboardIndexRoute
   '/manager/users/': typeof ManagerUsersIndexRoute
   '/api/images/$imageId/download': typeof ApiImagesImageIdDownloadRoute
+  '/api/internal/accounting/reconcile': typeof ApiInternalAccountingReconcileRoute
   '/app/designs/$designId/compare': typeof AppDesignsDesignIdCompareRoute
   '/app/designs/$designId/edit': typeof AppDesignsDesignIdEditRoute
   '/app/designs/$designId/': typeof AppDesignsDesignIdIndexRoute
@@ -335,6 +345,7 @@ export interface FileRouteTypes {
     | '/manager/dashboard/'
     | '/manager/users/'
     | '/api/images/$imageId/download'
+    | '/api/internal/accounting/reconcile'
     | '/app/designs/$designId/compare'
     | '/app/designs/$designId/edit'
     | '/app/designs/$designId/'
@@ -365,6 +376,7 @@ export interface FileRouteTypes {
     | '/manager/dashboard'
     | '/manager/users'
     | '/api/images/$imageId/download'
+    | '/api/internal/accounting/reconcile'
     | '/app/designs/$designId/compare'
     | '/app/designs/$designId/edit'
     | '/app/designs/$designId'
@@ -399,6 +411,7 @@ export interface FileRouteTypes {
     | '/manager/dashboard/'
     | '/manager/users/'
     | '/api/images/$imageId/download'
+    | '/api/internal/accounting/reconcile'
     | '/app/designs/$designId/compare'
     | '/app/designs/$designId/edit'
     | '/app/designs/$designId/'
@@ -423,6 +436,7 @@ export interface RootRouteChildren {
   ApiTelemetrySentryTunnelRoute: typeof ApiTelemetrySentryTunnelRoute
   ApiWebhooksResendRoute: typeof ApiWebhooksResendRoute
   ApiImagesImageIdDownloadRoute: typeof ApiImagesImageIdDownloadRoute
+  ApiInternalAccountingReconcileRoute: typeof ApiInternalAccountingReconcileRoute
   ApiTelemetryOtelV1MetricsRoute: typeof ApiTelemetryOtelV1MetricsRoute
   ApiTelemetryOtelV1TracesRoute: typeof ApiTelemetryOtelV1TracesRoute
 }
@@ -590,6 +604,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof ApiImagesImageIdDownloadRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/api/internal/accounting/reconcile': {
+      id: '/api/internal/accounting/reconcile'
+      path: '/api/internal/accounting/reconcile'
+      fullPath: '/api/internal/accounting/reconcile'
+      preLoaderRoute: typeof ApiInternalAccountingReconcileRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/app/designs/$designId/': {
       id: '/app/designs/$designId/'
       path: '/designs/$designId'
@@ -746,6 +767,7 @@ const rootRouteChildren: RootRouteChildren = {
   ApiTelemetrySentryTunnelRoute: ApiTelemetrySentryTunnelRoute,
   ApiWebhooksResendRoute: ApiWebhooksResendRoute,
   ApiImagesImageIdDownloadRoute: ApiImagesImageIdDownloadRoute,
+  ApiInternalAccountingReconcileRoute: ApiInternalAccountingReconcileRoute,
   ApiTelemetryOtelV1MetricsRoute: ApiTelemetryOtelV1MetricsRoute,
   ApiTelemetryOtelV1TracesRoute: ApiTelemetryOtelV1TracesRoute,
 }

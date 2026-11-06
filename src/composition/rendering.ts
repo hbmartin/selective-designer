@@ -1,6 +1,7 @@
 import { Result } from '@bloodyowl/boxed';
 import { start } from 'workflow/api';
 
+import { createDesignRepository } from '@/modules/design/backend';
 import { AppError } from '@/modules/kernel';
 import { getAiProvidersConfig } from '@/modules/kernel/backend';
 import {
@@ -19,7 +20,10 @@ import {
 } from '@/modules/rendering/workflows/backend';
 
 import { getKernel, type Kernel } from './kernel';
-import { createRenderInputs } from './rendering-pipeline';
+import {
+  createRenderInputs,
+  createResultOutputReferences,
+} from './rendering-pipeline';
 import { createCachedFactory } from './shared/singleton';
 
 export type RenderingOverrides = {
@@ -63,10 +67,15 @@ const build = (overrides?: RenderingOverrides) => {
   const kernel = overrides?.kernel ?? getKernel();
   const enabledModelIds =
     overrides?.enabledModelIds ?? getAiProvidersConfig().enabledModelIds;
+  const renderRepository =
+    overrides?.renderRepository ??
+    createRenderRepository({ db: kernel.db, modelOrder: enabledModelIds });
   return createRenderingUseCases({
-    renderRepository:
-      overrides?.renderRepository ??
-      createRenderRepository({ db: kernel.db, modelOrder: enabledModelIds }),
+    renderRepository,
+    resultOutputReferences: createResultOutputReferences(
+      createDesignRepository({ db: kernel.db }),
+      renderRepository
+    ),
     renderInputs: overrides?.renderInputs ?? createRenderInputs(kernel),
     maskCompositor: createPngMaskCompositor({
       objectStorage: kernel.objectStorage,

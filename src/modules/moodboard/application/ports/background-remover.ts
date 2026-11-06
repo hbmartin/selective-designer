@@ -16,6 +16,7 @@ export type BackgroundRemovalResult = {
 
 export type BackgroundRemovalFailed = {
   type: 'background_removal_failed';
+  providerRequestId?: string;
   reason: string;
   provider: string;
   endpoint: string;

@@ -5,7 +5,7 @@ import type {
   Logger,
   ObjectStoragePort,
   PermissionChecker,
-  ProviderCallLog,
+  ProviderAccounting,
   UploadIntentStore,
 } from '@/modules/kernel';
 
@@ -33,7 +33,7 @@ export type MoodboardPipelineDeps = {
   designAccess: DesignAccess;
   objectStorage: ObjectStoragePort;
   backgroundRemover: BackgroundRemover;
-  providerCallLog: ProviderCallLog;
+  providerAccounting: ProviderAccounting;
   idGenerator: IdGenerator;
   clock: Clock;
   logger: Logger;

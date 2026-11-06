@@ -1,5 +1,6 @@
 import { Result } from '@bloodyowl/boxed';
 
+import type { ProviderCallReceipt } from '@/modules/kernel';
 import { sourceErrorDiagnostics } from '@/modules/kernel/domain/errors/source-error-diagnostics';
 import {
   type DesignId,
@@ -9,6 +10,7 @@ import {
   toObjectKey,
   toProviderCallId,
 } from '@/modules/kernel/domain/ids';
+import { providerCallIdentity } from '@/modules/kernel/domain/provider-call-identity';
 import { IMMUTABLE_OBJECT_CACHE_CONTROL } from '@/modules/kernel/domain/upload-policy';
 
 import {
@@ -30,14 +32,16 @@ import type { RenderOutputCheckpoint } from '../../domain/render-output';
 
 const OUTPUT_MAX_BYTES = 40 * 1024 * 1024;
 const OUTPUT_TYPES = ['image/png', 'image/jpeg', 'image/webp'] as const;
-const EXTENSION: Record<string, string> = {
-  'image/png': 'png',
-  'image/jpeg': 'jpg',
-  'image/webp': 'webp',
-};
 
 const loadResult = (deps: RenderingPipelineDeps, resultId: RenderResultId) =>
   deps.renderRepository.findResult(resultId);
+
+/** Polling locators may contain credentials and never belong in diagnostics. */
+const renderLogContext = ({
+  resultId,
+  attempt,
+  workflowRunId,
+}: RenderExecution) => ({ resultId, attempt, workflowRunId });
 
 const buildRequest = async (
   deps: RenderingPipelineDeps,
@@ -127,6 +131,8 @@ export async function submitResult(
     return Result.Ok({ type: 'result_not_runnable' });
   const request = await buildRequest(deps, render, result);
   if (request.isError()) return Result.Error(request.getError());
+  const invocationId = deps.idGenerator.createId();
+  if (invocationId.isError()) return Result.Error(invocationId.getError());
   const submitted = await deps.imageModels
     .adapterFor(result.modelId)
     .submit(request.get());
@@ -140,6 +146,10 @@ export async function submitResult(
     settings: submission.settings,
     prompt: request.get().prompt,
     submittedAt: deps.clock.now(),
+    accountingIdentity: {
+      invocationId: invocationId.get(),
+      providerRequestId: submission.accountingRequestId,
+    },
   });
   if (saved.isError()) return Result.Error(saved.getError());
   if (saved.get().type === 'result_attempt_superseded')
@@ -187,7 +197,7 @@ const discardLostOutput = async (
   if (referenced.isError()) {
     deps.logger.warn({
       event: 'rendering.result.cleanup_failed',
-      details: { ...input, code: referenced.getError().code },
+      details: { ...renderLogContext(input), code: referenced.getError().code },
     });
     return;
   }
@@ -196,20 +206,34 @@ const discardLostOutput = async (
   if (deleted.isError())
     deps.logger.warn({
       event: 'rendering.result.cleanup_failed',
-      details: { ...input, code: deleted.getError().code },
+      details: { ...renderLogContext(input), code: deleted.getError().code },
     });
 };
 
-const recordOutput = async (
-  deps: RenderingPipelineDeps,
+const outputReceipt = (
   input: PollExecution,
   context: RenderPublicationContext,
   checkpoint: RenderOutputCheckpoint
-) => {
+): RenderingResult<ProviderCallReceipt> => {
+  if (checkpoint.receipt) return Result.Ok(checkpoint.receipt);
   const spec = MODEL_CATALOG[context.result.modelId];
-  const id = toProviderCallId(`render:${input.resultId}:${input.attempt}`);
+  // New submissions explicitly distinguish accounting identity from polling locators.
+  const providerRequestId = context.accountingIdentity
+    ? context.accountingIdentity.providerRequestId
+    : /^[A-Za-z0-9_-]+$/u.test(input.providerRequestId)
+      ? input.providerRequestId
+      : undefined;
+  const id =
+    context.accountingIdentity === null
+      ? toProviderCallId(`render:${input.resultId}:${input.attempt}`)
+      : providerCallIdentity({
+          provider: checkpoint.provider ?? spec.provider,
+          endpoint: checkpoint.endpoint ?? spec.endpoint,
+          providerRequestId,
+          invocationId: context.accountingIdentity.invocationId,
+        });
   if (id.isError()) return Result.Error(id.getError());
-  return deps.providerCallLog.record({
+  const receipt: ProviderCallReceipt = {
     id: id.get(),
     userId: undefined,
     designId: context.designId,
@@ -217,18 +241,38 @@ const recordOutput = async (
     provider: checkpoint.provider ?? spec.provider,
     endpoint: checkpoint.endpoint ?? spec.endpoint,
     subjectId: input.resultId,
-    providerRequestId: input.providerRequestId,
+    providerRequestId: providerRequestId,
     status: 'succeeded',
     costUsdMicros: checkpoint.costUsdMicros ?? undefined,
     costSource: checkpoint.costSource,
     details: { modelId: context.result.modelId, attempt: input.attempt },
     startedAt:
       checkpoint.startedAt ??
-      context.result.submittedAt ??
+      context.result.submittedAt?.toISOString() ??
       checkpoint.completedAt,
     completedAt: checkpoint.completedAt,
-  });
+  };
+  return Result.Ok(receipt);
 };
+const recordOutput = async (
+  deps: RenderingPipelineDeps,
+  input: PollExecution,
+  context: RenderPublicationContext,
+  checkpoint: RenderOutputCheckpoint
+) => {
+  const receipt = outputReceipt(input, context, checkpoint);
+  if (receipt.isError()) return Result.Error(receipt.getError());
+  return deps.providerAccounting.capture(receipt.get());
+};
+const warnCostRecord = (
+  deps: RenderingPipelineDeps,
+  input: PollExecution,
+  code: string
+) =>
+  deps.logger.warn({
+    event: 'rendering.result.cost_record_failed',
+    details: { ...renderLogContext(input), code },
+  });
 
 const recoverCompletedResult = async (
   deps: RenderingPipelineDeps,
@@ -246,6 +290,19 @@ const recoverCompletedResult = async (
         ? 'result_succeeded'
         : 'result_attempt_superseded',
   });
+};
+
+const outputKeyFor = (
+  keys: { url: ObjectKey; png: ObjectKey; jpeg: ObjectKey; webp: ObjectKey },
+  contentType: string | undefined
+): ObjectKey => {
+  if (contentType === undefined) return keys.url;
+  const typed: Record<string, ObjectKey> = {
+    'image/png': keys.png,
+    'image/jpeg': keys.jpeg,
+    'image/webp': keys.webp,
+  };
+  return typed[contentType] ?? keys.png;
 };
 
 const checkpointProviderOutput = async (
@@ -266,6 +323,22 @@ const checkpointProviderOutput = async (
   >
 > => {
   const { result } = context;
+  const urlKey = toObjectKey(
+    `results/${input.resultId}/${input.attempt}/raw.img`
+  );
+  const pngKey = toObjectKey(
+    `results/${input.resultId}/${input.attempt}/raw.png`
+  );
+  const jpegKey = toObjectKey(
+    `results/${input.resultId}/${input.attempt}/raw.jpg`
+  );
+  const webpKey = toObjectKey(
+    `results/${input.resultId}/${input.attempt}/raw.webp`
+  );
+  if (urlKey.isError()) return Result.Error(urlKey.getError());
+  if (pngKey.isError()) return Result.Error(pngKey.getError());
+  if (jpegKey.isError()) return Result.Error(jpegKey.getError());
+  if (webpKey.isError()) return Result.Error(webpKey.getError());
   const polled = await deps.imageModels
     .adapterFor(result.modelId)
     .poll(input.providerRequestId);
@@ -274,6 +347,15 @@ const checkpointProviderOutput = async (
   if (poll.type === 'model_pending')
     return Result.Ok({ type: 'result_pending' });
   if (poll.type === 'model_failed') return failPoll(deps, input, poll.reason);
+  const key = outputKeyFor(
+    {
+      url: urlKey.get(),
+      png: pngKey.get(),
+      jpeg: jpegKey.get(),
+      webp: webpKey.get(),
+    },
+    poll.outputBytes?.contentType
+  );
   const spec = MODEL_CATALOG[result.modelId];
   const costUsdMicros = poll.costUsdMicros ?? spec.estimatedCostUsdMicros;
   const costSource =
@@ -283,17 +365,13 @@ const checkpointProviderOutput = async (
         ? 'price_table'
         : 'unavailable';
   const now = deps.clock.now();
-  const key = toObjectKey(
-    `results/${input.resultId}/${input.attempt}/raw.${poll.outputBytes ? (EXTENSION[poll.outputBytes.contentType] ?? 'png') : 'img'}`
-  );
-  if (key.isError()) return Result.Error(key.getError());
-  const checkpoint: RenderOutputCheckpoint = {
+  let checkpoint: RenderOutputCheckpoint = {
     source: poll.outputBytes
       ? { kind: 'object' }
       : poll.outputUrl
         ? { kind: 'url', url: poll.outputUrl }
         : { kind: 'retired' },
-    objectKey: key.get(),
+    objectKey: key,
     contentType: poll.outputBytes?.contentType ?? null,
     provider: spec.provider,
     endpoint: spec.endpoint,
@@ -303,6 +381,9 @@ const checkpointProviderOutput = async (
     costSource,
     completedAt: now.toISOString(),
   };
+  const receipt = outputReceipt(input, context, checkpoint);
+  if (receipt.isError()) return Result.Error(receipt.getError());
+  checkpoint = { ...checkpoint, receipt: receipt.get() };
   if (!poll.outputBytes && !poll.outputUrl) {
     const logged = await recordOutput(deps, input, context, checkpoint);
     if (logged.isError()) return Result.Error(logged.getError());
@@ -311,44 +392,44 @@ const checkpointProviderOutput = async (
   let createdKey: ObjectKey | undefined;
   if (poll.outputBytes) {
     const stored = await deps.objectStorage.createObject({
-      objectKey: key.get(),
+      objectKey: key,
       body: poll.outputBytes.bytes,
       contentType: poll.outputBytes.contentType,
       cacheControl: IMMUTABLE_OBJECT_CACHE_CONTROL,
     });
     if (stored.isError()) {
       const logged = await recordOutput(deps, input, context, checkpoint);
-      if (logged.isError())
-        deps.logger.warn({
-          event: 'rendering.result.cost_record_failed',
-          details: { ...input, code: logged.getError().code },
-        });
+      if (logged.isError()) warnCostRecord(deps, input, logged.getError().code);
       return Result.Error(stored.getError());
     }
-    if (stored.get().type === 'object_created') createdKey = key.get();
+    if (stored.get().type === 'object_created') createdKey = key;
   }
   const saved = await deps.renderRepository.saveOutput({
     ...input,
     checkpoint,
   });
-  if (saved.isError() || saved.get().type === 'result_attempt_superseded') {
-    // Even a losing response describes performed work. Do not replace the write error.
+  if (saved.isError()) {
     const logged = await recordOutput(deps, input, context, checkpoint);
-    if (logged.isError())
-      deps.logger.warn({
-        event: 'rendering.result.cost_record_failed',
-        details: { ...input, code: logged.getError().code },
-      });
-    if (saved.isError()) return Result.Error(saved.getError());
-    if (createdKey) await discardLostOutput(deps, input, createdKey);
-    return Result.Ok({ type: 'result_attempt_superseded' });
+    if (logged.isError()) warnCostRecord(deps, input, logged.getError().code);
+    return Result.Error(saved.getError());
   }
   const savedValue = saved.get();
+  if (savedValue.type === 'result_attempt_superseded') {
+    const logged = await recordOutput(deps, input, context, checkpoint);
+    if (logged.isError()) warnCostRecord(deps, input, logged.getError().code);
+    if (createdKey) await discardLostOutput(deps, input, createdKey);
+    return Result.Ok(savedValue);
+  }
   if (savedValue.type === 'result_already_completed') {
+    const logged = await recordOutput(deps, input, context, checkpoint);
+    if (logged.isError()) warnCostRecord(deps, input, logged.getError().code);
     if (createdKey) await discardLostOutput(deps, input, createdKey);
     return recoverCompletedResult(deps, input);
   }
-  if (savedValue.type !== 'result_output_saved') return Result.Ok(savedValue);
+  if (checkpoint.receipt?.id !== savedValue.checkpoint.receipt?.id) {
+    const logged = await recordOutput(deps, input, context, checkpoint);
+    if (logged.isError()) warnCostRecord(deps, input, logged.getError().code);
+  }
   if (createdKey && savedValue.checkpoint.objectKey !== createdKey) {
     await discardLostOutput(deps, input, createdKey);
     createdKey = undefined;
@@ -361,7 +442,7 @@ const checkpointProviderOutput = async (
 };
 
 /** Recover checkpointed paid work, then atomically publish image/intent/completion.
- * Provider success and cost are recorded before copying or publication.
+ * Provider accounting is durably captured; cost-log delivery is independent.
  */
 export async function pollResult(
   deps: RenderingPipelineDeps,
@@ -396,7 +477,11 @@ export async function pollResult(
   }
 
   const logged = await recordOutput(deps, input, context, checkpoint);
-  if (logged.isError()) return Result.Error(logged.getError());
+  if (logged.isError()) {
+    // New checkpoints already committed their receipt atomically. Legacy recovery must capture first.
+    if (!checkpoint.receipt) return Result.Error(logged.getError());
+    warnCostRecord(deps, input, logged.getError().code);
+  }
 
   // An interrupted publication must never depend on the provider link again.
   const object = await deps.objectStorage.getObjectMetadata(
@@ -470,7 +555,10 @@ export async function markResultFailed(
   });
   if (saved.isError()) return Result.Error(saved.getError());
   if (saved.get().type === 'result_marked_failed')
-    deps.logger.warn({ event: 'rendering.result.failed', details: input });
+    deps.logger.warn({
+      event: 'rendering.result.failed',
+      details: { ...renderLogContext(input), reason: input.reason },
+    });
   return saved;
 }
 

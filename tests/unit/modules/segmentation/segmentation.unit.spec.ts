@@ -176,7 +176,7 @@ const setup = (segmenter: Segmenter = createFakeSegmenter()) => {
     imageAccess,
     segmenter,
     objectStorage: storage.storage,
-    providerCallLog: calls.log,
+    providerAccounting: calls.accounting,
     idGenerator: {
       createId: () => {
         counter += 1;
@@ -344,7 +344,7 @@ describe('interactive segmentation', () => {
       if (scenario === 'missing source') {
         expect(okValue(outcome)).toMatchObject({
           type: 'regions_created',
-          regions: [{ id: 'r1' }],
+          regions: [{ id: 'r2' }],
         });
         expect(ctx.regions.rows).toHaveLength(1);
       } else {
@@ -353,14 +353,14 @@ describe('interactive segmentation', () => {
       }
       expect([...ctx.storage.objects.keys()]).toEqual(
         scenario === 'upload failure'
-          ? ['region-masks/previous.png', 'region-masks/r2.png']
+          ? ['region-masks/previous.png', 'region-masks/r3.png']
           : scenario === 'cleanup failure'
             ? [
                 'region-masks/previous.png',
-                'region-masks/r1.png',
                 'region-masks/r2.png',
+                'region-masks/r3.png',
               ]
-            : ['region-masks/previous.png', 'region-masks/r1.png']
+            : ['region-masks/previous.png', 'region-masks/r2.png']
       );
     }
   );
@@ -742,7 +742,7 @@ it.each([
   { publication: 'rejected' as const, keys: ['region-masks/previous.png'] },
   {
     publication: 'unknown' as const,
-    keys: ['region-masks/previous.png', 'region-masks/r1.png'],
+    keys: ['region-masks/previous.png', 'region-masks/r2.png'],
   },
 ])(
   'cleans interactive masks only when publication is $publication',
@@ -809,7 +809,7 @@ it('preserves masks when the reference lookup cannot establish cleanup safety', 
     label: 'Chair',
   });
   expect(result.isError() && result.getError()).toBe(original);
-  expect(ctx.storage.objects.has('region-masks/r1.png')).toBe(true);
+  expect(ctx.storage.objects.has('region-masks/r2.png')).toBe(true);
   expect(deleted).not.toHaveBeenCalled();
 });
 
@@ -903,7 +903,7 @@ it('preserves a confirmed-created object referenced by a copied region', async (
     id: okValue(toRegionId('copied-region')),
     imageId: resultImageId,
     designId,
-    maskKey: okValue(toObjectKey('region-masks/r1.png')),
+    maskKey: okValue(toObjectKey('region-masks/r2.png')),
     source: 'click',
     label: 'Copied',
     box: { x: 0, y: 0, width: 1, height: 1 },
@@ -924,7 +924,7 @@ it('preserves a confirmed-created object referenced by a copied region', async (
     label: 'Chair',
   });
   expect(result.isError() && result.getError()).toBe(error);
-  expect(ctx.storage.objects.has('region-masks/r1.png')).toBe(true);
+  expect(ctx.storage.objects.has('region-masks/r2.png')).toBe(true);
   expect(deleted).not.toHaveBeenCalled();
 });
 
@@ -953,7 +953,7 @@ it('preserves the original insert rejection when cleanup fails', async () => {
   expect(warn).toHaveBeenCalledWith(
     expect.objectContaining({ event: 'segmentation.mask.cleanup_failed' })
   );
-  expect(ctx.storage.objects.has('region-masks/r1.png')).toBe(true);
+  expect(ctx.storage.objects.has('region-masks/r2.png')).toBe(true);
   warn.mockRestore();
 });
 
@@ -973,7 +973,7 @@ it.each(['rejected', 'unknown'] as const)(
       concept: 'chair',
     });
     expect(result.isError() && result.getError()).toBe(error);
-    expect(ctx.storage.objects.has('region-masks/r1.png')).toBe(
+    expect(ctx.storage.objects.has('region-masks/r2.png')).toBe(
       publication === 'unknown'
     );
     expect(ctx.calls.calls.size).toBe(1);

@@ -2,6 +2,7 @@ import type { Clock } from '@/modules/kernel/application/ports/clock';
 import type { IdGenerator } from '@/modules/kernel/application/ports/id-generator';
 import type { Logger } from '@/modules/kernel/application/ports/logger';
 import type { ObjectStoragePort } from '@/modules/kernel/application/ports/object-storage';
+import type { ProviderAccounting } from '@/modules/kernel/application/ports/provider-accounting';
 import type { ProviderCallLog } from '@/modules/kernel/application/ports/provider-call-log';
 import {
   BetterUploadObjectStorage,
@@ -13,6 +14,7 @@ import { systemClock } from '@/modules/kernel/infrastructure/clock/system-clock'
 import type { Database } from '@/modules/kernel/infrastructure/db/client';
 import { cuidIdGenerator } from '@/modules/kernel/infrastructure/id/nanoid';
 
+import { createAccountingGateway } from './provider-accounting';
 import { createCachedFactory } from './shared/singleton';
 import { telemetryProxy } from './telemetry';
 
@@ -29,6 +31,7 @@ export type PipelineKernel = {
   idGenerator: IdGenerator;
   objectStorage: ObjectStoragePort;
   providerCallLog: ProviderCallLog;
+  providerAccounting: ProviderAccounting;
 };
 
 const factory = createCachedFactory((): PipelineKernel => {
@@ -40,6 +43,7 @@ const factory = createCachedFactory((): PipelineKernel => {
     idGenerator: cuidIdGenerator,
     objectStorage: new BetterUploadObjectStorage(),
     providerCallLog: createProviderCallLog({ db }),
+    providerAccounting: createAccountingGateway({ db }),
   };
 });
 

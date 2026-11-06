@@ -31,6 +31,7 @@ export const createFalBackgroundRemover = (config: {
           return Result.Ok({
             type: 'background_removal_failed',
             reason: 'no_image_in_response',
+            providerRequestId: result.requestId,
             provider: 'fal',
             endpoint: ENDPOINT,
           });
