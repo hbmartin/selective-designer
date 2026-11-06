@@ -43,12 +43,33 @@ const factory = createCachedFactory((): PipelineKernel => {
     idGenerator: cuidIdGenerator,
     objectStorage: new BetterUploadObjectStorage(),
     providerCallLog: createProviderCallLog({ db }),
-    providerAccounting: createAccountingGateway({ db }),
+    providerAccounting: createAccountingGateway({ db, clock: systemClock }),
   };
 });
 
-export const getPipelineKernel = (overrides?: Partial<PipelineKernel>) =>
-  overrides === undefined ? factory.get() : { ...factory.get(), ...overrides };
+export const getPipelineKernel = (
+  overrides?: Partial<PipelineKernel>
+): PipelineKernel => {
+  const base = factory.get();
+  if (overrides === undefined) return base;
+  const db = overrides.db ?? base.db;
+  const clock = overrides.clock ?? base.clock;
+  return {
+    db,
+    clock,
+    logger: overrides.logger ?? base.logger,
+    idGenerator: overrides.idGenerator ?? base.idGenerator,
+    objectStorage: overrides.objectStorage ?? base.objectStorage,
+    providerAccounting:
+      overrides.providerAccounting ??
+      (overrides.db || overrides.clock
+        ? createAccountingGateway({ db, clock })
+        : base.providerAccounting),
+    providerCallLog:
+      overrides.providerCallLog ??
+      (overrides.db ? createProviderCallLog({ db }) : base.providerCallLog),
+  };
+};
 
 /** Test-only. */
 export const __resetPipelineKernel = () => factory.reset();

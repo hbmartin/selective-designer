@@ -400,6 +400,11 @@ describe('atomic image and detection writes', () => {
         'base64'
       )
     );
+    const worker = createProviderAccounting({
+      db: database.db,
+      clock: ctx.kernel.clock,
+      logger: ctx.kernel.logger,
+    });
     const kernel = {
       ...ctx.kernel,
       objectStorage: storage.storage,
@@ -407,6 +412,10 @@ describe('atomic image and detection writes', () => {
         db: database.db,
         clock: ctx.kernel.clock,
         logger: ctx.kernel.logger,
+        schedule: async (id) => {
+          const delivered = await worker.deliver(id);
+          if (delivered.isError()) throw delivered.getError();
+        },
       }),
     };
     const scheduler = {

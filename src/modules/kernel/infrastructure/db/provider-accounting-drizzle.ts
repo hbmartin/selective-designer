@@ -2,6 +2,7 @@ import { Result } from '@bloodyowl/boxed';
 import { and, asc, count, eq, isNull, lte, min, sql } from 'drizzle-orm';
 
 import { createTransactionRunner } from './client';
+import { dispatchProviderReceipt } from './provider-accounting-dispatch';
 import { createProviderCallLog } from './provider-call-log-drizzle';
 import { providerCallReceipt as receiptTable } from './schema/provider-call-receipt';
 import type { Database, DbLike } from './types';
@@ -146,6 +147,9 @@ export const createProviderAccounting = ({
       if (!existing) return Result.Ok({ type: 'receipt_missing' });
       if (existing.deliveredAt) return Result.Ok({ type: 'receipt_delivered' });
       return await createTransactionRunner(db).run(async (tx) => {
+        await tx.execute(
+          sql`select set_config('lock_timeout', '1s', true), set_config('statement_timeout', '5s', true), set_config('idle_in_transaction_session_timeout', '5s', true)`
+        );
         const [row] = await tx
           .select()
           .from(receiptTable)
@@ -248,16 +252,16 @@ export const createProviderAccounting = ({
         }
         if (saved.isError()) return Result.Error(original);
       }
-      const delivered = await deliver(saved.get().receiptId);
-      if (delivered.isError() && schedule) {
+      if (schedule) {
         try {
-          await schedule(saved.get().receiptId);
+          await dispatchProviderReceipt(schedule, saved.get().receiptId);
         } catch (cause) {
           logger.warn({
             event: 'provider_accounting.dispatch_failed',
             details: {
               receiptId: receipt.id,
               code: accountingError(cause).code,
+              ...safeErrorDiagnostics(cause),
             },
           });
         }

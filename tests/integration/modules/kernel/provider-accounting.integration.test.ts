@@ -15,6 +15,7 @@ import {
 import {
   createProviderAccounting,
   createProviderReceiptStore,
+  getDatabaseErrorCode,
   pendingProviderReceipts,
   providerAccountingSummary,
 } from '@/modules/kernel/backend';
@@ -42,13 +43,24 @@ describe('durable provider accounting', () => {
     schedule?: (
       id: ReturnType<typeof makeProviderReceipt>['id']
     ) => Promise<void>
-  ) =>
-    createProviderAccounting({
+  ) => {
+    const worker = createProviderAccounting({
       db: database.db,
       clock: { now: () => now },
       logger,
-      schedule,
     });
+    return createProviderAccounting({
+      db: database.db,
+      clock: { now: () => now },
+      logger,
+      schedule:
+        schedule ??
+        (async (id) => {
+          const delivered = await worker.deliver(id);
+          if (delivered.isError()) throw delivered.getError();
+        }),
+    });
+  };
 
   it.skipIf(!process.env.RECOVERY_TEST_DATABASE_URL)(
     'keeps receipts pending during sink failure and delivers after recovery',
@@ -262,6 +274,64 @@ describe('durable provider accounting', () => {
         2
       );
       expect(await database.db.select().from(providerCall)).toHaveLength(2);
+    }
+  );
+  it('captures without writing the cost sink before the worker executes', async () => {
+    const schedule = vi.fn(async () => {});
+    const receipt = makeProviderReceipt();
+    okValue(await gateway(schedule).capture(receipt));
+    expect(schedule).toHaveBeenCalledWith(receipt.id);
+    expect(await database.db.select().from(providerCall)).toHaveLength(0);
+    expect(
+      (await database.db.select().from(providerCallReceipt))[0]
+    ).toMatchObject({ deliveredAt: null, deliveryAttempts: 0 });
+  });
+  it.skipIf(!process.env.RECOVERY_TEST_DATABASE_URL)(
+    'bounds cost-log lock waits without acknowledging the receipt',
+    async () => {
+      const receipt = makeProviderReceipt();
+      okValue(
+        await createProviderReceiptStore({ db: database.db }).capture(receipt)
+      );
+      okValue(
+        await createProviderCallLog({ db: database.db }).record({
+          ...receipt,
+          status: 'submitted',
+          startedAt: new Date(receipt.startedAt),
+          completedAt: undefined,
+        })
+      );
+      let release: () => void = () => {};
+      let acquired: () => void = () => {};
+      const ready = new Promise<void>((resolve) => {
+        acquired = resolve;
+      });
+      const blocker = database.db.$runInTransaction!(async (tx) => {
+        await tx
+          .select()
+          .from(providerCall)
+          .where(eq(providerCall.id, receipt.id))
+          .for('update');
+        acquired();
+        await new Promise<void>((resolve) => {
+          release = resolve;
+        });
+      });
+      await ready;
+      const safetyRelease = setTimeout(() => release(), 4_000);
+      try {
+        const failed = await gateway().deliver(receipt.id);
+        expect(failed.isError()).toBe(true);
+        if (failed.isError())
+          expect(getDatabaseErrorCode(failed.getError())).toBe('55P03');
+        expect(
+          (await database.db.select().from(providerCallReceipt))[0]?.deliveredAt
+        ).toBeNull();
+      } finally {
+        clearTimeout(safetyRelease);
+        release();
+        await blocker;
+      }
     }
   );
 });

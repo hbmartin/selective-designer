@@ -126,7 +126,7 @@ const buildDefaultKernel = (): Kernel => {
     objectStorage: new BetterUploadObjectStorage(),
     uploadIntentStore: createUploadIntentStore({ db }),
     providerCallLog: createProviderCallLog({ db }),
-    providerAccounting: createAccountingGateway({ db }),
+    providerAccounting: createAccountingGateway({ db, clock }),
   };
 };
 
@@ -163,8 +163,8 @@ export const getKernel = (overrides?: KernelOverrides): Kernel => {
         : base.uploadIntentStore),
     providerAccounting:
       overrides.providerAccounting ??
-      (overrides.db
-        ? createAccountingGateway({ db })
+      (overrides.db || overrides.clock
+        ? createAccountingGateway({ db, clock })
         : base.providerAccounting),
     providerCallLog:
       overrides.providerCallLog ??
