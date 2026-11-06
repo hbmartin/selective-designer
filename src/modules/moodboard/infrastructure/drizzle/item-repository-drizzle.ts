@@ -8,9 +8,13 @@ import {
   toItemVersionId,
   toObjectKey,
 } from '@/modules/kernel/domain/ids';
+import { createTransactionRunner } from '@/modules/kernel/infrastructure/db/client';
 import { observeRepository } from '@/modules/kernel/infrastructure/db/observability';
+import { createProviderReceiptStore } from '@/modules/kernel/infrastructure/db/provider-accounting-drizzle';
+import { retiredOutputCheckpoint } from '@/modules/kernel/infrastructure/db/retired-output-checkpoint';
 import { design } from '@/modules/kernel/infrastructure/db/schema';
 import type { DbLike } from '@/modules/kernel/infrastructure/db/types';
+import { isRootDatabase } from '@/modules/kernel/infrastructure/db/types';
 import type {
   ItemRepository,
   NewItemVersion,
@@ -403,6 +407,21 @@ export const createItemRepository = ({
 
     async saveCutoutOutput(input) {
       try {
+        if (input.checkpoint.receipt && isRootDatabase(db)) {
+          return await createTransactionRunner(db).run(async (tx) => {
+            const saved = await createItemRepository({
+              db: tx,
+            }).saveCutoutOutput(input);
+            if (saved.isError()) throw saved.getError();
+            return saved;
+          });
+        }
+        if (input.checkpoint.receipt) {
+          const captured = await createProviderReceiptStore({ db }).capture(
+            input.checkpoint.receipt
+          );
+          if (captured.isError()) return Result.Error(captured.getError());
+        }
         const rows = await db
           .update(versionTable)
           .set({ cutoutOutput: input.checkpoint })
@@ -451,7 +470,7 @@ export const createItemRepository = ({
           .set({
             cutoutStatus: input.cutoutStatus,
             cutoutKey: input.cutoutKey,
-            cutoutOutput: sql`case when ${versionTable.cutoutOutput} is null then null else jsonb_set(${versionTable.cutoutOutput}, '{source}', '{"kind":"retired"}'::jsonb) end`,
+            cutoutOutput: retiredOutputCheckpoint(versionTable.cutoutOutput),
           })
           .where(
             and(

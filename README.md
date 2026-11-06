@@ -377,3 +377,15 @@ your hooks issue:
 From now husky should have been removed; and lefthook should run your hooks correctly.
 </p>
 </details>
+
+## Provider accounting recovery
+
+Renders, cutouts and SAM calls capture durable receipts for each provider request. Once captured, a cost-log delivery outage does not block usable output. Receipts survive Retry and parent deletion; no provider call is made by accounting recovery.
+
+Cost-log delivery runs only in accounting workers, with bounded lock and statement waits. Prompt dispatch is capped at five seconds; its failure leaves the durable receipt for reconciliation. Failed delivery gets bounded prompt workflow retries. A Vercel Cron invokes `/api/internal/accounting/reconcile` daily at **07:00 UTC** as a backstop. Set `CRON_SECRET` to at least 32 URL-safe random characters in the production environment before deployment. Missing or incorrect authorization is rejected. Scheduled jobs run only against production; preview and local verification invoke the handler explicitly.
+
+Operators can redrive pending accounting with `pnpm accounting:reconcile`. The command reports delivered, failed and remaining receipts and closes its database client. Monitor `provider_accounting.delivery_failed`, `provider_accounting.dispatch_failed` and `provider_accounting.summary`; summaries include the pending count and oldest pending age. Exhausted delivery leaves receipts pending for the next reconciliation.
+
+Apply the additive accounting migration before serving the new app. The new ordinary indexes on image object keys and render checkpoint keys take a write lock while PostgreSQL builds them; coordinate rollout with writers, as for migration 0012. Existing migrations are immutable. Online index builds, historical accounting repair and orphan sweeps remain outside this release.
+
+Only an owning workflow may fail a render. If execution never claims ownership, the result stays pending and its owner can start a fresh, potentially paid attempt after 30 minutes. Replaced output deletion is best effort after confirmed loss and global reference checks.

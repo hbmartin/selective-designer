@@ -7,6 +7,7 @@ import type { IdGenerator } from '@/modules/kernel/application/ports/id-generato
 import type { Logger } from '@/modules/kernel/application/ports/logger';
 import type { ObjectStoragePort } from '@/modules/kernel/application/ports/object-storage';
 import type { PermissionChecker } from '@/modules/kernel/application/ports/permission-checker';
+import type { ProviderAccounting } from '@/modules/kernel/application/ports/provider-accounting';
 import type { ProviderCallLog } from '@/modules/kernel/application/ports/provider-call-log';
 import type { TransactionRunner } from '@/modules/kernel/application/ports/transaction-runner';
 import type { UploadIntentStore } from '@/modules/kernel/application/ports/upload-intent-store';
@@ -27,6 +28,7 @@ import { cuidIdGenerator } from '@/modules/kernel/infrastructure/id/nanoid';
 import { createTelemetryLogger } from '@/modules/kernel/infrastructure/logger/telemetry';
 import type { TelemetryAdapter } from '@/platform/telemetry';
 
+import { createAccountingGateway } from './provider-accounting';
 import { createCachedFactory } from './shared/singleton';
 import type { Overrides } from './shared/types';
 import { telemetryProxy } from './telemetry';
@@ -104,6 +106,7 @@ export type Kernel = {
   objectStorage: ObjectStoragePort;
   uploadIntentStore: UploadIntentStore;
   providerCallLog: ProviderCallLog;
+  providerAccounting: ProviderAccounting;
 };
 
 export type KernelOverrides = Overrides<Kernel>;
@@ -123,6 +126,7 @@ const buildDefaultKernel = (): Kernel => {
     objectStorage: new BetterUploadObjectStorage(),
     uploadIntentStore: createUploadIntentStore({ db }),
     providerCallLog: createProviderCallLog({ db }),
+    providerAccounting: createAccountingGateway({ db, clock }),
   };
 };
 
@@ -157,6 +161,11 @@ export const getKernel = (overrides?: KernelOverrides): Kernel => {
       (overrides.db !== undefined
         ? createUploadIntentStore({ db })
         : base.uploadIntentStore),
+    providerAccounting:
+      overrides.providerAccounting ??
+      (overrides.db || overrides.clock
+        ? createAccountingGateway({ db, clock })
+        : base.providerAccounting),
     providerCallLog:
       overrides.providerCallLog ??
       (overrides.db !== undefined

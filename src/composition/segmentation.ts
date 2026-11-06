@@ -26,7 +26,7 @@ const build = (overrides?: SegmentationOverrides) => {
     imageAccess: createImageAccess(kernel),
     segmenter: overrides?.segmenter ?? createSegmenter(),
     objectStorage: kernel.objectStorage,
-    providerCallLog: kernel.providerCallLog,
+    providerAccounting: kernel.providerAccounting,
     uploadIntentStore: kernel.uploadIntentStore,
     permissionChecker: kernel.permissionChecker,
     idGenerator: kernel.idGenerator,

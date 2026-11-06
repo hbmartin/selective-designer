@@ -7,12 +7,17 @@ import {
   toBatchId,
   toDesignId,
   toImageId,
+  toObjectKey,
   toRenderId,
   toRenderResultId,
 } from '@/modules/kernel/domain/ids';
+import { createTransactionRunner } from '@/modules/kernel/infrastructure/db/client';
 import { observeRepository } from '@/modules/kernel/infrastructure/db/observability';
+import { createProviderReceiptStore } from '@/modules/kernel/infrastructure/db/provider-accounting-drizzle';
+import { retiredOutputCheckpoint } from '@/modules/kernel/infrastructure/db/retired-output-checkpoint';
 import { design as designTable } from '@/modules/kernel/infrastructure/db/schema';
 import type { DbLike } from '@/modules/kernel/infrastructure/db/types';
+import { isRootDatabase } from '@/modules/kernel/infrastructure/db/types';
 import type { RenderRepository } from '@/modules/rendering/application/ports/ports';
 import { isModelId, modelIds } from '@/modules/rendering/domain/model-catalog';
 import {
@@ -445,6 +450,7 @@ export const createRenderRepository = ({
             settings: input.settings,
             prompt: input.prompt,
             submittedAt: input.submittedAt,
+            accountingIdentity: input.accountingIdentity ?? null,
           })
           .where(
             and(
@@ -465,6 +471,22 @@ export const createRenderRepository = ({
     },
     async saveOutput(input) {
       try {
+        if (input.checkpoint.receipt && isRootDatabase(db)) {
+          return await createTransactionRunner(db).run(async (tx) => {
+            const saved = await createRenderRepository({
+              db: tx,
+              modelOrder,
+            }).saveOutput(input);
+            if (saved.isError()) throw saved.getError();
+            return saved;
+          });
+        }
+        if (input.checkpoint.receipt) {
+          const captured = await createProviderReceiptStore({ db }).capture(
+            input.checkpoint.receipt
+          );
+          if (captured.isError()) return Result.Error(captured.getError());
+        }
         const rows = await db
           .update(resultTable)
           .set({ outputCheckpoint: input.checkpoint })
@@ -511,6 +533,29 @@ export const createRenderRepository = ({
     },
     async retryAttempt(input) {
       try {
+        if (isRootDatabase(db)) {
+          return await createTransactionRunner(db).run(async (tx) => {
+            const [previous] = await tx
+              .select({ checkpoint: resultTable.outputCheckpoint })
+              .from(resultTable)
+              .where(eq(resultTable.id, input.resultId))
+              .for('update');
+            const claimed = await createRenderRepository({
+              db: tx,
+              modelOrder,
+            }).retryAttempt(input);
+            if (claimed.isError()) throw claimed.getError();
+            if (claimed.get().type !== 'result_retry_claimed') return claimed;
+            const key = previous?.checkpoint
+              ? toObjectKey(previous.checkpoint.objectKey)
+              : undefined;
+            if (key?.isError()) throw key.getError();
+            return Result.Ok({
+              ...claimed.get(),
+              replacedObjectKey: key?.isOk() ? key.get() : null,
+            });
+          });
+        }
         const rows = await db
           .update(resultTable)
           .set({
@@ -520,6 +565,7 @@ export const createRenderRepository = ({
             providerRequestId: null,
             workflowRunId: null,
             outputCheckpoint: null,
+            accountingIdentity: null,
             outputImageId: null,
             errorMessage: null,
             submittedAt: null,
@@ -548,7 +594,11 @@ export const createRenderRepository = ({
           .returning({ attempt: resultTable.attempt });
         return Result.Ok(
           rows[0]
-            ? { type: 'result_retry_claimed', attempt: rows[0].attempt }
+            ? {
+                type: 'result_retry_claimed',
+                attempt: rows[0].attempt,
+                replacedObjectKey: null,
+              }
             : { type: 'result_attempt_superseded' }
         );
       } catch (error) {
@@ -562,21 +612,16 @@ export const createRenderRepository = ({
           .set({
             status: 'failed',
             errorMessage: input.reason.slice(0, 500),
-            outputCheckpoint: sql`case when ${resultTable.outputCheckpoint} is null then null else jsonb_set(${resultTable.outputCheckpoint}, '{source}', '{"kind":"retired"}'::jsonb) end`,
+            outputCheckpoint: retiredOutputCheckpoint(
+              resultTable.outputCheckpoint
+            ),
             completedAt: input.now,
           })
           .where(
             and(
               eq(resultTable.id, input.resultId),
               eq(resultTable.attempt, input.attempt),
-              or(
-                eq(resultTable.workflowRunId, input.workflowRunId),
-                and(
-                  eq(resultTable.status, 'pending'),
-                  isNull(resultTable.workflowRunId),
-                  isNull(resultTable.providerRequestId)
-                )
-              ),
+              eq(resultTable.workflowRunId, input.workflowRunId),
               inArray(resultTable.status, ['pending', 'submitted']),
               input.providerRequestId === undefined
                 ? undefined
@@ -625,6 +670,7 @@ export const createRenderRepository = ({
             renderSourceImageId: sourceId.get(),
             workflowRunId: row.result.workflowRunId,
             checkpoint: row.result.outputCheckpoint,
+            accountingIdentity: row.result.accountingIdentity,
             sourceSize: row.sourceSize,
           },
         });
@@ -640,7 +686,9 @@ export const createRenderRepository = ({
             ...input.completion,
             status: 'succeeded',
             outputImageId: input.imageId,
-            outputCheckpoint: sql`case when ${resultTable.outputCheckpoint} is null then null else jsonb_set(${resultTable.outputCheckpoint}, '{source}', '{"kind":"retired"}'::jsonb) end`,
+            outputCheckpoint: retiredOutputCheckpoint(
+              resultTable.outputCheckpoint
+            ),
           })
           .where(
             and(

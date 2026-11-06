@@ -1,5 +1,6 @@
 import { Result } from '@bloodyowl/boxed';
 
+import type { ProviderCallReceipt } from '@/modules/kernel';
 import { AppError } from '@/modules/kernel/domain/errors/app-error';
 import { sourceErrorDiagnostics } from '@/modules/kernel/domain/errors/source-error-diagnostics';
 import {
@@ -9,14 +10,12 @@ import {
   toProviderCallId,
   type UserId,
 } from '@/modules/kernel/domain/ids';
+import { providerCallIdentity } from '@/modules/kernel/domain/provider-call-identity';
 import { IMMUTABLE_OBJECT_CACHE_CONTROL } from '@/modules/kernel/domain/upload-policy';
 
 import type { MoodboardPipelineDeps, MoodboardResult } from './types';
 import { SIGNED_ITEM_URL_SECONDS } from './types';
-import type {
-  BackgroundRemovalFailed,
-  BackgroundRemovalResult,
-} from '../ports/background-remover';
+import type { BackgroundRemovalFailed } from '../ports/background-remover';
 import type { VersionFound, VersionNotFound } from '../ports/item-repository';
 import type { CutoutOutputCheckpoint } from '../../domain/cutout-output';
 
@@ -77,11 +76,17 @@ const recordRemoval = async (
   deps: MoodboardPipelineDeps,
   { versionId, attemptId }: CutoutAttempt,
   context: { userId: UserId | undefined; designId: DesignId; startedAt: Date },
-  removal: BackgroundRemovalResult | BackgroundRemovalFailed
+  removal: BackgroundRemovalFailed,
+  invocationId: string
 ) => {
-  const callId = toProviderCallId(`bg-${versionId}-${attemptId}`);
+  const callId = providerCallIdentity({
+    provider: removal.provider,
+    endpoint: removal.endpoint,
+    providerRequestId: removal.providerRequestId,
+    invocationId,
+  });
   if (callId.isError()) return Result.Error(callId.getError());
-  return deps.providerCallLog.record({
+  return deps.providerAccounting.capture({
     id: callId.get(),
     userId: context.userId,
     designId: context.designId,
@@ -89,25 +94,31 @@ const recordRemoval = async (
     provider: removal.provider,
     endpoint: removal.endpoint,
     subjectId: versionId,
-    providerRequestId:
-      removal.type === 'background_removed'
-        ? removal.providerRequestId
-        : undefined,
-    status: removal.type === 'background_removed' ? 'succeeded' : 'failed',
-    costUsdMicros:
-      removal.type === 'background_removed' ? removal.costUsdMicros : undefined,
-    costSource:
-      removal.type === 'background_removed'
-        ? removal.costSource
-        : 'unavailable',
-    details:
-      removal.type === 'background_removal_failed'
-        ? { reason: removal.reason }
-        : {},
-    startedAt: context.startedAt,
-    completedAt: deps.clock.now(),
+    providerRequestId: removal.providerRequestId,
+    status: 'failed',
+    costUsdMicros: undefined,
+    costSource: 'unavailable',
+    details: { reason: removal.reason, attemptId },
+    startedAt: context.startedAt.toISOString(),
+    completedAt: deps.clock.now().toISOString(),
   });
 };
+
+const logCutoutFailure = (
+  deps: MoodboardPipelineDeps,
+  input: CutoutAttempt,
+  phase: 'storage' | 'copy' | 'publication' | 'accounting',
+  error: AppError
+) =>
+  deps.logger.warn({
+    event: 'moodboard.cutout.output_failed',
+    details: {
+      ...input,
+      phase,
+      code: error.code,
+      ...sourceErrorDiagnostics(error),
+    },
+  });
 
 const publishCutout = async (
   deps: MoodboardPipelineDeps,
@@ -120,16 +131,7 @@ const publishCutout = async (
   const logFailure = (
     phase: 'storage' | 'copy' | 'publication',
     error: AppError
-  ) =>
-    deps.logger.warn({
-      event: 'moodboard.cutout.output_failed',
-      details: {
-        ...input,
-        phase,
-        code: error.code,
-        ...sourceErrorDiagnostics(error),
-      },
-    });
+  ) => logCutoutFailure(deps, input, phase, error);
   const stored = await deps.objectStorage.getObjectMetadata(
     checkpoint.objectKey
   );
@@ -179,6 +181,7 @@ const recordCutoutCheckpoint = async (
   output: CutoutOutputCheckpoint
 ) => {
   const { versionId, attemptId } = input;
+  if (output.receipt) return deps.providerAccounting.capture(output.receipt);
 
   let userId = output.userId ?? undefined;
   if (output.userId === undefined) {
@@ -189,7 +192,7 @@ const recordCutoutCheckpoint = async (
   }
   const id = toProviderCallId(`bg-${versionId}-${attemptId}`);
   if (id.isError()) return Result.Error(id.getError());
-  return deps.providerCallLog.record({
+  return deps.providerAccounting.capture({
     id: id.get(),
     userId,
     designId: value.designId,
@@ -204,10 +207,56 @@ const recordCutoutCheckpoint = async (
     details: {},
     startedAt:
       output.startedAt ??
-      value.version.cutoutAttemptStartedAt ??
+      value.version.cutoutAttemptStartedAt?.toISOString() ??
       output.completedAt,
     completedAt: output.completedAt,
   });
+};
+
+const storeCutoutBytes = async (
+  deps: MoodboardPipelineDeps,
+  input: CutoutAttempt,
+  output: CutoutOutputCheckpoint,
+  bytes: { bytes: Uint8Array; contentType: string },
+  recordPerformed: () => Promise<void>
+): Promise<
+  MoodboardResult<
+    | { type: 'cutout_bytes_stored' }
+    | { type: 'cutout_ready' }
+    | { type: 'cutout_skipped' }
+  >
+> => {
+  // URL checkpoints use their atomic save as the first post-provider fence.
+  const current = await deps.itemRepository.findVersion(input.versionId);
+  if (current.isError()) {
+    await recordPerformed();
+    return Result.Error(current.getError());
+  }
+  const latest = current.get();
+  if (
+    latest.type !== 'item_version_found' ||
+    latest.cutoutAttemptId !== input.attemptId ||
+    latest.version.cutoutStatus !== 'pending'
+  ) {
+    await recordPerformed();
+    return Result.Ok({
+      type: isCompletedCutout(latest, input.attemptId)
+        ? 'cutout_ready'
+        : 'cutout_skipped',
+    });
+  }
+  const stored = await deps.objectStorage.createObject({
+    objectKey: output.objectKey,
+    body: bytes.bytes,
+    contentType: bytes.contentType,
+    cacheControl: IMMUTABLE_OBJECT_CACHE_CONTROL,
+  });
+  if (stored.isError()) {
+    await recordPerformed();
+    logCutoutFailure(deps, input, 'storage', stored.getError());
+    return Result.Error(stored.getError());
+  }
+  return Result.Ok({ type: 'cutout_bytes_stored' });
 };
 
 /** Recover this attempt's paid output before invoking background removal. */
@@ -230,18 +279,9 @@ export async function removeBackgroundForVersion(
     return Result.Ok({ type: 'cutout_skipped' });
   }
   const logFailure = (
-    phase: 'copy' | 'storage' | 'publication' | 'accounting',
+    phase: 'storage' | 'copy' | 'publication' | 'accounting',
     error: AppError
-  ) =>
-    deps.logger.warn({
-      event: 'moodboard.cutout.output_failed',
-      details: {
-        ...input,
-        phase,
-        code: error.code,
-        ...sourceErrorDiagnostics(error),
-      },
-    });
+  ) => logCutoutFailure(deps, input, phase, error);
   const markFailed = async (
     reason: string
   ): Promise<MoodboardResult<RemoveBackgroundOutcome>> => {
@@ -271,6 +311,10 @@ export async function removeBackgroundForVersion(
       expiresInSeconds: SIGNED_ITEM_URL_SECONDS,
     });
     if (sourceUrl.isError()) return Result.Error(sourceUrl.getError());
+    const key = cutoutObjectKey(input);
+    if (key.isError()) return Result.Error(key.getError());
+    const invocationId = deps.idGenerator.createId();
+    if (invocationId.isError()) return Result.Error(invocationId.getError());
     const startedAt = deps.clock.now();
     const removed = await deps.backgroundRemover.removeBackground({
       sourceKey: value.version.photo.key,
@@ -279,23 +323,48 @@ export async function removeBackgroundForVersion(
     if (removed.isError()) return Result.Error(removed.getError());
     const removal = removed.get();
     const actor = owner.get();
+    const userId = actor.type === 'owner' ? actor.userId : undefined;
     if (removal.type === 'background_removal_failed') {
       const logged = await recordRemoval(
         deps,
         input,
         {
           designId: value.designId,
-          userId: actor.type === 'owner' ? actor.userId : undefined,
+          userId,
           startedAt,
         },
-        removal
+        removal,
+        invocationId.get()
       );
       if (logged.isError()) return Result.Error(logged.getError());
       return markFailed(removal.reason);
     }
-    const key = cutoutObjectKey(input);
-    if (key.isError()) return Result.Error(key.getError());
+    const callId = providerCallIdentity({
+      provider: removal.provider,
+      endpoint: removal.endpoint,
+      providerRequestId: removal.providerRequestId,
+      invocationId: invocationId.get(),
+    });
+    if (callId.isError()) return Result.Error(callId.getError());
+    const completedAt = deps.clock.now().toISOString();
+    const receipt: ProviderCallReceipt = {
+      id: callId.get(),
+      userId,
+      designId: value.designId,
+      purpose: 'background_removal',
+      provider: removal.provider,
+      endpoint: removal.endpoint,
+      subjectId: versionId,
+      providerRequestId: removal.providerRequestId,
+      status: 'succeeded',
+      costUsdMicros: removal.costUsdMicros,
+      costSource: removal.costSource,
+      details: { attemptId },
+      startedAt: startedAt.toISOString(),
+      completedAt,
+    };
     const output: CutoutOutputCheckpoint = {
+      receipt,
       source:
         removal.result.kind === 'url'
           ? { kind: 'url', url: removal.result.url }
@@ -309,44 +378,24 @@ export async function removeBackgroundForVersion(
       costUsdMicros: removal.costUsdMicros,
       costSource: removal.costSource,
       startedAt: startedAt.toISOString(),
-      userId: actor.type === 'owner' ? actor.userId : null,
-      completedAt: deps.clock.now().toISOString(),
+      userId: userId ?? null,
+      completedAt,
     };
     const recordPerformed = async () => {
       const logged = await recordCheckpoint(output);
       if (logged.isError()) logFailure('accounting', logged.getError());
     };
     if (removal.result.kind === 'bytes') {
-      // URL checkpoints use their atomic save as the first post-provider fence.
-      const current = await deps.itemRepository.findVersion(versionId);
-      if (current.isError()) {
-        await recordPerformed();
-        return Result.Error(current.getError());
-      }
-      const latest = current.get();
-      if (
-        latest.type !== 'item_version_found' ||
-        latest.cutoutAttemptId !== attemptId ||
-        latest.version.cutoutStatus !== 'pending'
-      ) {
-        await recordPerformed();
-        return Result.Ok({
-          type: isCompletedCutout(latest, attemptId)
-            ? 'cutout_ready'
-            : 'cutout_skipped',
-        });
-      }
-      const stored = await deps.objectStorage.createObject({
-        objectKey: output.objectKey,
-        body: removal.result.bytes,
-        contentType: removal.result.contentType,
-        cacheControl: IMMUTABLE_OBJECT_CACHE_CONTROL,
-      });
-      if (stored.isError()) {
-        await recordPerformed();
-        logFailure('storage', stored.getError());
-        return Result.Error(stored.getError());
-      }
+      const stored = await storeCutoutBytes(
+        deps,
+        input,
+        output,
+        removal.result,
+        recordPerformed
+      );
+      if (stored.isError()) return Result.Error(stored.getError());
+      const outcome = stored.get();
+      if (outcome.type !== 'cutout_bytes_stored') return Result.Ok(outcome);
     }
     const saved = await deps.itemRepository.saveCutoutOutput({
       ...input,
@@ -368,12 +417,14 @@ export async function removeBackgroundForVersion(
             : 'cutout_skipped',
       });
     }
+    if (savedValue.checkpoint.receipt?.id !== output.receipt?.id)
+      await recordPerformed();
     checkpoint = savedValue.checkpoint;
   }
   const logged = await recordCheckpoint(checkpoint);
   if (logged.isError()) {
     logFailure('accounting', logged.getError());
-    return Result.Error(logged.getError());
+    if (!checkpoint.receipt) return Result.Error(logged.getError());
   }
   return publishCutout(deps, input, checkpoint, markFailed);
 }

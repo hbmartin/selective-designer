@@ -2,7 +2,7 @@ import { Result } from '@bloodyowl/boxed';
 
 import { createDesignPipelineUseCases } from '@/modules/design';
 import { createDesignRepository } from '@/modules/design/backend';
-import type { ProviderCallLog } from '@/modules/kernel';
+import type { ProviderAccounting } from '@/modules/kernel';
 import { getAiProvidersConfig } from '@/modules/kernel/backend';
 import {
   type BackgroundRemover,
@@ -28,7 +28,7 @@ export type MoodboardPipelineOverrides = {
   itemRepository?: ItemRepository;
   designAccess?: DesignAccess;
   backgroundRemover?: BackgroundRemover;
-  providerCallLog?: ProviderCallLog;
+  providerAccounting?: ProviderAccounting;
 };
 
 const designPipeline = (
@@ -89,7 +89,8 @@ const buildPipelineUseCases = (overrides?: MoodboardPipelineOverrides) => {
     objectStorage: kernel.objectStorage,
     backgroundRemover:
       overrides?.backgroundRemover ?? createBackgroundRemover(kernel),
-    providerCallLog: overrides?.providerCallLog ?? kernel.providerCallLog,
+    providerAccounting:
+      overrides?.providerAccounting ?? kernel.providerAccounting,
     idGenerator: kernel.idGenerator,
     clock: kernel.clock,
     logger: kernel.logger,

@@ -91,7 +91,7 @@ const build = (overrides?: SegmentationPipelineOverrides) => {
     conceptSource: overrides?.conceptSource ?? createConceptSource(kernel),
     segmenter: overrides?.segmenter ?? createSegmenter(),
     objectStorage: kernel.objectStorage,
-    providerCallLog: kernel.providerCallLog,
+    providerAccounting: kernel.providerAccounting,
     idGenerator: kernel.idGenerator,
     clock: kernel.clock,
     logger: kernel.logger,

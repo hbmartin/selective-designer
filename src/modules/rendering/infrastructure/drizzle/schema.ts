@@ -82,6 +82,10 @@ export const renderResult = pgTable(
       .notNull(),
     providerRequestId: text('providerRequestId'),
     workflowRunId: text('workflowRunId'),
+    accountingIdentity: jsonb('accountingIdentity').$type<{
+      invocationId: string;
+      providerRequestId?: string;
+    }>(),
     outputCheckpoint: jsonb('outputCheckpoint').$type<RenderOutputCheckpoint>(),
     modelVersion: text('modelVersion'),
     settings: jsonb('settings').$type<ModelSettings>().default({}).notNull(),
@@ -96,7 +100,12 @@ export const renderResult = pgTable(
     submittedAt: timestamp('submittedAt', { precision: 3, mode: 'date' }),
     completedAt: timestamp('completedAt', { precision: 3, mode: 'date' }),
   },
-  (table) => [index('render_result_render_idx').on(table.renderId)]
+  (table) => [
+    index('render_result_render_idx').on(table.renderId),
+    index('render_result_output_key_idx').on(
+      sql`(${table.outputCheckpoint}->>'objectKey')`
+    ),
+  ]
 );
 
 export type RenderRow = typeof render.$inferSelect;

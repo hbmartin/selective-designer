@@ -650,6 +650,26 @@ export async function retryResult(
   const claimed = reset.get();
   if (claimed.type === 'result_attempt_superseded')
     return Result.Ok({ type: 'result_not_retryable' });
+  if (claimed.replacedObjectKey) {
+    const referenced = await deps.resultOutputReferences.check(
+      claimed.replacedObjectKey
+    );
+    if (referenced.isError())
+      deps.logger.warn({
+        event: 'rendering.result.cleanup_failed',
+        details: { resultId: input.resultId, code: referenced.getError().code },
+      });
+    else if (referenced.get().type === 'output_unreferenced') {
+      const deleted = await deps.objectStorage.deleteObject(
+        claimed.replacedObjectKey
+      );
+      if (deleted.isError())
+        deps.logger.warn({
+          event: 'rendering.result.cleanup_failed',
+          details: { resultId: input.resultId, code: deleted.getError().code },
+        });
+    }
+  }
   const scheduled = await deps.renderScheduler.scheduleResult({
     resultId: input.resultId,
     attempt: claimed.attempt,

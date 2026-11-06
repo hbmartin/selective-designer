@@ -41,6 +41,7 @@ import {
 } from './source-read-policy';
 
 const OBJECT_DELETE_TIMEOUT_MS = 5_000;
+const OBJECT_METADATA_TIMEOUT_MS = 5_000;
 const OBJECT_COPY_TIMEOUT_MS = 60_000;
 const MAX_SIGNED_URL_SECONDS = 7 * 24 * 60 * 60;
 
@@ -104,7 +105,7 @@ export class BetterUploadObjectStorage implements ObjectStoragePort {
     const controller = new AbortController();
     const timeoutId = setTimeout(
       () => controller.abort(),
-      OBJECT_DELETE_TIMEOUT_MS
+      OBJECT_METADATA_TIMEOUT_MS
     );
     try {
       const config = getStorageConfig();

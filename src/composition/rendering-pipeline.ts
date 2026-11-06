@@ -298,7 +298,7 @@ const build = (overrides?: RenderingPipelineOverrides) => {
     resultImages:
       overrides?.persistence?.resultImages ?? createResultImages(kernel),
     objectStorage: kernel.objectStorage,
-    providerCallLog: kernel.providerCallLog,
+    providerAccounting: kernel.providerAccounting,
     idGenerator: kernel.idGenerator,
     clock: kernel.clock,
     logger: kernel.logger,

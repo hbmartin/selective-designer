@@ -54,6 +54,10 @@ export type RenderPublicationContext = {
   renderSourceImageId: ImageId;
   workflowRunId: string | null;
   checkpoint: RenderOutputCheckpoint | null;
+  accountingIdentity: {
+    invocationId: string;
+    providerRequestId?: string;
+  } | null;
   sourceSize: { width: number; height: number };
 };
 
@@ -72,6 +76,7 @@ export interface RenderRepository {
       settings: ModelSettings;
       prompt: string;
       submittedAt: Date;
+      accountingIdentity?: { invocationId: string; providerRequestId?: string };
     }
   ): Promise<
     ApplicationResult<
@@ -94,7 +99,11 @@ export interface RenderRepository {
     expiredBeforeMs: number;
   }): Promise<
     ApplicationResult<
-      | { type: 'result_retry_claimed'; attempt: number }
+      | {
+          type: 'result_retry_claimed';
+          attempt: number;
+          replacedObjectKey: ObjectKey | null;
+        }
       | { type: 'result_attempt_superseded' }
     >
   >;
@@ -349,6 +358,7 @@ export type ModelRequest = {
 export type ModelSubmission =
   | {
       type: 'model_submitted';
+      accountingRequestId?: string;
       providerRequestId: string;
       settings: ModelSettings;
     }

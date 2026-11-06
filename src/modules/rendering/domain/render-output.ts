@@ -1,8 +1,11 @@
+import type { ProviderCallReceipt } from '@/modules/kernel';
 import type { ProviderCostSource } from '@/modules/kernel';
 import type { ObjectKey } from '@/modules/kernel/domain/ids';
 
 /** Server-only recovery data; never part of RenderResult or browser views. */
 export type RenderOutputCheckpoint = {
+  /** Absent only on checkpoints written before durable accounting. */
+  receipt?: ProviderCallReceipt;
   source:
     | { kind: 'url'; url: string }
     | { kind: 'object' }

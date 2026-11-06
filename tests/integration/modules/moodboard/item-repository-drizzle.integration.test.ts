@@ -1,5 +1,6 @@
 import { makeUserRow } from '@tests/server/db-fixtures';
 import { createRecoveryTestDatabase } from '@tests/server/recovery-database';
+import { makeProviderReceipt } from '@tests/support/provider-receipt';
 import { okValue } from '@tests/support/result';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 
@@ -13,6 +14,7 @@ import {
   toObjectKey,
   toUserId,
 } from '@/modules/kernel/domain/ids';
+import { providerCallReceipt } from '@/modules/kernel/infrastructure/db/schema';
 import { user as userTable } from '@/modules/kernel/infrastructure/db/schema';
 import { unwrapParseResult } from '@/modules/kernel/testing';
 import { toItemCategory, toItemName } from '@/modules/moodboard';
@@ -345,6 +347,12 @@ describe('ItemRepositoryDrizzle', () => {
         attemptId: 'attempt',
       };
       const checkpoint = {
+        receipt: makeProviderReceipt({
+          purpose: 'background_removal',
+          designId,
+          subjectId: input.versionId,
+          providerRequestId: 'paid',
+        }),
         source: {
           kind: 'url' as const,
           url: 'https://provider.test/private?token=secret',
@@ -398,4 +406,48 @@ describe('ItemRepositoryDrizzle', () => {
         ).toBe('cutout_already_ready');
     }
   );
+  it('keeps receipts for distinct losing cutout calls without replacing the canonical output', async () => {
+    await create('receipts', 'Furniture', {
+      id: 'attempt',
+      startedAt: new Date(),
+    });
+    const input = { versionId: versionId('receipts-v1'), attemptId: 'attempt' };
+    const first = {
+      source: { kind: 'url' as const, url: 'https://provider.test/first' },
+      objectKey: key('item-cutouts/receipts.png'),
+      contentType: null,
+      provider: 'fal',
+      endpoint: 'birefnet',
+      providerRequestId: 'first',
+      costUsdMicros: 123,
+      costSource: 'reported' as const,
+      completedAt: new Date().toISOString(),
+      receipt: makeProviderReceipt({
+        purpose: 'background_removal',
+        designId,
+        subjectId: input.versionId,
+        providerRequestId: 'first',
+      }),
+    };
+    okValue(await repository.saveCutoutOutput({ ...input, checkpoint: first }));
+    const second = {
+      ...first,
+      providerRequestId: 'second',
+      receipt: makeProviderReceipt({
+        purpose: 'background_removal',
+        designId,
+        subjectId: input.versionId,
+        providerRequestId: 'second',
+        costUsdMicros: 456,
+      }),
+    };
+    expect(
+      okValue(
+        await repository.saveCutoutOutput({ ...input, checkpoint: second })
+      )
+    ).toMatchObject({ type: 'cutout_output_saved', checkpoint: first });
+    expect(await database.db.select().from(providerCallReceipt)).toHaveLength(
+      2
+    );
+  });
 });

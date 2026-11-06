@@ -1,5 +1,6 @@
 import { Result } from '@bloodyowl/boxed';
 
+import type { ProviderAccounting, ProviderCallReceipt } from '@/modules/kernel';
 import type {
   ObjectStoragePort,
   ProviderCallLog,
@@ -192,19 +193,33 @@ export const createFakeProviderCallLog = () => {
   const calls = new Map<string, ProviderCallRecord>();
   const log: ProviderCallLog = {
     async record(call) {
-      calls.set(call.id, {
-        ...call,
-        startedAt:
-          typeof call.startedAt === 'string'
-            ? new Date(call.startedAt)
-            : call.startedAt,
-        completedAt:
-          typeof call.completedAt === 'string'
-            ? new Date(call.completedAt)
-            : call.completedAt,
-      });
+      if (calls.get(call.id)?.status !== 'succeeded') calls.set(call.id, call);
       return Result.Ok({ type: 'provider_call_recorded' });
     },
   };
-  return { log, calls };
+  const receipts = new Map<string, ProviderCallReceipt>();
+  const delivered = new Set<string>();
+  const accounting: ProviderAccounting = {
+    async capture(receipt) {
+      if (!receipts.has(receipt.id)) receipts.set(receipt.id, receipt);
+      await accounting.deliver(receipt.id);
+      return Result.Ok({ type: 'receipt_captured', receiptId: receipt.id });
+    },
+    async deliver(id) {
+      const receipt = receipts.get(id);
+      if (!receipt) return Result.Ok({ type: 'receipt_missing' });
+      const result = await log.record({
+        ...receipt,
+        startedAt: new Date(receipt.startedAt),
+        completedAt:
+          receipt.completedAt === undefined
+            ? undefined
+            : new Date(receipt.completedAt),
+      });
+      if (result.isError()) return Result.Error(result.getError());
+      delivered.add(id);
+      return Result.Ok({ type: 'receipt_delivered' });
+    },
+  };
+  return { log, calls, accounting, receipts, delivered };
 };

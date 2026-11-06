@@ -201,6 +201,7 @@ export type SegmentationResult =
     }
   | {
       type: 'segmentation_failed';
+      providerRequestId?: string;
       reason: string;
       terminal?: true;
       provider: string;

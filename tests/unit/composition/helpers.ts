@@ -50,6 +50,7 @@ export function makeTestKernel(overrides: Partial<Kernel> = {}): Kernel {
     objectStorage: createFakeObjectStorage().storage,
     uploadIntentStore: createFakeUploadIntentStore().store,
     providerCallLog: createFakeProviderCallLog().log,
+    providerAccounting: createFakeProviderCallLog().accounting,
     ...overrides,
   };
 }

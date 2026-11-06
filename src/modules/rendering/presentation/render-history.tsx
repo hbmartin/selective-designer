@@ -1,18 +1,17 @@
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { RotateCwIcon, StarIcon } from 'lucide-react';
+import { useQuery } from '@tanstack/react-query';
+import { StarIcon } from 'lucide-react';
 import type { ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
-import { toast } from 'sonner';
 
 import { useHydrated } from '@/platform/hooks/use-hydrated';
 
 import { Badge } from '@/platform/components/ui/badge';
-import { Button } from '@/platform/components/ui/button';
 import { Spinner } from '@/platform/components/ui/spinner';
 
 import { useCurrentScopeKey } from '@/modules/auth/client';
 import type { ImageId } from '@/modules/kernel/domain/ids';
 
+import { RenderRetry } from './render-retry';
 import { renderingQueries } from './wired-queries';
 import type {
   RenderResultView,
@@ -30,13 +29,6 @@ const ResultTile = (props: {
   actions?: ResultActions;
 }) => {
   const { t } = useTranslation(['rendering']);
-  const queryClient = useQueryClient();
-  const retry = useMutation({
-    ...renderingQueries.retry(),
-    onSuccess: () =>
-      queryClient.invalidateQueries({ queryKey: renderingQueries.all() }),
-    onError: () => toast.error(t('rendering:errors.retryFailed')),
-  });
   const { result } = props;
   const modelName = t(`rendering:models.${result.modelId}`);
   const skip = result.skipReason ? parseSkipReason(result.skipReason) : null;
@@ -99,33 +91,7 @@ const ResultTile = (props: {
             : skip.reason}
         </p>
       )}
-      {result.retryable && (
-        <p className="text-xs text-muted-foreground">
-          {t('rendering:history.retryHint')}
-        </p>
-      )}
-      {result.retryable && (
-        <div className="flex items-center justify-between gap-1">
-          <p
-            className="truncate text-xs text-muted-foreground"
-            title={result.errorMessage ?? undefined}
-          >
-            {result.status === 'failed'
-              ? result.errorMessage
-              : t('rendering:history.delayed')}
-          </p>
-          <Button
-            size="xs"
-            variant="ghost"
-            title={t('rendering:history.retryHint')}
-            loading={retry.isPending}
-            onClick={() => retry.mutate({ resultId: result.id })}
-          >
-            <RotateCwIcon />
-            {t('rendering:history.retry')}
-          </Button>
-        </div>
-      )}
+      <RenderRetry result={result} />
     </li>
   );
 };

@@ -5,7 +5,7 @@ import type {
   Logger,
   ObjectStoragePort,
   PermissionChecker,
-  ProviderCallLog,
+  ProviderAccounting,
   UploadIntentStore,
 } from '@/modules/kernel';
 
@@ -23,7 +23,7 @@ export type SegmentationPipelineDeps = {
   conceptSource: ConceptSource;
   segmenter: Segmenter;
   objectStorage: ObjectStoragePort;
-  providerCallLog: ProviderCallLog;
+  providerAccounting: ProviderAccounting;
   idGenerator: IdGenerator;
   clock: Clock;
   logger: Logger;

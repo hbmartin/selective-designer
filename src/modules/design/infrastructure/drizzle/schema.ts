@@ -48,7 +48,11 @@ export const image = pgTable(
     workingWidth: integer('workingWidth').notNull(),
     workingHeight: integer('workingHeight').notNull(),
   },
-  (table) => [index('image_design_idx').on(table.designId)]
+  (table) => [
+    index('image_design_idx').on(table.designId),
+    index('image_original_key_idx').on(table.originalKey),
+    index('image_working_key_idx').on(table.workingKey),
+  ]
 );
 
 export type DesignRow = typeof design.$inferSelect;

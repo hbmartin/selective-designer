@@ -1,12 +1,9 @@
 import { Result } from '@bloodyowl/boxed';
 
 import { type ImageId, toRegionId } from '@/modules/kernel/domain/ids';
+import { providerCallIdentity } from '@/modules/kernel/domain/provider-call-identity';
 
-import {
-  discardUnpublishedMasks,
-  providerCallIdFor,
-  storeSegmentedMasks,
-} from './store-masks';
+import { discardUnpublishedMasks, storeSegmentedMasks } from './store-masks';
 import {
   type SegmentationPipelineDeps,
   type SegmentationResultOf,
@@ -106,6 +103,8 @@ export async function detectConcept(
   });
   if (imageUrl.isError()) return Result.Error(imageUrl.getError());
 
+  const invocationId = deps.idGenerator.createId();
+  if (invocationId.isError()) return Result.Error(invocationId.getError());
   const startedAt = deps.clock.now();
   const segmented = await deps.segmenter.segment({
     imageUrl: imageUrl.get().url,
@@ -118,14 +117,14 @@ export async function detectConcept(
   if (segmented.isError()) return Result.Error(segmented.getError());
   const result = segmented.get();
 
-  // Deterministic id: a retried step updates the same cost-log row.
-  const callId = providerCallIdFor(
-    'detect',
-    image.imageId,
-    input.runId ? `${input.runId}:${input.concept}` : input.concept
-  );
+  const callId = providerCallIdentity({
+    provider: result.provider,
+    endpoint: result.endpoint,
+    providerRequestId: result.providerRequestId,
+    invocationId: invocationId.get(),
+  });
   if (callId.isError()) return Result.Error(callId.getError());
-  const logged = await deps.providerCallLog.record({
+  const logged = await deps.providerAccounting.capture({
     id: callId.get(),
     userId: image.ownerId,
     designId: image.designId,
@@ -140,8 +139,8 @@ export async function detectConcept(
       result.type === 'segmented' ? result.costUsdMicros : undefined,
     costSource: result.type === 'segmented' ? result.costSource : 'unavailable',
     details: { concept: input.concept },
-    startedAt,
-    completedAt: deps.clock.now(),
+    startedAt: startedAt.toISOString(),
+    completedAt: deps.clock.now().toISOString(),
   });
   if (logged.isError()) return Result.Error(logged.getError());
   if (result.type === 'segmentation_failed') {

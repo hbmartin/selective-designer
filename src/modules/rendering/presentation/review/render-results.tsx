@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { DownloadIcon, RotateCwIcon, StarIcon } from 'lucide-react';
+import { DownloadIcon, StarIcon } from 'lucide-react';
 import { type ReactNode, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { toast } from 'sonner';
@@ -16,6 +16,7 @@ import type { ImageId, RenderId } from '@/modules/kernel/domain/ids';
 
 import { ChangeCheckBadge } from './change-check-badge';
 import { useChangeCheck } from './use-change-check';
+import { RenderRetry } from '../render-retry';
 import { renderingQueries } from '../wired-queries';
 import type {
   RenderResultView,
@@ -93,10 +94,6 @@ const ResultCard = (props: {
     queryClient.invalidateQueries({ queryKey: renderingQueries.all() });
   const prefer = useMutation({
     ...renderingQueries.prefer(),
-    onSuccess: invalidate,
-  });
-  const retry = useMutation({
-    ...renderingQueries.retry(),
     onSuccess: invalidate,
   });
   const check = useChangeCheck({
@@ -209,33 +206,7 @@ const ResultCard = (props: {
             : skip.reason}
         </p>
       )}
-      {result.retryable && (
-        <p className="text-xs text-muted-foreground">
-          {t('rendering:history.retryHint')}
-        </p>
-      )}
-      {result.retryable && (
-        <div className="flex items-center justify-between gap-2">
-          <p
-            className="truncate text-xs text-muted-foreground"
-            title={result.errorMessage ?? undefined}
-          >
-            {result.status === 'failed'
-              ? result.errorMessage
-              : t('rendering:history.delayed')}
-          </p>
-          <Button
-            size="xs"
-            variant="ghost"
-            title={t('rendering:history.retryHint')}
-            loading={retry.isPending}
-            onClick={() => retry.mutate({ resultId: result.id })}
-          >
-            <RotateCwIcon />
-            {t('rendering:history.retry')}
-          </Button>
-        </div>
-      )}
+      <RenderRetry result={result} />
       {result.status === 'succeeded' && (
         <>
           <SchemeName key={result.schemeName ?? ''} result={result} />

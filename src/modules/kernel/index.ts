@@ -5,6 +5,7 @@ export type * from './application/ports/id-generator';
 export * from './application/ports/logger';
 export type * from './application/ports/object-storage';
 export type * from './application/ports/permission-checker';
+export type * from './application/ports/provider-accounting';
 export * from './application/ports/provider-call-log';
 export type * from './application/ports/transaction-runner';
 export type * from './application/ports/upload-intent-store';
