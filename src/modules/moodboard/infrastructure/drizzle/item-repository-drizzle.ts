@@ -8,9 +8,9 @@ import {
   toItemVersionId,
   toObjectKey,
 } from '@/modules/kernel/domain/ids';
-import { createTransactionRunner } from '@/modules/kernel/infrastructure/db/client';
 import { observeRepository } from '@/modules/kernel/infrastructure/db/observability';
 import { createProviderReceiptStore } from '@/modules/kernel/infrastructure/db/provider-accounting-drizzle';
+import { runRepositoryTransaction } from '@/modules/kernel/infrastructure/db/repository-transaction';
 import { retiredOutputCheckpoint } from '@/modules/kernel/infrastructure/db/retired-output-checkpoint';
 import { design } from '@/modules/kernel/infrastructure/db/schema';
 import type { DbLike } from '@/modules/kernel/infrastructure/db/types';
@@ -408,13 +408,9 @@ export const createItemRepository = ({
     async saveCutoutOutput(input) {
       try {
         if (input.checkpoint.receipt && isRootDatabase(db)) {
-          return await createTransactionRunner(db).run(async (tx) => {
-            const saved = await createItemRepository({
-              db: tx,
-            }).saveCutoutOutput(input);
-            if (saved.isError()) throw saved.getError();
-            return saved;
-          });
+          return await runRepositoryTransaction(db, (tx) =>
+            createItemRepository({ db: tx }).saveCutoutOutput(input)
+          );
         }
         if (input.checkpoint.receipt) {
           const captured = await createProviderReceiptStore({ db }).capture(

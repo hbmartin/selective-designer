@@ -19,11 +19,4 @@ export const createAccountingGateway = ({
     db,
     clock,
     logger: createTelemetryLogger({ telemetry: telemetryProxy }),
-    schedule: async (receiptId) => {
-      const [{ start }, { accountingDeliveryWorkflow }] = await Promise.all([
-        import('workflow/api'),
-        import('@/modules/kernel/workflows/backend'),
-      ]);
-      await start(accountingDeliveryWorkflow, [{ receiptId }]);
-    },
   });

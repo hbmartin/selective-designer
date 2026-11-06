@@ -91,7 +91,7 @@ The image one model returned for a render.
 _Avoid_: Variant, fork, output
 
 **Provider call**:
-One request to an external model provider. An attempt can make more than one call, each with its own reported, estimated or unknown cost; recording a call does not mean its output was published.
+One request to an external model provider. An attempt can make more than one call, each with its own reported, estimated or unknown cost; recording an accepted call does not mean it completed or its output was published.
 
 **Render attempt**:
 One attempt to obtain a render result from a model, including the time spent waiting to start. Retrying a failed or expired attempt starts a fresh attempt that may incur another charge; automatic recovery continues the same attempt and reuses its returned output.

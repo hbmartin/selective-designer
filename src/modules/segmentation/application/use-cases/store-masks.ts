@@ -9,10 +9,8 @@ import { AppError } from '@/modules/kernel/domain/errors/app-error';
 import { sourceErrorDiagnostics } from '@/modules/kernel/domain/errors/source-error-diagnostics';
 import {
   type ObjectKey,
-  type ProviderCallId,
   type RegionId,
   toObjectKey,
-  toProviderCallId,
   toRegionId,
 } from '@/modules/kernel/domain/ids';
 import { IMMUTABLE_OBJECT_CACHE_CONTROL } from '@/modules/kernel/domain/upload-policy';
@@ -222,14 +220,5 @@ export async function storeSegmentedMasks(
   if (regions.length === 0 && sourceError) return Result.Error(sourceError);
   return Result.Ok({ type: 'masks_stored', regions });
 }
-
-export const providerCallIdFor = (
-  prefix: string,
-  ...parts: string[]
-): SegmentationResultOf<ProviderCallId> => {
-  const id = toProviderCallId([prefix, ...parts].join(':').slice(0, 200));
-  if (id.isError()) return Result.Error(id.getError());
-  return Result.Ok(id.get());
-};
 
 export type { ObjectKey, RegionId };

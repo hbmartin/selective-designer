@@ -132,8 +132,7 @@ export async function detectConcept(
     provider: result.provider,
     endpoint: result.endpoint,
     subjectId: image.imageId,
-    providerRequestId:
-      result.type === 'segmented' ? result.providerRequestId : undefined,
+    providerRequestId: result.providerRequestId,
     status: result.type === 'segmented' ? 'succeeded' : 'failed',
     costUsdMicros:
       result.type === 'segmented' ? result.costUsdMicros : undefined,

@@ -358,7 +358,7 @@ describe('background removal pipeline', () => {
       cutoutStatus: 'ready',
       cutoutKey,
     });
-    expect([...ctx.calls.calls.values()]).toEqual([
+    expect([...ctx.calls.receipts.values()]).toEqual([
       expect.objectContaining({
         purpose: 'background_removal',
         status: 'succeeded',
@@ -432,7 +432,7 @@ describe('background removal pipeline', () => {
     const key = `item-cutouts/${versionId}/${latestAttempt(ctx)}.png`;
     expect(ctx.items.versions.get(versionId)?.cutoutKey).toBe(key);
     expect(ctx.storage.objects.get(key)?.bytes).toEqual(new Uint8Array([2]));
-    expect(ctx.calls.calls.size).toBe(2);
+    expect(ctx.calls.receipts.size).toBe(2);
   });
 
   it('deletes only the abandoned object when a worker loses its attempt during upload', async () => {
@@ -487,7 +487,7 @@ describe('background removal pipeline', () => {
     expect(deleteObject).toHaveBeenCalledExactlyOnceWith(staleKey);
     expect(ctx.storage.objects.has(staleKey)).toBe(false);
     expect(ctx.items.versions.get(versionId)?.cutoutStatus).toBe('pending');
-    expect([...ctx.calls.calls.values()]).toEqual([
+    expect([...ctx.calls.receipts.values()]).toEqual([
       expect.objectContaining({ costUsdMicros: 5 }),
     ]);
   });
@@ -582,7 +582,7 @@ describe('cutout output checkpoints', () => {
         type: 'cutout_ready',
       });
       expect(remove).toHaveBeenCalledOnce();
-      expect(ctx.calls.calls.size).toBe(1);
+      expect(ctx.calls.receipts.size).toBe(1);
       expect(
         ctx.storage.objects.get(
           `item-cutouts/${attempt.versionId}/${attempt.attemptId}.png`

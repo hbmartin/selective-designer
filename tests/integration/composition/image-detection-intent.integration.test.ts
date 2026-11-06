@@ -2,6 +2,7 @@ import { Result } from '@bloodyowl/boxed';
 import { makeUserRow } from '@tests/server/db-fixtures';
 import { createPgliteTestDatabase } from '@tests/server/pglite';
 import { createFakeObjectStorage } from '@tests/support/fake-kernel-ports';
+import { makeProviderReceipt } from '@tests/support/provider-receipt';
 import { updateRenderResultFixture } from '@tests/support/render-result-fixture';
 import { okValue } from '@tests/support/result';
 import { getTableName } from 'drizzle-orm';
@@ -40,10 +41,7 @@ import {
   toRenderResultId,
   toUserId,
 } from '@/modules/kernel';
-import {
-  createProviderAccounting,
-  createProviderCallLog,
-} from '@/modules/kernel/backend';
+import { createProviderAccounting } from '@/modules/kernel/backend';
 import { user as userTable } from '@/modules/kernel/infrastructure/db/schema';
 import {
   type BackgroundRemover,
@@ -390,7 +388,20 @@ describe('atomic image and detection writes', () => {
     okValue(
       await updateRenderResultFixture(ctx.kernel.db, {
         resultId,
-        changes: { status: 'submitted', providerRequestId: 'paid-request' },
+        changes: {
+          status: 'submitted',
+          providerRequestId: 'paid-request',
+          accountingIdentity: {
+            invocationId: 'invocation-one',
+            providerRequestId: 'paid-request',
+            receipt: makeProviderReceipt({
+              designId,
+              subjectId: resultId,
+              providerRequestId: 'paid-request',
+              startedAt: ctx.kernel.clock.now().toISOString(),
+            }),
+          },
+        },
       })
     );
     const storage = createFakeObjectStorage();
@@ -400,11 +411,6 @@ describe('atomic image and detection writes', () => {
         'base64'
       )
     );
-    const worker = createProviderAccounting({
-      db: database.db,
-      clock: ctx.kernel.clock,
-      logger: ctx.kernel.logger,
-    });
     const kernel = {
       ...ctx.kernel,
       objectStorage: storage.storage,
@@ -412,10 +418,6 @@ describe('atomic image and detection writes', () => {
         db: database.db,
         clock: ctx.kernel.clock,
         logger: ctx.kernel.logger,
-        schedule: async (id) => {
-          const delivered = await worker.deliver(id);
-          if (delivered.isError()) throw delivered.getError();
-        },
       }),
     };
     const scheduler = {
@@ -475,46 +477,6 @@ describe('atomic image and detection writes', () => {
     };
   };
 
-  it('reuses existing accounting when recovering a pre-receipt render attempt', async () => {
-    const ctx = await renderSetup();
-    const legacyId = okValue(
-      toProviderCallId(
-        `render:${ctx.identity.resultId}:${ctx.identity.attempt}`
-      )
-    );
-    okValue(
-      await createProviderCallLog({ db: database.db }).record({
-        id: legacyId,
-        userId: undefined,
-        designId,
-        purpose: 'render',
-        provider: 'fal',
-        endpoint: 'krea/v3/edit',
-        subjectId: ctx.identity.resultId,
-        providerRequestId: ctx.identity.providerRequestId,
-        status: 'succeeded',
-        costUsdMicros: 123,
-        costSource: 'reported',
-        details: {},
-        startedAt: ctx.kernel.clock.now(),
-        completedAt: ctx.kernel.clock.now(),
-      })
-    );
-    const before = (
-      await database.db.$client.query('SELECT * FROM provider_call')
-    ).rows;
-    expect(okValue(await ctx.pipeline.poll(ctx.identity)).type).toBe(
-      'result_succeeded'
-    );
-    expect(
-      (await database.db.$client.query('SELECT * FROM provider_call')).rows
-    ).toEqual(before);
-    expect(
-      (await database.db.$client.query('SELECT id FROM provider_call_receipt'))
-        .rows
-    ).toHaveLength(1);
-  });
-
   it.skipIf(!nativeUrl)(
     'publishes paid output while cost-log delivery remains unavailable',
     async () => {
@@ -553,6 +515,48 @@ describe('atomic image and detection writes', () => {
       expect(ctx.poll).toHaveBeenCalledOnce();
     }
   );
+
+  it('captures journaled acceptance even when its render was deleted', async () => {
+    const ctx = await renderSetup();
+    const context = okValue(
+      await ctx.renders.publicationContext(ctx.identity.resultId)
+    );
+    if (
+      context.type !== 'publication_context' ||
+      !context.context.accountingIdentity
+    )
+      throw new Error('Missing accounting identity');
+    const accountingIdentity = {
+      ...context.context.accountingIdentity,
+      receipt: {
+        ...context.context.accountingIdentity.receipt,
+        status: 'submitted' as const,
+        costUsdMicros: undefined,
+        costSource: 'unavailable' as const,
+        completedAt: undefined,
+      },
+    };
+    await database.db.$client.query('DELETE FROM render');
+    expect(
+      okValue(
+        await ctx.pipeline.persistSubmission({
+          ...ctx.identity,
+          settings: {},
+          prompt: '',
+          submittedAt: ctx.kernel.clock.now().toISOString(),
+          accountingIdentity,
+        })
+      ).type
+    ).toBe('result_attempt_superseded');
+    expect(
+      (
+        await database.db.$client.query(
+          'SELECT status FROM provider_call_receipt'
+        )
+      ).rows
+    ).toEqual([{ status: 'submitted' }]);
+    expect(ctx.poll).not.toHaveBeenCalled();
+  });
 
   it('recovers a stored URL render after publication failed and the provider URL expired', async () => {
     const ctx = await renderSetup();
@@ -601,7 +605,8 @@ describe('atomic image and detection writes', () => {
         ?.bytes
     ).toEqual(ctx.bytes);
     expect(
-      (await database.db.$client.query('SELECT id FROM provider_call')).rows
+      (await database.db.$client.query('SELECT id FROM provider_call_receipt'))
+        .rows
     ).toHaveLength(1);
   });
 
@@ -645,6 +650,12 @@ describe('atomic image and detection writes', () => {
       await ctx.renders.saveOutput({
         ...ctx.identity,
         checkpoint: {
+          receipt: makeProviderReceipt({
+            designId,
+            subjectId: ctx.identity.resultId,
+            providerRequestId: ctx.identity.providerRequestId,
+            startedAt: ctx.kernel.clock.now().toISOString(),
+          }),
           source: { kind: 'url', url: 'https://provider.test/old' },
           objectKey: okValue(toObjectKey('results/old.img')),
           contentType: null,
@@ -703,7 +714,11 @@ describe('atomic image and detection writes', () => {
           providerRequestId: 'stale',
           settings: {},
           prompt: '',
-          submittedAt: new Date(),
+          submittedAt: new Date().toISOString(),
+          accountingIdentity: {
+            invocationId: 'replacement',
+            receipt: makeProviderReceipt(),
+          },
         })
       ).type
     ).toBe('result_attempt_superseded');
@@ -806,7 +821,7 @@ describe('atomic image and detection writes', () => {
       expect(
         (
           await database.db.$client.query(
-            'SELECT status, "costUsdMicros" FROM provider_call WHERE purpose = \'background_removal\''
+            'SELECT status, "costUsdMicros" FROM provider_call_receipt WHERE purpose = \'background_removal\''
           )
         ).rows
       ).toEqual([{ status: 'succeeded', costUsdMicros: '321' }]);
@@ -866,7 +881,7 @@ describe('atomic image and detection writes', () => {
     );
     expect(ctx.scheduler.schedule).toHaveBeenCalledOnce();
     const calls = await database.db.$client.query(
-      'SELECT status, "costUsdMicros" FROM provider_call'
+      'SELECT status, "costUsdMicros" FROM provider_call_receipt'
     );
     expect(calls.rows).toEqual([{ status: 'succeeded', costUsdMicros: '123' }]);
   });
@@ -991,8 +1006,11 @@ describe('atomic image and detection writes', () => {
         ).type
       ).toBe('no_detection');
       expect(
-        (await database.db.$client.query('SELECT status FROM provider_call'))
-          .rows
+        (
+          await database.db.$client.query(
+            'SELECT status FROM provider_call_receipt'
+          )
+        ).rows
       ).toEqual([{ status: 'succeeded' }]);
     } finally {
       await cleanup();

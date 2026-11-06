@@ -11,9 +11,9 @@ import {
   toRenderId,
   toRenderResultId,
 } from '@/modules/kernel/domain/ids';
-import { createTransactionRunner } from '@/modules/kernel/infrastructure/db/client';
 import { observeRepository } from '@/modules/kernel/infrastructure/db/observability';
 import { createProviderReceiptStore } from '@/modules/kernel/infrastructure/db/provider-accounting-drizzle';
+import { runRepositoryTransaction } from '@/modules/kernel/infrastructure/db/repository-transaction';
 import { retiredOutputCheckpoint } from '@/modules/kernel/infrastructure/db/retired-output-checkpoint';
 import { design as designTable } from '@/modules/kernel/infrastructure/db/schema';
 import type { DbLike } from '@/modules/kernel/infrastructure/db/types';
@@ -441,6 +441,25 @@ export const createRenderRepository = ({
       }
     },
     async saveSubmission(input) {
+      const matchesSaved = async () => {
+        const rows = await db
+          .select({ id: resultTable.id })
+          .from(resultTable)
+          .where(
+            and(
+              eq(resultTable.id, input.resultId),
+              eq(resultTable.attempt, input.attempt),
+              eq(resultTable.workflowRunId, input.workflowRunId),
+              eq(resultTable.providerRequestId, input.providerRequestId),
+              inArray(resultTable.status, ['submitted', 'succeeded']),
+              eq(resultTable.accountingIdentity, input.accountingIdentity),
+              eq(resultTable.settings, input.settings),
+              eq(resultTable.prompt, input.prompt),
+              eq(resultTable.submittedAt, new Date(input.submittedAt))
+            )
+          );
+        return rows.length === 1;
+      };
       try {
         const rows = await db
           .update(resultTable)
@@ -449,8 +468,8 @@ export const createRenderRepository = ({
             providerRequestId: input.providerRequestId,
             settings: input.settings,
             prompt: input.prompt,
-            submittedAt: input.submittedAt,
-            accountingIdentity: input.accountingIdentity ?? null,
+            submittedAt: new Date(input.submittedAt),
+            accountingIdentity: input.accountingIdentity,
           })
           .where(
             and(
@@ -463,30 +482,33 @@ export const createRenderRepository = ({
           )
           .returning({ id: resultTable.id });
         return Result.Ok({
-          type: rows.length ? 'result_submitted' : 'result_attempt_superseded',
+          type:
+            rows.length || (await matchesSaved())
+              ? 'result_submitted'
+              : 'result_attempt_superseded',
         });
       } catch (error) {
-        return Result.Error(dbError(error));
+        const original = dbError(error);
+        try {
+          if (await matchesSaved())
+            return Result.Ok({ type: 'result_submitted' });
+        } catch {
+          return Result.Error(original);
+        }
+        return Result.Error(original);
       }
     },
     async saveOutput(input) {
       try {
-        if (input.checkpoint.receipt && isRootDatabase(db)) {
-          return await createTransactionRunner(db).run(async (tx) => {
-            const saved = await createRenderRepository({
-              db: tx,
-              modelOrder,
-            }).saveOutput(input);
-            if (saved.isError()) throw saved.getError();
-            return saved;
-          });
-        }
-        if (input.checkpoint.receipt) {
-          const captured = await createProviderReceiptStore({ db }).capture(
-            input.checkpoint.receipt
+        if (isRootDatabase(db)) {
+          return await runRepositoryTransaction(db, (tx) =>
+            createRenderRepository({ db: tx, modelOrder }).saveOutput(input)
           );
-          if (captured.isError()) return Result.Error(captured.getError());
         }
+        const captured = await createProviderReceiptStore({ db }).capture(
+          input.checkpoint.receipt
+        );
+        if (captured.isError()) return Result.Error(captured.getError());
         const rows = await db
           .update(resultTable)
           .set({ outputCheckpoint: input.checkpoint })
@@ -534,7 +556,7 @@ export const createRenderRepository = ({
     async retryAttempt(input) {
       try {
         if (isRootDatabase(db)) {
-          return await createTransactionRunner(db).run(async (tx) => {
+          return await runRepositoryTransaction(db, async (tx) => {
             const [previous] = await tx
               .select({ checkpoint: resultTable.outputCheckpoint })
               .from(resultTable)

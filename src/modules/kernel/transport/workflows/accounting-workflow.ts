@@ -45,15 +45,18 @@ export async function accountingReconcileWorkflow() {
     const page = await listStep({ before, after });
     if (!page.ids.length) break;
     // oxlint-disable-next-line no-await-in-loop -- isolate exhausted receipts and continue the batch.
-    const results = await Promise.allSettled(
-      page.ids.map((id) => deliverStep(id))
-    );
-    delivered += results.filter(
-      (result) =>
-        result.status === 'fulfilled' &&
-        result.value.type === 'receipt_delivered'
-    ).length;
-    failed += results.filter((result) => result.status === 'rejected').length;
+    for (let offset = 0; offset < page.ids.length; offset += 5) {
+      // oxlint-disable-next-line no-await-in-loop -- cap database delivery concurrency independently of page size.
+      const results = await Promise.allSettled(
+        page.ids.slice(offset, offset + 5).map((id) => deliverStep(id))
+      );
+      delivered += results.filter(
+        (result) =>
+          result.status === 'fulfilled' &&
+          result.value.type === 'receipt_delivered'
+      ).length;
+      failed += results.filter((result) => result.status === 'rejected').length;
+    }
     after = page.ids.at(-1);
   }
   const summary = await summaryStep();

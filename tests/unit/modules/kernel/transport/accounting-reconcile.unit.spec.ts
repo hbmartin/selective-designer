@@ -64,4 +64,23 @@ describe('production cron configuration', () => {
       'synthetic-production-cron-secret-for-tests'
     );
   });
+  it('rejects placeholder and absent secrets outside Vercel in a production runtime', () => {
+    vi.stubEnv('NODE_ENV', 'production');
+    vi.stubEnv('VERCEL_ENV', undefined);
+    for (const secret of [
+      undefined,
+      'local-accounting-cron-secret-for-development',
+    ]) {
+      vi.stubEnv('CRON_SECRET', secret);
+      expect(() => getAccountingConfig()).toThrow('CRON_SECRET');
+    }
+  });
+  it('allows a disabled preview endpoint but rejects the public placeholder', () => {
+    vi.stubEnv('NODE_ENV', 'production');
+    vi.stubEnv('VERCEL_ENV', 'preview');
+    vi.stubEnv('CRON_SECRET', undefined);
+    expect(getAccountingConfig()).toEqual({ cronSecret: undefined });
+    vi.stubEnv('CRON_SECRET', 'local-accounting-cron-secret-for-development');
+    expect(() => getAccountingConfig()).toThrow('CRON_SECRET');
+  });
 });

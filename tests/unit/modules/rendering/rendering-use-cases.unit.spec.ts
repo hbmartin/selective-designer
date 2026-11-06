@@ -238,7 +238,7 @@ const setup = (options: { enabledModelIds?: readonly string[] } = {}) => {
       });
     },
   };
-  const pipeline = createRenderingPipelineUseCases({
+  const rawPipeline = createRenderingPipelineUseCases({
     renderRepository: renders.repository,
     renderInputs,
     maskCompositor,
@@ -261,6 +261,23 @@ const setup = (options: { enabledModelIds?: readonly string[] } = {}) => {
     logger,
   });
 
+  const pipeline = {
+    ...rawPipeline,
+    async submit(input: Parameters<typeof rawPipeline.submit>[0]): Promise<
+      import('@/modules/kernel').ApplicationResult<{
+        type: string;
+        providerRequestId?: string;
+      }>
+    > {
+      const result = await rawPipeline.submit(input);
+      if (result.isError() || result.get().type !== 'result_accepted')
+        return result;
+      const accepted = result.get();
+      return accepted.type === 'result_accepted'
+        ? rawPipeline.persistSubmission(accepted.submission)
+        : result;
+    },
+  };
   const addImage = (imageId: ImageId) =>
     images.set(imageId, {
       imageId,
@@ -293,6 +310,7 @@ const setup = (options: { enabledModelIds?: readonly string[] } = {}) => {
   return {
     useCases,
     pipeline,
+    rawPipeline,
     resultImages,
     resultOutputReferences,
     storage,
@@ -638,7 +656,7 @@ describe('render pipeline', () => {
       expect(poll).toHaveBeenCalledOnce();
       expect(copy).toHaveBeenCalledTimes(phase === 'source read' ? 2 : 1);
       expect(provider.requests).toHaveLength(1);
-      expect(ctx.calls.calls.size).toBe(1);
+      expect(ctx.calls.receipts.size).toBe(1);
       expect(ctx.storage.objects.get(`results/${result.id}/1/raw.img`)).toEqual(
         { bytes: Uint8Array.of(4, 5, 6), contentType: 'image/webp' }
       );
@@ -707,6 +725,7 @@ describe('render pipeline', () => {
     expect(okValue(await ctx.pipeline.submit(execution(result)))).toEqual({
       type: 'result_already_submitted',
       providerRequestId: 'req-1',
+      receiptId: expect.any(String),
     });
     const krea = ctx.models.get('krea-3');
     expect(krea?.requests).toHaveLength(1);
@@ -798,7 +817,7 @@ describe('render pipeline', () => {
       costSource: 'price_table',
       completedAt: now,
     });
-    expect([...ctx.calls.calls.values()]).toEqual([
+    expect([...ctx.calls.receipts.values()]).toEqual([
       expect.objectContaining({
         id: expect.stringMatching(/^request:/u),
         purpose: 'render',
@@ -1650,6 +1669,11 @@ describe('independent render accounting', () => {
         ).type
       ).toBe('render_updated');
       expect(result.attempt).toBe(2);
+      // Retry returns after scheduling; the workflow owns reference checks/deletion.
+      expect(ctx.storage.objects.has(objectKey)).toBe(true);
+      okValue(
+        await ctx.pipeline.discardOutput({ ...execution(result), objectKey })
+      );
       expect(ctx.storage.objects.has(objectKey)).toBe(state !== 'unreferenced');
       expect(ctx.calls.receipts.size).toBe(1);
     }
@@ -1691,5 +1715,106 @@ describe('independent render accounting', () => {
     expect(receipt.providerRequestId).toBeUndefined();
     expect(receipt.id).toMatch(/^invocation:/u);
     expect(JSON.stringify(receipt)).not.toContain('synthetic-locator-token');
+  });
+});
+
+describe('accepted submission handoff', () => {
+  const acceptedSetup = async () => {
+    const ctx = setup({ enabledModelIds: ['krea-3'] });
+    ctx.addItem('chair');
+    await ctx.saveDraft({ edits: [placement('one', 'chair')], prompt: '' });
+    await ctx.submit();
+    const result = ctx.renders.renders[0]!.results[0]!;
+    const accepted = okValue(await ctx.rawPipeline.submit(execution(result)));
+    expect(accepted.type).toBe('result_accepted');
+    if (accepted.type !== 'result_accepted')
+      throw new Error('Expected accepted request');
+    return { ...ctx, result, accepted: accepted.submission };
+  };
+  it('retries persistence of journaled acceptance without another provider purchase', async () => {
+    const ctx = await acceptedSetup();
+    const original = ctx.renders.repository.saveSubmission;
+    const save = vi
+      .spyOn(ctx.renders.repository, 'saveSubmission')
+      .mockResolvedValueOnce(
+        Result.Error(
+          new AppError({
+            code: 'DATABASE_DOWN',
+            category: 'system',
+            status: 500,
+          })
+        )
+      );
+    expect(
+      (await ctx.rawPipeline.persistSubmission(ctx.accepted)).isError()
+    ).toBe(true);
+    expect(ctx.calls.receipts.size).toBe(1);
+    expect(ctx.result.status).toBe('pending');
+    save.mockImplementation(original);
+    expect(
+      okValue(await ctx.rawPipeline.persistSubmission(ctx.accepted)).type
+    ).toBe('result_submitted');
+    expect(
+      okValue(await ctx.rawPipeline.persistSubmission(ctx.accepted)).type
+    ).toBe('result_submitted');
+    expect(ctx.models.get('krea-3')!.requests).toHaveLength(1);
+  });
+  it.each(['replacement', 'deletion'])(
+    'captures accepted work after %s',
+    async (loss) => {
+      const ctx = await acceptedSetup();
+      if (loss === 'replacement') ctx.result.attempt += 1;
+      else ctx.renders.renders.splice(0);
+      expect(
+        okValue(await ctx.rawPipeline.persistSubmission(ctx.accepted)).type
+      ).toBe('result_attempt_superseded');
+      expect([...ctx.calls.receipts.values()]).toMatchObject([
+        {
+          status: 'submitted',
+          costSource: 'unavailable',
+          providerRequestId: 'req-1',
+        },
+      ]);
+      expect(ctx.calls.calls.size).toBe(0);
+    }
+  );
+  it('keeps completed historical registrations readable without a receipt', async () => {
+    const ctx = await acceptedSetup();
+    okValue(await ctx.rawPipeline.persistSubmission(ctx.accepted));
+    ctx.result.status = 'succeeded';
+    const original = ctx.renders.repository.publicationContext;
+    vi.spyOn(ctx.renders.repository, 'publicationContext').mockImplementation(
+      async (id) => {
+        const found = await original(id);
+        if (found.isOk()) {
+          const value = found.get();
+          if (
+            value.type === 'publication_context' &&
+            value.context.accountingIdentity
+          )
+            Reflect.deleteProperty(value.context.accountingIdentity, 'receipt');
+        }
+        return found;
+      }
+    );
+    expect(
+      okValue(await ctx.rawPipeline.submit(execution(ctx.result)))
+    ).toMatchObject({
+      type: 'result_already_submitted',
+      providerRequestId: 'req-1',
+    });
+    expect(ctx.models.get('krea-3')!.requests).toHaveLength(1);
+  });
+  it('records provider-confirmed failure separately from local failure', async () => {
+    const ctx = await acceptedSetup();
+    okValue(await ctx.rawPipeline.persistSubmission(ctx.accepted));
+    ctx.models.get('krea-3')!.adapter.poll = async () =>
+      Result.Ok({ type: 'model_failed', reason: 'provider_rejected' });
+    expect(okValue(await ctx.rawPipeline.poll(polling(ctx.result))).type).toBe(
+      'result_failed'
+    );
+    expect([...ctx.calls.receipts.values()]).toMatchObject([
+      { status: 'failed' },
+    ]);
   });
 });
