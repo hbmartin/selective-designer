@@ -1,7 +1,7 @@
 export type * from './application/ports/output-cleanup';
 export type * from './application/ports/ports';
 export type { OutputCleanupDeps } from './application/use-cases/output-cleanup';
-export { cleanupRenderOutput } from './application/use-cases/output-cleanup';
+export { createRenderOutputCleanup } from './application/use-cases/output-cleanup';
 export type {
   RenderResultView,
   RenderSourceView,

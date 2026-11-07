@@ -137,3 +137,15 @@ export const renderOutputCleanup = pgTable(
       .where(sql`${t.completedAt} is null`),
   ]
 );
+
+/** Sanitized, terminal evidence; never a storage reference or deletion target. */
+export const renderOutputCleanupBlocked = pgTable(
+  'render_output_cleanup_blocked',
+  {
+    fingerprint: text('fingerprint').primaryKey(),
+    resultId: text('resultId'),
+    attempt: integer('attempt'),
+    reasonCode: text('reasonCode').notNull(),
+    createdAt: timestamp('createdAt', { precision: 3, mode: 'date' }).notNull(),
+  }
+);

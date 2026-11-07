@@ -11,6 +11,7 @@ import {
 } from '@/modules/kernel/transport/workflow/step-result-mapper';
 
 import type { AcceptedRenderSubmission } from '../../application/ports/ports';
+import { SubmissionPersistenceError } from '../../application/ports/submission-persistence-error';
 
 export const MAX_POLLS = 150;
 export const pollDelayMs = (poll: number) => Math.min(10, 2 + poll) * 1000;
@@ -44,22 +45,29 @@ async function submitStep(input: Execution) {
 async function persistSubmissionStep(input: AcceptedRenderSubmission) {
   'use step';
   const result = await (await pipeline()).persistSubmission(input);
-  if (result.isOk()) return result.get();
+  if (result.isOk()) return { ...result.get(), receiptCaptured: true };
   const error = result.getError();
   return {
     type: 'submission_persistence_error' as const,
     code: error.code,
     retryable: isRetryableAppError(error),
+    receiptCaptured:
+      error instanceof SubmissionPersistenceError && error.receiptCaptured,
   };
 }
 persistSubmissionStep.maxRetries = 0;
-async function unresolvedSubmissionStep(input: Execution, code: string) {
+async function unresolvedSubmissionStep(
+  input: Execution,
+  code: string,
+  receiptCaptured: boolean
+) {
   'use step';
   (await pipeline()).reportSubmissionUnresolved({
     resultId: input.resultId,
     attempt: input.attempt,
     workflowRunId: input.workflowRunId,
     code,
+    receiptCapture: receiptCaptured ? 'confirmed' : 'unconfirmed',
   });
 }
 
@@ -68,32 +76,43 @@ export const persistenceDelayMs = (retry: number) =>
 
 async function recoverSubmission(input: AcceptedRenderSubmission) {
   let retry = 0;
-  let code = 'RENDER_SUBMISSION_PERSISTENCE_UNRESOLVED';
+  let receiptCaptured = false;
   const deadline = Date.parse(input.attemptDeadlineAt);
   while (true) {
-    if (!Number.isFinite(deadline) || Date.now() >= deadline) {
-      await unresolvedSubmissionStep(input, code);
-      return { type: 'result_submission_unresolved' as const };
-    }
     let result;
     try {
-      // oxlint-disable-next-line no-await-in-loop -- replay the same journaled acceptance.
+      // oxlint-disable-next-line no-await-in-loop -- always attempt the journaled acceptance once.
       result = await persistSubmissionStep(input);
     } catch (error) {
       result = {
         type: 'submission_persistence_error' as const,
-        code: failureCode(error, code),
+        code: failureCode(error, 'RENDER_SUBMISSION_PERSISTENCE_UNRESOLVED'),
         retryable: true,
+        receiptCaptured: false,
       };
     }
-    if (result.type !== 'submission_persistence_error') return result;
-    code = result.code;
-    if (!result.retryable)
-      return { type: 'submission_persistence_blocked' as const, code };
+    receiptCaptured ||= result.receiptCaptured;
+    if (result.type !== 'submission_persistence_error')
+      return { ...result, receiptCaptured };
+    const code = Number.isFinite(deadline)
+      ? result.code
+      : 'RENDER_SUBMISSION_DEADLINE_INVALID';
+    if (!result.retryable || !Number.isFinite(deadline))
+      return {
+        type: 'submission_persistence_blocked' as const,
+        code,
+        receiptCaptured,
+      };
     const remaining = deadline - Date.now();
-    if (remaining > 0) {
-      // oxlint-disable-next-line no-await-in-loop -- durable backoff never extends the attempt deadline.
-      await sleep(Math.min(persistenceDelayMs(retry++), remaining));
+    if (remaining <= 0) {
+      await unresolvedSubmissionStep(input, code, receiptCaptured);
+      return { type: 'result_submission_unresolved' as const, receiptCaptured };
+    }
+    // oxlint-disable-next-line no-await-in-loop -- durable backoff never extends the attempt deadline.
+    await sleep(Math.min(persistenceDelayMs(retry++), remaining));
+    if (Date.now() >= deadline) {
+      await unresolvedSubmissionStep(input, code, receiptCaptured);
+      return { type: 'result_submission_unresolved' as const, receiptCaptured };
     }
   }
 }
@@ -154,9 +173,7 @@ async function runResult(input: Execution): Promise<string> {
   };
   try {
     const accepted = await submitStep(input);
-    if (accepted.type === 'result_accepted')
-      receiptId = accepted.submission.accountingIdentity.receipt.id;
-    else if (accepted.type === 'result_already_submitted')
+    if (accepted.type === 'result_already_submitted')
       receiptId = accepted.receiptId;
     let submitted:
       | Awaited<ReturnType<typeof recoverSubmission>>
@@ -164,6 +181,8 @@ async function runResult(input: Execution): Promise<string> {
     if (accepted.type === 'result_accepted') {
       providerRequestId = accepted.submission.providerRequestId;
       submitted = await recoverSubmission(accepted.submission);
+      if ('receiptCaptured' in submitted && submitted.receiptCaptured)
+        receiptId = accepted.submission.accountingIdentity.receipt.id;
       if (submitted.type === 'submission_persistence_blocked')
         return await fail(submitted.code, true);
     } else submitted = accepted;

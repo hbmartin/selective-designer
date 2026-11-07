@@ -2,14 +2,16 @@ import { getRenderOutputCleanup } from '../src/composition/render-output-cleanup
 import { getDefaultDbClient } from '../src/modules/kernel/backend';
 import { actionableErrorCode } from '../src/modules/kernel/domain/errors/actionable-error-code';
 import { safeErrorDiagnostics } from '../src/modules/kernel/domain/errors/safe-error-diagnostics';
-import { systemClock } from '../src/modules/kernel/infrastructure/clock/system-clock';
+import type { CleanupCursor } from '../src/modules/rendering';
 
 let db: ReturnType<typeof getDefaultDbClient> | undefined;
 try {
   db = getDefaultDbClient();
   const cleanup = getRenderOutputCleanup();
-  const before = systemClock.now().toISOString();
-  let after: string | undefined;
+  const cutoff = await cleanup.cutoff();
+  if (cutoff.isError()) throw cutoff.getError();
+  const before = cutoff.get().before;
+  let after: CleanupCursor | undefined;
   let completed = 0;
   let failed = 0;
   while (true) {
@@ -31,9 +33,16 @@ try {
         });
       } else if (result.get().type === 'cleanup_completed') completed++;
     }
-    after = page.get().ids.at(-1);
+    after = page.get().cursor;
   }
-  console.log({ completed, failed });
+  const summary = await cleanup.summary();
+  if (summary.isError()) throw summary.getError();
+  console.log({
+    completed,
+    failed,
+    blocked: summary.get().blocked,
+    blockedReasons: summary.get().reasons,
+  });
   if (failed) process.exitCode = 1;
 } catch (error) {
   console.error('Rendering cleanup failed.', {

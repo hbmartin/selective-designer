@@ -5,6 +5,7 @@ import { okValue } from '@tests/support/result';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import type { ApplicationResult } from '@/modules/kernel';
+import { bindUseCases } from '@/modules/kernel/application/bind-use-cases';
 
 const host = vi.hoisted(() => ({ getEnv: vi.fn(), waitUntil: vi.fn() }));
 vi.mock('@vercel/functions', () => host);
@@ -13,7 +14,7 @@ vi.mock('@/modules/kernel/workflows/backend', () => ({
   accountingDeliveryWorkflow: vi.fn(),
 }));
 import {
-  createAccountingFacade,
+  createAccountingScope,
   deferAccountingDelivery,
   withAccountingDelivery,
 } from '@/composition/accounting-delivery';
@@ -121,20 +122,65 @@ describe('accounting dispatch ownership', () => {
   it('wraps newly exposed facade operations without a method allowlist', async () => {
     const gateway = createFakeProviderCallLog();
     host.getEnv.mockReturnValue({ VERCEL: '1', VERCEL_ENV: 'production' });
-    const facade = createAccountingFacade({
-      accounting: gateway.accounting,
-      logger: logger(),
-      owner: 'http',
-      create: (accounting) => ({
-        newlyAdded: async () => {
-          await accounting.capture(makeProviderReceipt());
-          return 'published';
-        },
-      }),
-    });
-    expect(await facade.newlyAdded()).toBe('published');
+    const definitions = {
+      newlyAdded: async (
+        deps: { providerAccounting: typeof gateway.accounting },
+        _input: undefined
+      ) => {
+        await deps.providerAccounting.capture(makeProviderReceipt());
+        return 'published';
+      },
+    };
+    const facade = bindUseCases(
+      { providerAccounting: gateway.accounting },
+      definitions,
+      createAccountingScope({ logger: logger(), owner: 'http' })
+    );
+    expect(await facade.newlyAdded(undefined)).toBe('published');
     expect(host.waitUntil).toHaveBeenCalledOnce();
     // Finish the bounded background dispatch without opening a real queue.
+  });
+  it('binds definitions once and isolates overlapping accounting scopes', async () => {
+    const gateway = createFakeProviderCallLog();
+    host.getEnv.mockReturnValue({ VERCEL: '1', VERCEL_ENV: 'production' });
+    const { start } = await import('workflow/api');
+    const pending: Promise<unknown>[] = [];
+    host.waitUntil.mockImplementation((task) => pending.push(task));
+    let release!: () => void;
+    const ready = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const definitions = vi.fn(() => ({
+      operation: async (
+        deps: { providerAccounting: typeof gateway.accounting },
+        id: string
+      ) => {
+        await deps.providerAccounting.capture(
+          makeProviderReceipt({ providerRequestId: id })
+        );
+        if (id === 'slow') await ready;
+        return id;
+      },
+    }));
+    const facade = bindUseCases(
+      { providerAccounting: gateway.accounting },
+      definitions(),
+      createAccountingScope({ logger: logger(), owner: 'http' })
+    );
+    const slow = facade.operation('slow');
+    expect(await facade.operation('fast')).toBe('fast');
+    await Promise.all(pending);
+    expect(vi.mocked(start)).toHaveBeenCalledTimes(1);
+    release();
+    expect(await slow).toBe('slow');
+    await Promise.all(pending);
+    expect(vi.mocked(start)).toHaveBeenCalledTimes(2);
+    expect(definitions).toHaveBeenCalledOnce();
+    expect(
+      new Set(
+        vi.mocked(start).mock.calls.map((call) => JSON.stringify(call[1]))
+      ).size
+    ).toBe(2);
   });
   it('registers HTTP work with the supported host owner and skips unsupported lifetimes', async () => {
     const task = vi.fn(async () => {});

@@ -7,7 +7,6 @@ import {
   toBatchId,
   toDesignId,
   toImageId,
-  toObjectKey,
   toRenderId,
   toRenderResultId,
 } from '@/modules/kernel/domain/ids';
@@ -605,18 +604,15 @@ export const createRenderRepository = ({
         if (!rows[0]) return Result.Ok({ type: 'result_attempt_superseded' });
         let cleanupId: string | null = null;
         if (previous?.checkpoint) {
-          const key = toObjectKey(previous.checkpoint.objectKey);
-          if (key.isError()) throw key.getError();
-          const queued = await createOutputCleanupStore({ db }).enqueue(
-            {
-              resultId: input.resultId,
-              attempt: input.expectedAttempt,
-              objectKey: key.get(),
-            },
-            input.startedAt
-          );
+          const queued = await createOutputCleanupStore({ db }).enqueue({
+            resultId: input.resultId,
+            attempt: input.expectedAttempt,
+            objectKey: previous.checkpoint.objectKey,
+          });
           if (queued.isError()) throw queued.getError();
-          cleanupId = queued.get().cleanupId;
+          const outcome = queued.get();
+          cleanupId =
+            outcome.type === 'cleanup_queued' ? outcome.cleanupId : null;
         }
         return Result.Ok({
           type: 'result_retry_claimed',

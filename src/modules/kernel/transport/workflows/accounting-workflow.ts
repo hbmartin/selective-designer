@@ -1,4 +1,5 @@
 import { unwrapStepResult } from '../workflow/step-result-mapper';
+import { runWorkerPage } from '../workflow/worker-page';
 import { toProviderCallId } from '../../domain/ids';
 
 type RecoveryModule = typeof import('@/composition/accounting-pipeline');
@@ -44,24 +45,13 @@ export async function accountingReconcileWorkflow() {
     // oxlint-disable-next-line no-await-in-loop -- durable cursor advances after a bounded batch.
     const page = await listStep({ before, after });
     if (!page.ids.length) break;
-    let next = 0;
-    const worker = async () => {
-      while (next < page.ids.length) {
-        const id = page.ids[next++];
-        if (id === undefined) break;
-        try {
-          // oxlint-disable-next-line no-await-in-loop -- replenish each slot independently of slow receipts.
-          const result = await deliverStep(id);
-          if (result.type === 'receipt_delivered') delivered++;
-        } catch {
-          failed++;
-        }
-      }
-    };
-    // oxlint-disable-next-line no-await-in-loop -- maintain five durable slots per page.
-    await Promise.all(
-      Array.from({ length: Math.min(5, page.ids.length) }, worker)
+    // oxlint-disable-next-line no-await-in-loop -- deterministic bounded page processing.
+    const counts = await runWorkerPage(
+      page.ids,
+      async (id) => (await deliverStep(id)).type === 'receipt_delivered'
     );
+    delivered += counts.completed;
+    failed += counts.failed;
     after = page.ids.at(-1);
   }
   const summary = await summaryStep();

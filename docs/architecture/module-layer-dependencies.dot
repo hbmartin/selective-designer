@@ -197,6 +197,7 @@ digraph ModuleLayerDependencies {
   "moodboard/presentation" -> "kernel/domain" [style="solid"];
   "moodboard/presentation" -> "moodboard/domain" [style="solid"];
   "moodboard/presentation" -> "moodboard/public" [style="solid"];
+  "moodboard/public" -> "kernel/application" [style="solid"];
   "moodboard/public" -> "moodboard/application" [style="solid"];
   "moodboard/public" -> "moodboard/domain" [style="dotted"];
   "moodboard/public" -> "moodboard/infrastructure" [style="solid"];
@@ -224,6 +225,7 @@ digraph ModuleLayerDependencies {
   "rendering/transport" -> "auth/public" [style="dashed"];
   "rendering/transport" -> "kernel/domain" [style="solid"];
   "rendering/transport" -> "kernel/transport" [style="solid"];
+  "rendering/transport" -> "rendering/application" [style="solid"];
   "rendering/transport" -> "rendering/domain" [style="solid"];
   "segmentation/application" -> "kernel/application" [style="solid"];
   "segmentation/application" -> "kernel/domain" [style="solid"];
@@ -236,6 +238,7 @@ digraph ModuleLayerDependencies {
   "segmentation/presentation" -> "auth/public" [style="solid"];
   "segmentation/presentation" -> "segmentation/application" [style="solid"];
   "segmentation/presentation" -> "segmentation/public" [style="solid"];
+  "segmentation/public" -> "kernel/application" [style="solid"];
   "segmentation/public" -> "segmentation/application" [style="solid"];
   "segmentation/public" -> "segmentation/domain" [style="solid"];
   "segmentation/public" -> "segmentation/infrastructure" [style="solid"];

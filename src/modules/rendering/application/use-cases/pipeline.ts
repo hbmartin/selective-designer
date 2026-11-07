@@ -26,13 +26,18 @@ import type {
   RenderExecution,
   RenderPublicationContext,
 } from '../ports/ports';
+import { SubmissionPersistenceError } from '../ports/submission-persistence-error';
 import type { Edit } from '../../domain/edit-set';
 import { MODEL_CATALOG } from '../../domain/model-catalog';
 import { buildPrompt } from '../../domain/prompt-builder';
 import { recipeReferences, targetBoxes } from '../../domain/recipe';
 import type { Render, RenderResult } from '../../domain/render';
 import type { RenderOutputCheckpoint } from '../../domain/render-output';
-import { validateRenderOutputTarget } from '../../domain/render-output-target';
+import {
+  RENDER_OUTPUT_EXTENSIONS,
+  renderOutputKey,
+  validateRenderOutputTarget,
+} from '../../domain/render-output-target';
 import { RENDER_RETRY_AFTER_MS } from '../../domain/render-retry-policy';
 
 const OUTPUT_MAX_BYTES = 40 * 1024 * 1024;
@@ -148,6 +153,17 @@ export async function submitResult(
   }
   if (result.status !== 'pending')
     return Result.Ok({ type: 'result_not_runnable' });
+  const deadlineMs = result.attemptStartedAt.getTime() + RENDER_RETRY_AFTER_MS;
+  if (!Number.isFinite(deadlineMs))
+    return Result.Error(
+      new AppError({
+        code: 'RENDER_SUBMISSION_DEADLINE_INVALID',
+        category: 'system',
+        status: 500,
+        retryable: false,
+      })
+    );
+  const attemptDeadlineAt = new Date(deadlineMs).toISOString();
   const request = await buildRequest(deps, render, result);
   if (request.isError()) return Result.Error(request.getError());
   const invocationId = deps.idGenerator.createId();
@@ -172,9 +188,7 @@ export async function submitResult(
     type: 'result_accepted',
     submission: {
       ...input,
-      attemptDeadlineAt: new Date(
-        result.attemptStartedAt.getTime() + RENDER_RETRY_AFTER_MS
-      ).toISOString(),
+      attemptDeadlineAt,
       providerRequestId: submission.providerRequestId,
       settings: submission.settings,
       prompt: request.get().prompt,
@@ -226,8 +240,25 @@ export async function persistSubmission(
         ...safeErrorDiagnostics(captured.getError()),
       },
     });
-    return Result.Error(captured.getError());
+    return Result.Error(
+      new SubmissionPersistenceError(captured.getError(), false)
+    );
   }
+  if (
+    typeof input.attemptDeadlineAt !== 'string' ||
+    !Number.isFinite(Date.parse(input.attemptDeadlineAt))
+  )
+    return Result.Error(
+      new SubmissionPersistenceError(
+        new AppError({
+          code: 'RENDER_SUBMISSION_DEADLINE_INVALID',
+          category: 'system',
+          status: 500,
+          retryable: false,
+        }),
+        true
+      )
+    );
   const saved = await deps.renderRepository.saveSubmission(input);
   if (saved.isError()) {
     deps.logger.warn({
@@ -239,7 +270,7 @@ export async function persistSubmission(
         ...safeErrorDiagnostics(saved.getError()),
       },
     });
-    return Result.Error(saved.getError());
+    return Result.Error(new SubmissionPersistenceError(saved.getError(), true));
   }
   if (saved.get().type === 'result_attempt_superseded')
     return Result.Ok({ type: 'result_attempt_superseded' });
@@ -288,7 +319,21 @@ export const discardLostOutput = async (
   RenderingResult<{ type: 'output_deleted' } | { type: 'output_retained' }>
 > => {
   const target = validateRenderOutputTarget({ ...input, objectKey });
-  if (target.isError()) return Result.Error(target.getError());
+  if (target.isError()) {
+    deps.logger.warn({
+      event: 'rendering.result.cleanup_failed',
+      details: {
+        resultId: /^[A-Za-z0-9_-]+$/u.test(input.resultId)
+          ? input.resultId
+          : undefined,
+        attempt: Number.isSafeInteger(input.attempt)
+          ? input.attempt
+          : undefined,
+        code: target.getError().code,
+      },
+    });
+    return Result.Error(target.getError());
+  }
   const referenced = await deps.resultOutputReferences.check(objectKey);
   if (referenced.isError()) {
     deps.logger.warn({
@@ -389,15 +434,10 @@ const checkpointProviderOutput = async (
     'url' | 'png' | 'jpeg' | 'webp',
     ObjectKey
   >;
-  for (const [format, extension] of Object.entries({
-    url: 'img',
-    png: 'png',
-    jpeg: 'jpg',
-    webp: 'webp',
-  }) as ['url' | 'png' | 'jpeg' | 'webp', string][]) {
-    const key = toObjectKey(
-      `results/${input.resultId}/${input.attempt}/raw.${extension}`
-    );
+  for (const format of Object.keys(
+    RENDER_OUTPUT_EXTENSIONS
+  ) as (keyof typeof RENDER_OUTPUT_EXTENSIONS)[]) {
+    const key = renderOutputKey(input.resultId, input.attempt, format);
     if (key.isError()) return Result.Error(key.getError());
     keys[format] = key.get();
   }
@@ -624,6 +664,9 @@ export async function markResultFailed(
 > {
   const saved = await deps.renderRepository.failResultAttempt({
     ...input,
+    reason: input.submissionPersistenceFailure
+      ? 'submission_recovery_failed'
+      : input.reason,
     now: deps.clock.now(),
   });
   if (saved.isError()) return Result.Error(saved.getError());

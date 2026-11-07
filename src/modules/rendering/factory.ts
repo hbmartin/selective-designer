@@ -1,6 +1,5 @@
 import {
   copyDraftPlacements,
-  discardLostOutput,
   markResultFailed,
   persistSubmission,
   pollResult,
@@ -25,7 +24,6 @@ import type {
   RenderingPipelineDeps,
   RenderingUseCaseDeps,
 } from './application/use-cases/types';
-import type { RenderOutputTarget } from './domain/render-output-target';
 
 type Input<TFn extends (deps: never, input: never) => unknown> =
   Parameters<TFn>[1];
@@ -60,17 +58,12 @@ export function createRenderingPipelineUseCases(deps: RenderingPipelineDeps) {
     persistSubmission: (input: Input<typeof persistSubmission>) =>
       persistSubmission(deps, input),
     poll: (input: Input<typeof pollResult>) => pollResult(deps, input),
-    discardOutput: (input: RenderOutputTarget) =>
-      discardLostOutput(
-        deps,
-        { ...input, workflowRunId: 'cleanup' },
-        input.objectKey
-      ),
     reportSubmissionUnresolved: (input: {
       resultId: string;
       attempt: number;
       workflowRunId: string;
       code: string;
+      receiptCapture: 'confirmed' | 'unconfirmed';
     }) => {
       deps.logger.warn({
         event: 'rendering.result.submission_unresolved',

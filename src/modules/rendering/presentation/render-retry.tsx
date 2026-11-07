@@ -20,10 +20,11 @@ export const RenderRetry = ({ result }: { result: RenderResultView }) => {
   if (!result.retryable) return null;
   const message =
     result.status === 'failed'
-      ? result.errorMessage?.startsWith('PROVIDER_RECEIPT_') ||
-        result.errorMessage === 'RENDER_ACCOUNTING_IDENTITY_MISSING'
+      ? result.failure.type === 'recovery_failed'
         ? t('rendering:errors.recoveryFailed')
-        : (result.errorMessage ?? '')
+        : result.failure.type === 'render_failure'
+          ? result.failure.message
+          : ''
       : t('rendering:history.delayed');
   return (
     <div className="flex flex-col gap-1">

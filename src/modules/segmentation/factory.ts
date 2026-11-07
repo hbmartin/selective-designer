@@ -1,5 +1,10 @@
 import { Result } from '@bloodyowl/boxed';
 
+import {
+  bindUseCases,
+  type UseCaseScope,
+} from '@/modules/kernel/application/bind-use-cases';
+
 import type {
   ClaimedDetectionRun,
   DetectionRun,
@@ -27,91 +32,115 @@ import { ownsDetectionLease } from './domain/detection-run';
 type Input<TFn extends (deps: never, input: never) => unknown> =
   Parameters<TFn>[1];
 
-export function createSegmentationUseCases(deps: SegmentationUseCaseDeps) {
-  return {
-    retryDetection: (input: Input<typeof retryDetection>) =>
-      retryDetection(deps, input),
-    list: (input: Input<typeof listRegions>) => listRegions(deps, input),
-    segment: (input: Input<typeof segmentByPrompt>) =>
-      segmentByPrompt(deps, input),
-    createManual: (input: Input<typeof createManualRegion>) =>
-      createManualRegion(deps, input),
-    update: (input: Input<typeof updateRegion>) => updateRegion(deps, input),
-    remove: (input: Input<typeof removeRegion>) => removeRegion(deps, input),
-  };
+export function createSegmentationUseCases(
+  deps: SegmentationUseCaseDeps,
+  scope?: UseCaseScope<SegmentationUseCaseDeps>
+) {
+  return bindUseCases(
+    deps,
+    {
+      retryDetection,
+      list: listRegions,
+      segment: segmentByPrompt,
+      createManual: createManualRegion,
+      update: updateRegion,
+      remove: removeRegion,
+    },
+    scope
+  );
 }
 export type SegmentationUseCases = ReturnType<
   typeof createSegmentationUseCases
 >;
 
 export function createSegmentationPipelineUseCases(
-  deps: SegmentationPipelineDeps
+  deps: SegmentationPipelineDeps,
+  scope?: UseCaseScope<SegmentationPipelineDeps>
 ) {
-  return {
-    claimDetection(run: ClaimedDetectionRun) {
-      const now = deps.clock.now();
-      return deps.regionRepository.claimDetection({
-        ...run,
-        now,
-        expiresAt: new Date(now.getTime() + DETECTION_LEASE_MS),
-      });
-    },
-    async prepareDetection(run: DetectionRun) {
-      const listed = await deps.regionRepository.findDetection(run.imageId);
-      if (listed.isError()) return Result.Error(listed.getError());
-      const state = listed.get();
-      if (!ownsDetectionLease(state, run, deps.clock.now()) || !state.progress)
-        return Result.Ok({ type: 'detection_superseded' } as const);
-      let concepts = state.progress.concepts;
-      if (concepts === null) {
-        const discovered = await detectionConceptsFor(deps, run.imageId);
-        if (discovered.isError()) return Result.Error(discovered.getError());
-        const outcome = discovered.get();
-        if (outcome.type === 'image_missing')
+  return bindUseCases(
+    deps,
+    {
+      claimDetection(deps: SegmentationPipelineDeps, run: ClaimedDetectionRun) {
+        const now = deps.clock.now();
+        return deps.regionRepository.claimDetection({
+          ...run,
+          now,
+          expiresAt: new Date(now.getTime() + DETECTION_LEASE_MS),
+        });
+      },
+      async prepareDetection(
+        deps: SegmentationPipelineDeps,
+        run: DetectionRun
+      ) {
+        const listed = await deps.regionRepository.findDetection(run.imageId);
+        if (listed.isError()) return Result.Error(listed.getError());
+        const state = listed.get();
+        if (
+          !ownsDetectionLease(state, run, deps.clock.now()) ||
+          !state.progress
+        )
           return Result.Ok({ type: 'detection_superseded' } as const);
-        concepts = outcome.concepts;
-      }
-      return deps.regionRepository.prepareDetection({
-        ...run,
-        concepts,
-        now: deps.clock.now(),
-      });
-    },
-    async finalizeDetection(run: DetectionRun) {
-      const outcome = await deps.regionRepository.finalizeDetection({
-        ...run,
-        now: deps.clock.now(),
-      });
-      if (outcome.isError()) {
-        deps.logger.warn({
-          event: 'segmentation.detection.finalize_failed',
-          details: run,
-          exception: outcome.getError(),
+        let concepts = state.progress.concepts;
+        if (concepts === null) {
+          const discovered = await detectionConceptsFor(deps, run.imageId);
+          if (discovered.isError()) return Result.Error(discovered.getError());
+          const outcome = discovered.get();
+          if (outcome.type === 'image_missing')
+            return Result.Ok({ type: 'detection_superseded' } as const);
+          concepts = outcome.concepts;
+        }
+        return deps.regionRepository.prepareDetection({
+          ...run,
+          concepts,
+          now: deps.clock.now(),
         });
-      }
-      return outcome;
-    },
-    async finishDetection(run: DetectionRun) {
-      const finished = await deps.regionRepository.finishDetection({
-        ...run,
-        now: deps.clock.now(),
-      });
-      if (finished.isError()) {
-        deps.logger.warn({
-          event: 'segmentation.detection.cleanup_failed',
-          details: run,
-          exception: finished.getError(),
+      },
+      async finalizeDetection(
+        deps: SegmentationPipelineDeps,
+        run: DetectionRun
+      ) {
+        const outcome = await deps.regionRepository.finalizeDetection({
+          ...run,
+          now: deps.clock.now(),
         });
-      }
-      return finished;
+        if (outcome.isError()) {
+          deps.logger.warn({
+            event: 'segmentation.detection.finalize_failed',
+            details: run,
+            exception: outcome.getError(),
+          });
+        }
+        return outcome;
+      },
+      async finishDetection(deps: SegmentationPipelineDeps, run: DetectionRun) {
+        const finished = await deps.regionRepository.finishDetection({
+          ...run,
+          now: deps.clock.now(),
+        });
+        if (finished.isError()) {
+          deps.logger.warn({
+            event: 'segmentation.detection.cleanup_failed',
+            details: run,
+            exception: finished.getError(),
+          });
+        }
+        return finished;
+      },
+      concepts: (
+        deps: SegmentationPipelineDeps,
+        imageId: Input<typeof detectionConceptsFor>
+      ) => detectionConceptsFor(deps, imageId),
+      detectConcept: (
+        deps: SegmentationPipelineDeps,
+        input: Input<typeof detectConcept>
+      ) => detectConcept(deps, input),
+      carryOver: (
+        deps: SegmentationPipelineDeps,
+        input: Input<typeof carryOverRegions>
+      ) => carryOverRegions(deps, input),
     },
-    concepts: (imageId: Input<typeof detectionConceptsFor>) =>
-      detectionConceptsFor(deps, imageId),
-    detectConcept: (input: Input<typeof detectConcept>) =>
-      detectConcept(deps, input),
-    carryOver: (input: Input<typeof carryOverRegions>) =>
-      carryOverRegions(deps, input),
-  };
+    scope
+  );
 }
 export type SegmentationPipelineUseCases = ReturnType<
   typeof createSegmentationPipelineUseCases

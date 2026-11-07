@@ -35,6 +35,7 @@ import type { RenderRecipe } from '@/modules/rendering';
 import {
   createRenderRepository,
   renderOutputCleanup,
+  renderOutputCleanupBlocked,
 } from '@/modules/rendering/testing';
 
 const ownerId = unwrapParseResult(toUserId('owner-1'));
@@ -802,6 +803,94 @@ describe('RenderRepositoryDrizzle', () => {
       } finally {
         await database.db.execute(
           sql`alter table render_output_cleanup drop constraint reject_cleanup`
+        );
+      }
+    }
+  );
+  it.each([
+    'region-masks/private.png',
+    'https://signed.example/output?token=private',
+    null,
+    { source: 'private' },
+    undefined,
+  ])(
+    'allows Retry while atomically recording blocked checkpoint evidence: %j',
+    async (objectKey) => {
+      const { input, startedAt } = await newAttempt('submitted');
+      okValue(
+        await repository.saveOutput({
+          ...input,
+          checkpoint: checkpointFor(startedAt),
+        })
+      );
+      if (objectKey === undefined)
+        await database.db.execute(
+          sql`update render_result set "outputCheckpoint" = "outputCheckpoint" - 'objectKey' where id = ${input.resultId}`
+        );
+      else
+        await database.db.execute(
+          sql`update render_result set "outputCheckpoint" = jsonb_set("outputCheckpoint", '{objectKey}', ${JSON.stringify(objectKey)}::jsonb) where id = ${input.resultId}`
+        );
+      expect(
+        okValue(
+          await repository.retryAttempt({
+            resultId: input.resultId,
+            expectedAttempt: 1,
+            startedAt: new Date(startedAt.getTime() + 31 * 60000),
+            expiredBeforeMs: startedAt.getTime(),
+          })
+        )
+      ).toMatchObject({
+        type: 'result_retry_claimed',
+        attempt: 2,
+        cleanupId: null,
+      });
+      const evidence = await database.db
+        .select()
+        .from(renderOutputCleanupBlocked);
+      expect(evidence).toHaveLength(1);
+      expect(JSON.stringify(evidence)).not.toContain('private');
+      expect(await database.db.select().from(renderOutputCleanup)).toEqual([]);
+    }
+  );
+  it.skipIf(!process.env.RECOVERY_TEST_DATABASE_URL)(
+    'rolls back Retry when blocked evidence cannot be saved',
+    async () => {
+      const { input, startedAt } = await newAttempt('submitted');
+      okValue(
+        await repository.saveOutput({
+          ...input,
+          checkpoint: checkpointFor(startedAt),
+        })
+      );
+      await database.db.execute(
+        sql`update render_result set "outputCheckpoint" = jsonb_set("outputCheckpoint", '{objectKey}', '"unsafe"'::jsonb) where id = ${input.resultId}`
+      );
+      await database.db.execute(
+        sql`alter table render_output_cleanup_blocked add constraint reject_retry_blocked check (false)`
+      );
+      try {
+        expect(
+          (
+            await repository.retryAttempt({
+              resultId: input.resultId,
+              expectedAttempt: 1,
+              startedAt: new Date(startedAt.getTime() + 31 * 60000),
+              expiredBeforeMs: startedAt.getTime(),
+            })
+          ).isError()
+        ).toBe(true);
+        expect(
+          okValue(await repository.publicationContext(input.resultId))
+        ).toMatchObject({
+          context: {
+            result: { attempt: 1, status: 'submitted' },
+            checkpoint: { objectKey: 'unsafe' },
+          },
+        });
+      } finally {
+        await database.db.execute(
+          sql`alter table render_output_cleanup_blocked drop constraint reject_retry_blocked`
         );
       }
     }

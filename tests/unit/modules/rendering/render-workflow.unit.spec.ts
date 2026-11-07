@@ -2,6 +2,7 @@ import { Result } from '@bloodyowl/boxed';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { AppError } from '@/modules/kernel';
+import { SubmissionPersistenceError } from '@/modules/rendering/testing';
 
 type Outcome = { type: string; [key: string]: unknown };
 const pipeline = vi.hoisted(() => ({
@@ -160,7 +161,7 @@ describe('render workflow', () => {
       result: 'result_submission_unresolved',
     });
     expect(pipeline.persistSubmission).toHaveBeenCalledWith(submission);
-    expect(pipeline.dispatchAccounting).toHaveBeenCalledWith('accepted-call');
+    expect(pipeline.dispatchAccounting).not.toHaveBeenCalled();
     expect(pipeline.submit).toHaveBeenCalledTimes(1);
     expect(pipeline.poll).not.toHaveBeenCalled();
     expect(pipeline.markFailed).not.toHaveBeenCalled();
@@ -260,6 +261,7 @@ describe('render workflow', () => {
     expect(pipeline.reportSubmissionUnresolved).toHaveBeenCalledWith({
       ...execution,
       code: 'DB_DOWN',
+      receiptCapture: 'unconfirmed',
     });
   });
   it('starts polling before dispatch and dispatches only after output completion', async () => {
@@ -316,6 +318,132 @@ describe('render workflow', () => {
     ).toEqual({ result: 'result_succeeded' });
     expect(pipeline.submit).toHaveBeenCalledBefore(pipeline.cleanup);
     expect(pipeline.cleanup).toHaveBeenCalledWith('results/res-a/1/raw.png');
+  });
+  it.each(['2026-11-06T19:00:00.000Z', '2026-11-06T18:59:59.000Z'])(
+    'persists late acceptance once and polls the same request: %s',
+    async (attemptDeadlineAt) => {
+      pipeline.submit.mockResolvedValue(
+        Result.Ok({
+          type: 'result_accepted',
+          submission: {
+            ...execution,
+            providerRequestId: 'paid',
+            attemptDeadlineAt,
+            accountingIdentity: { receipt: { id: 'accepted-call' } },
+          },
+        })
+      );
+      pipeline.persistSubmission.mockResolvedValue(
+        Result.Ok({ type: 'result_submitted', providerRequestId: 'paid' })
+      );
+      pipeline.poll.mockResolvedValue(Result.Ok({ type: 'result_succeeded' }));
+      expect(await renderResultWorkflow(attempt)).toEqual({
+        result: 'result_succeeded',
+      });
+      expect(pipeline.persistSubmission).toHaveBeenCalledTimes(1);
+      expect(pipeline.submit).toHaveBeenCalledTimes(1);
+      expect(pipeline.dispatchAccounting).toHaveBeenCalledWith('accepted-call');
+    }
+  );
+  it('makes only one persistence attempt for late transient failure, with no phantom delivery', async () => {
+    pipeline.submit.mockResolvedValue(
+      Result.Ok({
+        type: 'result_accepted',
+        submission: {
+          ...execution,
+          providerRequestId: 'paid',
+          attemptDeadlineAt: '2026-11-06T18:59:59.000Z',
+          accountingIdentity: { receipt: { id: 'accepted-call' } },
+        },
+      })
+    );
+    pipeline.persistSubmission.mockResolvedValue(
+      Result.Error(
+        new SubmissionPersistenceError(
+          new AppError({ code: 'DB_DOWN', category: 'system', status: 503 }),
+          false
+        )
+      )
+    );
+    expect(await renderResultWorkflow(attempt)).toEqual({
+      result: 'result_submission_unresolved',
+    });
+    expect(pipeline.persistSubmission).toHaveBeenCalledTimes(1);
+    expect(sleep).not.toHaveBeenCalled();
+    expect(pipeline.dispatchAccounting).not.toHaveBeenCalled();
+    expect(pipeline.poll).not.toHaveBeenCalled();
+  });
+  it.each([undefined, 'invalid'])(
+    'fails invalid deadline metadata explicitly after attempting persistence: %s',
+    async (attemptDeadlineAt) => {
+      pipeline.submit.mockResolvedValue(
+        Result.Ok({
+          type: 'result_accepted',
+          submission: {
+            ...execution,
+            providerRequestId: 'paid',
+            attemptDeadlineAt,
+            accountingIdentity: { receipt: { id: 'accepted-call' } },
+          },
+        })
+      );
+      pipeline.persistSubmission.mockResolvedValue(
+        Result.Error(
+          new SubmissionPersistenceError(
+            new AppError({
+              code: 'RENDER_SUBMISSION_DEADLINE_INVALID',
+              category: 'system',
+              status: 500,
+              retryable: false,
+            }),
+            true
+          )
+        )
+      );
+      expect(await renderResultWorkflow(attempt)).toEqual({
+        result: 'result_failed',
+      });
+      expect(pipeline.persistSubmission).toHaveBeenCalledTimes(1);
+      expect(sleep).not.toHaveBeenCalled();
+      expect(pipeline.markFailed).toHaveBeenCalledWith(
+        expect.objectContaining({
+          reason: 'RENDER_SUBMISSION_DEADLINE_INVALID',
+          submissionPersistenceFailure: true,
+        })
+      );
+      expect(pipeline.dispatchAccounting).toHaveBeenCalledWith('accepted-call');
+    }
+  );
+  it('keeps confirmed receipt progress across later ambiguous persistence failures', async () => {
+    pipeline.submit.mockResolvedValue(
+      Result.Ok({
+        type: 'result_accepted',
+        submission: {
+          ...execution,
+          providerRequestId: 'paid',
+          attemptDeadlineAt: '2026-11-06T19:00:08.000Z',
+          accountingIdentity: { receipt: { id: 'accepted-call' } },
+        },
+      })
+    );
+    pipeline.persistSubmission
+      .mockResolvedValueOnce(
+        Result.Error(
+          new SubmissionPersistenceError(
+            new AppError({ code: 'DB_DOWN', category: 'system', status: 503 }),
+            true
+          )
+        )
+      )
+      .mockRejectedValue(new Error('lost reply'));
+    expect(await renderResultWorkflow(attempt)).toEqual({
+      result: 'result_submission_unresolved',
+    });
+    expect(pipeline.dispatchAccounting).toHaveBeenCalledWith('accepted-call');
+    expect(pipeline.reportSubmissionUnresolved).toHaveBeenCalledWith(
+      expect.objectContaining({ receiptCapture: 'confirmed' })
+    );
+    expect(pipeline.submit).toHaveBeenCalledTimes(1);
   });
   it('backs off from 2 s to 10 s', () => {
     expect([0, 1, 5, 8, 100].map(pollDelayMs)).toEqual([

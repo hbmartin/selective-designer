@@ -1,52 +1,55 @@
 import { unwrapStepResult } from '@/modules/kernel/transport/workflow/step-result-mapper';
+import { runWorkerPage } from '@/modules/kernel/transport/workflow/worker-page';
 
-async function listStep(input: { before: string; after?: string }) {
+import type { CleanupCursor } from '../../application/ports/output-cleanup';
+
+type CleanupModule = typeof import('@/composition/render-output-cleanup');
+let cleanupModule: Promise<CleanupModule> | undefined;
+const cleanup = async () => {
+  cleanupModule ??= import('@/composition/render-output-cleanup').catch(
+    (error: unknown) => {
+      cleanupModule = undefined;
+      throw error;
+    }
+  );
+  return (await cleanupModule).getRenderOutputCleanup();
+};
+
+async function listStep(input: { before: string; after?: CleanupCursor }) {
   'use step';
-  const { getRenderOutputCleanup } =
-    await import('@/composition/render-output-cleanup');
-  return unwrapStepResult(await getRenderOutputCleanup().list(input));
+  return unwrapStepResult(await (await cleanup()).list(input));
 }
 async function cleanupStep(cleanupId: string) {
   'use step';
-  const { getRenderOutputCleanup } =
-    await import('@/composition/render-output-cleanup');
-  return unwrapStepResult(await getRenderOutputCleanup().process(cleanupId));
+  return unwrapStepResult(await (await cleanup()).process(cleanupId));
 }
 async function cutoffStep() {
   'use step';
-  const { getRenderOutputCleanup } =
-    await import('@/composition/render-output-cleanup');
-  return getRenderOutputCleanup().startedAt();
+  return unwrapStepResult(await (await cleanup()).cutoff()).before;
+}
+async function summaryStep() {
+  'use step';
+  return unwrapStepResult(await (await cleanup()).summary());
 }
 export async function renderOutputCleanupWorkflow() {
   'use workflow';
   const before = await cutoffStep();
-  let after: string | undefined;
+  let after: CleanupCursor | undefined;
   let completed = 0;
   let failed = 0;
   while (true) {
     // oxlint-disable-next-line no-await-in-loop -- snapshot cursor advances between pages.
     const page = await listStep({ before, after });
     if (!page.ids.length) break;
-    let next = 0;
-    const worker = async () => {
-      while (next < page.ids.length) {
-        const id = page.ids[next++];
-        if (id === undefined) break;
-        try {
-          // oxlint-disable-next-line no-await-in-loop -- each slot continues independently of slower slots.
-          const result = await cleanupStep(id);
-          if (result.type === 'cleanup_completed') completed++;
-        } catch {
-          failed++;
-        }
-      }
-    };
-    // oxlint-disable-next-line no-await-in-loop -- five durable worker slots per page.
-    await Promise.all(
-      Array.from({ length: Math.min(5, page.ids.length) }, worker)
+    // oxlint-disable-next-line no-await-in-loop -- deterministic bounded page processing.
+    const counts = await runWorkerPage(
+      page.ids,
+      async (id) => (await cleanupStep(id)).type === 'cleanup_completed'
     );
-    after = page.ids.at(-1);
+    completed += counts.completed;
+    failed += counts.failed;
+    after = page.cursor;
   }
-  return { completed, failed };
+  const summary = await summaryStep();
+  return { completed, failed, blocked: summary.blocked };
 }
