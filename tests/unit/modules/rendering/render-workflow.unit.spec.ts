@@ -542,7 +542,11 @@ describe('render workflow', () => {
     acceptedWithInvalidDeadline();
     pipeline.persistSubmission.mockResolvedValue(unknownSave());
     pipeline.reconcileSubmission.mockResolvedValue(
-      Result.Ok({ type: 'result_submitted', providerRequestId: 'paid' })
+      Result.Ok({
+        type: 'result_submitted',
+        providerRequestId: 'paid',
+        receiptCaptured: true,
+      })
     );
     pipeline.poll.mockResolvedValue(Result.Ok({ type: 'result_succeeded' }));
     expect(await renderResultWorkflow(attempt)).toEqual({
@@ -633,5 +637,93 @@ describe('render workflow', () => {
     });
     expect(pipeline.markFailed).not.toHaveBeenCalled();
     expect(pipeline.submit).toHaveBeenCalledOnce();
+  });
+  it('dispatches confirmed accounting after a whole persistence reply is lost and the saved request is reconciled', async () => {
+    acceptedWithInvalidDeadline();
+    pipeline.persistSubmission.mockRejectedValue(new Error('reply lost'));
+    pipeline.reconcileSubmission.mockResolvedValue(
+      Result.Ok({
+        type: 'result_submitted',
+        providerRequestId: 'paid',
+        receiptCaptured: true,
+      })
+    );
+    pipeline.poll.mockResolvedValue(Result.Ok({ type: 'result_succeeded' }));
+    expect(await renderResultWorkflow(attempt)).toEqual({
+      result: 'result_succeeded',
+    });
+    expect(pipeline.submit).toHaveBeenCalledOnce();
+    expect(pipeline.persistSubmission).toHaveBeenCalledOnce();
+    expect(pipeline.poll).toHaveBeenCalledWith({
+      ...execution,
+      providerRequestId: 'paid',
+    });
+    expect(pipeline.dispatchAccounting).toHaveBeenCalledWith('accepted-call');
+  });
+  it.each([false, true])(
+    'reports interrupted sleep and retains capture confirmation=%s',
+    async (captured) => {
+      acceptedWithInvalidDeadline();
+      pipeline.persistSubmission.mockResolvedValue(
+        Result.Error(
+          new SubmissionPersistenceError(
+            new AppError({
+              code: 'FIRST_TYPED_FAILURE',
+              category: 'system',
+              status: 503,
+            }),
+            captured,
+            'unknown'
+          )
+        )
+      );
+      vi.mocked(sleep).mockRejectedValue(new Error('runner unavailable'));
+      pipeline.reportSubmissionException.mockImplementation(() => {
+        throw new Error('logger unavailable');
+      });
+      expect(await renderResultWorkflow(attempt)).toEqual({
+        result: 'result_submission_unresolved',
+      });
+      expect(pipeline.reportSubmissionUnresolved).toHaveBeenCalledWith({
+        ...execution,
+        code: 'FIRST_TYPED_FAILURE',
+        receiptCapture: captured ? 'confirmed' : 'unconfirmed',
+      });
+      expect(pipeline.reportSubmissionException).toHaveBeenCalledWith(
+        expect.objectContaining({
+          ...execution,
+          lastKnownCode: 'FIRST_TYPED_FAILURE',
+          code: 'FIRST_TYPED_FAILURE',
+        })
+      );
+      expect(pipeline.dispatchAccounting).toHaveBeenCalledTimes(
+        captured ? 1 : 0
+      );
+      expect(pipeline.markFailed).not.toHaveBeenCalled();
+      expect(pipeline.submit).toHaveBeenCalledOnce();
+    }
+  );
+  it('records a newer exception separately from the previous typed code', async () => {
+    acceptedWithInvalidDeadline();
+    pipeline.persistSubmission.mockResolvedValue(unknownSave());
+    vi.mocked(sleep).mockRejectedValue(
+      Object.assign(new Error('safe'), { code: 'SDK_UNAVAILABLE' })
+    );
+    await renderResultWorkflow(attempt);
+    expect(pipeline.reportSubmissionException).toHaveBeenCalledWith(
+      expect.objectContaining({
+        lastKnownCode: 'DB_DOWN',
+        code: 'SDK_UNAVAILABLE',
+        errorCodes: ['SDK_UNAVAILABLE'],
+      })
+    );
+    const diagnostic = pipeline.reportSubmissionUnresolved.mock.calls[0]![0];
+    expect(Object.keys(diagnostic).sort()).toEqual([
+      'attempt',
+      'code',
+      'receiptCapture',
+      'resultId',
+      'workflowRunId',
+    ]);
   });
 });

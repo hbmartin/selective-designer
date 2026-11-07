@@ -1,3 +1,6 @@
+import { Result } from '@bloodyowl/boxed';
+
+import { isAppError } from '@/modules/kernel/domain/errors/app-error';
 import { lazyModule } from '@/modules/kernel/transport/workflow/lazy-module';
 import { unwrapStepResult } from '@/modules/kernel/transport/workflow/step-result-mapper';
 
@@ -27,13 +30,18 @@ async function summaryStep() {
 }
 export async function renderOutputCleanupWorkflow() {
   'use workflow';
-  return runRenderCleanupSweep(
-    {
-      cutoff: cutoffStep,
-      list: listStep,
-      process: cleanupStep,
-      summary: summaryStep,
-    },
-    5
-  );
+  try {
+    return await runRenderCleanupSweep(
+      {
+        cutoff: cutoffStep,
+        list: listStep,
+        process: cleanupStep,
+        summary: summaryStep,
+      },
+      5
+    );
+  } catch (error) {
+    if (isAppError(error)) return unwrapStepResult(Result.Error(error));
+    throw error;
+  }
 }

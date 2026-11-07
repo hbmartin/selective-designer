@@ -5,6 +5,11 @@ import { runRepositoryTransaction } from '@/modules/kernel/infrastructure/db/rep
 import type { Database } from '@/modules/kernel/infrastructure/db/types';
 
 import {
+  createCleanupAcknowledgmentStore,
+  findCleanupRecoveryRequest,
+  lockCleanupRecoveryRequest,
+} from './output-cleanup-acknowledgment-drizzle';
+import {
   checkCleanupEligibility,
   cleanupError,
   cleanupNow,
@@ -16,8 +21,6 @@ import {
   renderOutputCleanupRecovery as recovery,
 } from './schema';
 import type {
-  CleanupAcknowledgmentInput,
-  CleanupAcknowledgmentOutcome,
   CleanupRecoveryEvent,
   CleanupRepairInput,
   CleanupRepairOutcome,
@@ -28,7 +31,7 @@ import { safeBlockedObjectKey } from '../../domain/render-output-target';
 export const blockedOutstanding = sql<boolean>`not exists(select 1 from ${recovery} where ${recovery.fingerprint} = ${blocked.fingerprint})`;
 const intervention = sql<
   'outstanding' | 'acknowledged' | 'handed_off'
->`case when ${blockedOutstanding} then 'outstanding' when exists(select 1 from ${recovery} where ${recovery.fingerprint} = ${blocked.fingerprint} and ${recovery.outcome} = 'cleanup_acknowledged') then 'acknowledged' else 'handed_off' end`;
+>`case when ${blockedOutstanding} then 'outstanding' when exists(select 1 from ${recovery} where ${recovery.fingerprint} = ${blocked.fingerprint} and ${recovery.outcome} <> 'cleanup_acknowledged') then 'handed_off' else 'acknowledged' end`;
 const publicBlocked = {
   intervention,
   fingerprint: blocked.fingerprint,
@@ -51,11 +54,9 @@ export function createCleanupRepairStore(
   db: Database
 ): Pick<OutputCleanupStore, 'blocked' | 'inspect' | 'requeue' | 'acknowledge'> {
   return {
+    acknowledge: createCleanupAcknowledgmentStore(db),
     async blocked(input) {
-      const { limit, after, outstanding } =
-        typeof input === 'number'
-          ? { limit: input, after: undefined, outstanding: false }
-          : input;
+      const { limit, after, outstanding } = input;
       try {
         const rows = await db
           .select(publicBlocked)
@@ -133,13 +134,19 @@ export function createCleanupRepairStore(
           },
           locator: safeBlockedObjectKey(row.safeObjectKey),
           recoveries: recoveries.map((event): CleanupRecoveryEvent => {
-            if (event.outcome === 'cleanup_acknowledged')
+            if (event.outcome === 'cleanup_acknowledged') {
+              if (
+                event.reasonCode !== 'locator_unavailable_retained' &&
+                event.reasonCode !== 'operator_retained'
+              )
+                throw cleanupError('Recovery reason invalid');
               return {
                 requestId: event.requestId,
                 createdAt: event.createdAt,
                 outcome: event.outcome,
-                reasonCode: 'locator_unavailable_retained',
+                reasonCode: event.reasonCode,
               };
+            }
             if (event.resultId === null || event.attempt === null)
               throw cleanupError('Recovery audit invalid');
             return {
@@ -157,72 +164,13 @@ export function createCleanupRepairStore(
         return Result.Error(cleanupError(cause));
       }
     },
-    async acknowledge(input: CleanupAcknowledgmentInput) {
-      const replayAcknowledgment = (
-        event: typeof recovery.$inferSelect
-      ): CleanupAcknowledgmentOutcome =>
-        event.fingerprint === input.fingerprint &&
-        event.outcome === 'cleanup_acknowledged'
-          ? { type: 'cleanup_acknowledged', requestId: input.requestId }
-          : { type: 'cleanup_repair_conflict' };
-      try {
-        return await runRepositoryTransaction<CleanupAcknowledgmentOutcome>(
-          db,
-          async (tx) => {
-            await tx.execute(
-              sql`select pg_advisory_xact_lock(hashtextextended(${input.requestId}, 0))`
-            );
-            const [event] = await tx
-              .select()
-              .from(recovery)
-              .where(eq(recovery.requestId, input.requestId));
-            if (event) return Result.Ok(replayAcknowledgment(event));
-            const [evidence] = await tx
-              .select()
-              .from(blocked)
-              .where(eq(blocked.fingerprint, input.fingerprint));
-            if (!evidence) return Result.Ok({ type: 'blocked_not_found' });
-            if (safeBlockedObjectKey(evidence.safeObjectKey))
-              return Result.Ok({ type: 'locator_available' });
-            await tx.insert(recovery).values({
-              requestId: input.requestId,
-              fingerprint: input.fingerprint,
-              outcome: 'cleanup_acknowledged',
-              reasonCode: 'locator_unavailable_retained',
-              createdAt: cleanupNow,
-            });
-            return Result.Ok({
-              type: 'cleanup_acknowledged',
-              requestId: input.requestId,
-            });
-          }
-        );
-      } catch (cause) {
-        try {
-          const [event] = await db
-            .select()
-            .from(recovery)
-            .where(eq(recovery.requestId, input.requestId));
-          if (event) return Result.Ok(replayAcknowledgment(event));
-        } catch (reconciliationCause) {
-          return Result.Error(cleanupError(cause, reconciliationCause));
-        }
-        return Result.Error(cleanupError(cause));
-      }
-    },
     async requeue(input) {
       try {
         return await runRepositoryTransaction<CleanupRepairOutcome>(
           db,
           async (tx) => {
-            // Serialize a replay identity independently of the target. No unsafe input enters diagnostics.
-            await tx.execute(
-              sql`select pg_advisory_xact_lock(hashtextextended(${input.requestId}, 0))`
-            );
-            const [event] = await tx
-              .select()
-              .from(recovery)
-              .where(eq(recovery.requestId, input.requestId));
+            await lockCleanupRecoveryRequest(tx, input);
+            const event = await findCleanupRecoveryRequest(tx, input.requestId);
             if (event) return Result.Ok(replay(event, input));
             // Blocked evidence is immutable; do not lock it before a queue row (quarantine locks queue first).
             const [evidence] = await tx
@@ -299,10 +247,7 @@ export function createCleanupRepairStore(
       } catch (cause) {
         // A committed event proves the atomic queue transition; otherwise keep the original error.
         try {
-          const [event] = await db
-            .select()
-            .from(recovery)
-            .where(eq(recovery.requestId, input.requestId));
+          const event = await findCleanupRecoveryRequest(db, input.requestId);
           if (event) return Result.Ok(replay(event, input));
         } catch (reconciliationCause) {
           return Result.Error(cleanupError(cause, reconciliationCause));

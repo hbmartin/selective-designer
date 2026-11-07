@@ -1,5 +1,5 @@
 import { Result } from '@bloodyowl/boxed';
-import { and, asc, count, eq, isNull, lte, or, sql } from 'drizzle-orm';
+import { and, asc, eq, isNull, lte, or, sql } from 'drizzle-orm';
 
 import { runRepositoryTransaction } from '@/modules/kernel/infrastructure/db/repository-transaction';
 import type { Database } from '@/modules/kernel/infrastructure/db/types';
@@ -51,23 +51,27 @@ export const createOutputCleanupStore = ({
   async summary() {
     try {
       const rows = await db
-        .select({ code: blocked.reasonCode, count: count() })
+        .select({
+          code: blocked.reasonCode,
+          total: sql<number>`count(*)`.mapWith(Number),
+          outstanding:
+            sql<number>`count(*) filter (where ${blockedOutstanding})`.mapWith(
+              Number
+            ),
+        })
         .from(blocked)
-        .groupBy(blocked.reasonCode);
-      const outstanding = await db
-        .select({ code: blocked.reasonCode, count: count() })
-        .from(blocked)
-        .where(blockedOutstanding)
         .groupBy(blocked.reasonCode);
       return Result.Ok({
         type: 'cleanup_summary',
-        blockedOutstanding: outstanding.reduce(
-          (total, row) => total + row.count,
+        blockedOutstanding: rows.reduce(
+          (total, row) => total + row.outstanding,
           0
         ),
-        outstandingReasons: outstanding,
-        blockedTotal: rows.reduce((total, row) => total + row.count, 0),
-        reasons: rows,
+        outstandingReasons: rows
+          .filter((row) => row.outstanding > 0)
+          .map((row) => ({ code: row.code, count: row.outstanding })),
+        blockedTotal: rows.reduce((total, row) => total + row.total, 0),
+        reasons: rows.map((row) => ({ code: row.code, count: row.total })),
       });
     } catch (cause) {
       return Result.Error(cleanupError(cause));

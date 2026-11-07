@@ -186,11 +186,24 @@ export const renderOutputCleanupRecovery = pgTable(
   (table) => [
     check(
       'render_output_cleanup_recovery_shape',
-      sql`(${table.outcome} = 'cleanup_acknowledged' and ${table.reasonCode} = 'locator_unavailable_retained' and ${table.resultId} is null and ${table.attempt} is null and ${table.objectKey} is null) or (${table.outcome} in ('cleanup_requeued', 'cleanup_already_pending', 'cleanup_already_completed') and ${table.resultId} is not null and ${table.attempt} is not null and ${table.objectKey} is not null and ${table.reasonCode} is null)`
+      sql`(${table.outcome} = 'cleanup_acknowledged' and ${table.reasonCode} in ('locator_unavailable_retained', 'operator_retained') and ${table.resultId} is null and ${table.attempt} is null and ${table.objectKey} is null) or (${table.outcome} in ('cleanup_requeued', 'cleanup_already_pending', 'cleanup_already_completed') and ${table.resultId} is not null and ${table.attempt} is not null and ${table.objectKey} is not null and ${table.reasonCode} is null)`
     ),
     index('render_output_cleanup_recovery_fingerprint_idx').on(
       table.fingerprint,
       table.createdAt
     ),
   ]
+);
+
+/** Replay aliases preserve request identity without duplicating acknowledgment audit events. */
+export const renderOutputCleanupAcknowledgmentRequest = pgTable(
+  'render_output_cleanup_acknowledgment_request',
+  {
+    requestId: text('requestId').primaryKey(),
+    fingerprint: text('fingerprint').notNull(),
+    canonicalRequestId: text('canonicalRequestId')
+      .notNull()
+      .references(() => renderOutputCleanupRecovery.requestId),
+    createdAt: timestamp('createdAt', { precision: 3, mode: 'date' }).notNull(),
+  }
 );
