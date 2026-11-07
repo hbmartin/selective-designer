@@ -22,10 +22,9 @@ import type { RenderRepository } from '@/modules/rendering/application/ports/por
 import { isModelId, modelIds } from '@/modules/rendering/domain/model-catalog';
 import {
   type Draft,
+  isRenderResultStatus,
   type Render,
   type RenderResult,
-  type RenderResultStatus,
-  renderResultStatuses,
 } from '@/modules/rendering/domain/render';
 
 import { enqueueOutputCleanup } from './output-cleanup-records';
@@ -60,6 +59,7 @@ const rowError = (cause: unknown) =>
     category: 'system',
     status: 500,
     message: 'Render row contains invalid data',
+    retryable: false,
     cause,
   });
 const dbError = (cause: unknown) =>
@@ -71,8 +71,6 @@ const dbError = (cause: unknown) =>
     cause,
   });
 
-const isStatus = (value: string): value is RenderResultStatus =>
-  (renderResultStatuses as readonly string[]).includes(value);
 const costSources = ['reported', 'price_table', 'unavailable'] as const;
 const toCostSource = (value: string | null): ProviderCostSource | null =>
   value !== null && (costSources as readonly string[]).includes(value)
@@ -106,7 +104,7 @@ const toResult = (
     renderId.isError() ||
     (outputImageId !== undefined && outputImageId.isError()) ||
     !isModelId(row.modelId) ||
-    !isStatus(row.status)
+    !isRenderResultStatus(row.status)
   ) {
     return Result.Error(rowError(row.id));
   }
@@ -527,7 +525,6 @@ export const createRenderRepository = ({
           return Result.Ok({
             type: 'result_submitted',
             providerRequestId: input.providerRequestId,
-            receiptCaptured: true,
           });
         if (
           !row ||

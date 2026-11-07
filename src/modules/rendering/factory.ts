@@ -1,3 +1,5 @@
+import { Result } from '@bloodyowl/boxed';
+
 import { safeErrorDiagnostics } from '@/modules/kernel/domain/errors/safe-error-diagnostics';
 
 import {
@@ -63,7 +65,7 @@ export function createRenderingPipelineUseCases(deps: RenderingPipelineDeps) {
       input: Parameters<typeof deps.renderRepository.reconcileSubmission>[0]
     ) => {
       const result = await deps.renderRepository.reconcileSubmission(input);
-      if (result.isError())
+      if (result.isError()) {
         deps.logger.warn({
           event: 'rendering.result.submission_reconciliation_failed',
           details: {
@@ -74,7 +76,15 @@ export function createRenderingPipelineUseCases(deps: RenderingPipelineDeps) {
             ...safeErrorDiagnostics(result.getError()),
           },
         });
-      return result;
+        return Result.Error(result.getError());
+      }
+      const outcome = result.get();
+      // The sole production submission write follows durable receipt capture.
+      return Result.Ok(
+        outcome.type === 'result_submitted'
+          ? { ...outcome, receiptCaptured: true as const }
+          : outcome
+      );
     },
     poll: (input: Input<typeof pollResult>) => pollResult(deps, input),
     reportSubmissionException: (input: {

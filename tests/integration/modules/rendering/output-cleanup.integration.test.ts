@@ -36,6 +36,7 @@ import {
   cleanupRenderOutput,
   createOutputCleanupStore,
   createRenderRepository,
+  findCleanupRecoveryRequest,
   renderOutputCleanup,
   renderOutputCleanupAcknowledgmentRequest,
   renderOutputCleanupBlocked,
@@ -941,6 +942,132 @@ describe('durable render output cleanup', () => {
     expect(
       await database.db.select().from(renderOutputCleanupRecovery)
     ).toHaveLength(2);
+  });
+  it('correlates intervention state independently for acknowledged, handed-off and outstanding fingerprints', async () => {
+    const identities = ['a', 'b', 'c'].map((id) => ({
+      fingerprint: id.repeat(64),
+      resultId: `result-${id}`,
+      attempt: 1,
+      safeObjectKey: `results/result-${id}/1/raw.png`,
+      reasonCode: 'render_output_target_invalid',
+      createdAt: new Date('2026-11-07T00:00:00.123Z'),
+    }));
+    await database.db.insert(renderOutputCleanupBlocked).values(identities);
+    okValue(
+      await store.acknowledge({
+        requestId: 'keep-a',
+        fingerprint: identities[0]!.fingerprint,
+      })
+    );
+    okValue(
+      await store.requeue({
+        requestId: 'repair-b',
+        fingerprint: identities[1]!.fingerprint,
+        resultId: okValue(toRenderResultId('result-b')),
+        attempt: 1,
+      })
+    );
+    const statements: string[] = [];
+    const query = database.db.$client.query.bind(database.db.$client);
+    vi.spyOn(database.db.$client, 'query').mockImplementation(
+      async (text, values) => {
+        statements.push(
+          typeof text === 'string' ? text : (text as { text: string }).text
+        );
+        return query(text, values);
+      }
+    );
+    const listed = okValue(await store.blocked({ limit: 100 }));
+    expect(
+      listed.records.map(({ fingerprint, intervention }) => ({
+        fingerprint,
+        intervention,
+      }))
+    ).toEqual([
+      { fingerprint: identities[0]!.fingerprint, intervention: 'acknowledged' },
+      { fingerprint: identities[1]!.fingerprint, intervention: 'handed_off' },
+      { fingerprint: identities[2]!.fingerprint, intervention: 'outstanding' },
+    ]);
+    for (const record of listed.records) {
+      expect(okValue(await store.inspect(record.fingerprint))).toMatchObject({
+        record: { intervention: record.intervention },
+      });
+    }
+    const projections = statements.filter((statement) =>
+      statement.includes("then 'handed_off'")
+    );
+    expect(projections).toHaveLength(4);
+    for (const statement of projections) {
+      expect(statement).toContain(
+        '"render_output_cleanup_recovery"."fingerprint" = "render_output_cleanup_blocked"."fingerprint"'
+      );
+      expect(statement).not.toContain('"fingerprint" = "fingerprint"');
+    }
+    expect(okValue(await store.summary())).toMatchObject({
+      blockedTotal: 3,
+      blockedOutstanding: 1,
+    });
+    expect(
+      okValue(
+        await store.blocked({ limit: 100, outstanding: true })
+      ).records.map(({ fingerprint }) => fingerprint)
+    ).toEqual([identities[2]!.fingerprint]);
+  });
+  it('resolves historical aliases to the earliest acknowledgment in two reads and rejects invalid targets', async () => {
+    const input = await repairInput('old-first');
+    await database.db.insert(renderOutputCleanupRecovery).values(
+      ['old-first', 'old-second'].map((requestId, index) => ({
+        requestId,
+        fingerprint: input.fingerprint,
+        outcome: 'cleanup_acknowledged' as const,
+        reasonCode: 'operator_retained',
+        createdAt: new Date(Date.UTC(2026, 0, index + 1)),
+      }))
+    );
+    await database.db.insert(renderOutputCleanupAcknowledgmentRequest).values({
+      requestId: 'historical-alias',
+      canonicalRequestId: 'old-second',
+      fingerprint: input.fingerprint,
+      createdAt: new Date(),
+    });
+    const query = database.db.$client.query.bind(database.db.$client);
+    const reads = vi
+      .spyOn(database.db.$client, 'query')
+      .mockImplementation((text, values) => query(text, values));
+    expect(
+      await findCleanupRecoveryRequest(database.db, 'historical-alias')
+    ).toMatchObject({ requestId: 'old-first' });
+    expect(reads).toHaveBeenCalledTimes(2);
+    reads.mockClear();
+    expect(
+      await findCleanupRecoveryRequest(database.db, 'old-second')
+    ).toMatchObject({ requestId: 'old-first' });
+    expect(reads).toHaveBeenCalledTimes(2);
+    reads.mockClear();
+    expect(
+      await findCleanupRecoveryRequest(database.db, 'unknown-request')
+    ).toBeUndefined();
+    expect(reads).toHaveBeenCalledTimes(2);
+    reads.mockRestore();
+    await database.db.insert(renderOutputCleanupAcknowledgmentRequest).values({
+      requestId: 'mismatched-alias',
+      canonicalRequestId: 'old-first',
+      fingerprint: 'f'.repeat(64),
+      createdAt: new Date(),
+    });
+    await expect(
+      findCleanupRecoveryRequest(database.db, 'mismatched-alias')
+    ).rejects.toMatchObject({ code: 'RENDER_OUTPUT_CLEANUP_FAILED' });
+    okValue(await store.requeue({ ...input, requestId: 'repair' }));
+    await database.db.insert(renderOutputCleanupAcknowledgmentRequest).values({
+      requestId: 'repair-alias',
+      canonicalRequestId: 'repair',
+      fingerprint: input.fingerprint,
+      createdAt: new Date(),
+    });
+    await expect(
+      findCleanupRecoveryRequest(database.db, 'repair-alias')
+    ).rejects.toMatchObject({ code: 'RENDER_OUTPUT_CLEANUP_FAILED' });
   });
   it('serializes acknowledgment against repair without canceling a handoff', async () => {
     const input = await repairInput();

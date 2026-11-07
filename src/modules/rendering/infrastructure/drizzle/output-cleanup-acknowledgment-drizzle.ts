@@ -1,5 +1,6 @@
 import { Result } from '@bloodyowl/boxed';
-import { and, asc, eq, ne, sql } from 'drizzle-orm';
+import { and, asc, eq, getTableColumns, ne, sql } from 'drizzle-orm';
+import { alias } from 'drizzle-orm/pg-core';
 
 import { runRepositoryTransaction } from '@/modules/kernel/infrastructure/db/repository-transaction';
 import type {
@@ -60,23 +61,36 @@ export async function findCleanupRecoveryRequest(
     return event.outcome === 'cleanup_acknowledged'
       ? canonicalAcknowledgment(db, event.fingerprint)
       : event;
-  const [alias] = await db
-    .select()
+  const canonical = alias(recovery, 'canonical_acknowledgment');
+  const earliest = alias(recovery, 'earliest_acknowledgment');
+  const [found] = await db
+    .select({
+      targetId: canonical.requestId,
+      acknowledgment: getTableColumns(earliest),
+    })
     .from(aliases)
-    .where(eq(aliases.requestId, requestId));
-  if (!alias) return undefined;
-  const [canonical] = await db
-    .select()
-    .from(recovery)
-    .where(
+    .leftJoin(
+      canonical,
       and(
-        eq(recovery.requestId, alias.canonicalRequestId),
-        eq(recovery.fingerprint, alias.fingerprint),
-        eq(recovery.outcome, 'cleanup_acknowledged')
+        eq(canonical.requestId, aliases.canonicalRequestId),
+        eq(canonical.fingerprint, aliases.fingerprint),
+        eq(canonical.outcome, 'cleanup_acknowledged')
       )
-    );
-  if (!canonical) throw cleanupError('Acknowledgment replay invalid');
-  return canonicalAcknowledgment(db, canonical.fingerprint);
+    )
+    .leftJoin(
+      earliest,
+      and(
+        eq(earliest.fingerprint, canonical.fingerprint),
+        eq(earliest.outcome, 'cleanup_acknowledged')
+      )
+    )
+    .where(eq(aliases.requestId, requestId))
+    .orderBy(asc(earliest.createdAt), asc(earliest.requestId))
+    .limit(1);
+  if (!found) return undefined;
+  if (!found.targetId || !found.acknowledgment)
+    throw cleanupError('Acknowledgment replay invalid');
+  return found.acknowledgment;
 }
 
 export function createCleanupAcknowledgmentStore(

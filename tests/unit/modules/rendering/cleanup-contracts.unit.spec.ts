@@ -16,12 +16,25 @@ import {
   runRenderCleanupSweep,
 } from '@/modules/rendering/backend';
 import {
+  cleanupAttemptEligibility,
   createOutputCleanupStore,
   SubmissionPersistenceError,
   SubmissionWriteError,
 } from '@/modules/rendering/testing';
 
 describe('cleanup and recovery contracts', () => {
+  it.each([
+    ['pending', 'cleanup_attempt_active'],
+    ['submitted', 'cleanup_attempt_active'],
+    ['succeeded', 'cleanup_attempt_eligible'],
+    ['failed', 'cleanup_attempt_eligible'],
+    ['skipped', 'cleanup_attempt_eligible'],
+    ['unknown', 'cleanup_attempt_invalid'],
+  ])('keeps current status %s cleanup eligibility explicit', (status, type) => {
+    expect(cleanupAttemptEligibility(1, { attempt: 1, status })).toEqual({
+      type,
+    });
+  });
   it.each([
     'https://host/output?token=secret',
     '//host/x',
@@ -123,6 +136,23 @@ describe('cleanup and recovery contracts', () => {
         retryAfterMs: 100,
         cause,
       });
+    }
+  );
+  it.each([false, true])(
+    'retains receipt capture confirmation=%s independently of write certainty',
+    (captured) => {
+      const cause = new AppError({
+        code: 'WRITE_FAILED',
+        category: 'system',
+        status: 503,
+      });
+      const wrapped = new SubmissionPersistenceError(
+        cause,
+        captured,
+        'unknown'
+      );
+      expect(wrapped.receiptCaptured).toBe(captured);
+      expect(wrapped.submissionWrite).toBe('unknown');
     }
   );
   it('fails closed for metadata-less roots before SQL', async () => {

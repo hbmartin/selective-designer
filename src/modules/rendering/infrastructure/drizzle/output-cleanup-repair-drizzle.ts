@@ -29,9 +29,10 @@ import type {
 import { safeBlockedObjectKey } from '../../domain/render-output-target';
 
 export const blockedOutstanding = sql<boolean>`not exists(select 1 from ${recovery} where ${recovery.fingerprint} = ${blocked.fingerprint})`;
+const handedOff = sql<boolean>`exists(select 1 from ${recovery} where ${recovery.fingerprint} = ${blocked.fingerprint} and ${recovery.outcome} <> 'cleanup_acknowledged')`;
 const intervention = sql<
   'outstanding' | 'acknowledged' | 'handed_off'
->`case when ${blockedOutstanding} then 'outstanding' when exists(select 1 from ${recovery} where ${recovery.fingerprint} = ${blocked.fingerprint} and ${recovery.outcome} <> 'cleanup_acknowledged') then 'handed_off' else 'acknowledged' end`;
+>`case when ${blockedOutstanding} then 'outstanding' when ${handedOff} then 'handed_off' else 'acknowledged' end`;
 const publicBlocked = {
   intervention,
   fingerprint: blocked.fingerprint,
