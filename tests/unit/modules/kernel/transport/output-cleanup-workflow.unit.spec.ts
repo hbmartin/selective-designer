@@ -19,7 +19,7 @@ describe('render cleanup workflow', () => {
       Result.Ok({ type: 'cleanup_cutoff', before: '2026-11-06T07:00:00.000Z' })
     );
     state.summary.mockResolvedValue(
-      Result.Ok({ type: 'cleanup_summary', blocked: 1, reasons: [] })
+      Result.Ok({ type: 'cleanup_summary', blockedTotal: 1, reasons: [] })
     );
   });
   it('uses the database snapshot and original tuple cursor while isolating failed and blocked work', async () => {
@@ -29,9 +29,9 @@ describe('render cleanup workflow', () => {
     };
     state.list
       .mockResolvedValueOnce(
-        Result.Ok({ type: 'cleanup_listed', ids: ['a', 'b', 'z'], cursor })
+        Result.Ok({ type: 'cleanup_page', ids: ['a', 'b', 'z'], cursor })
       )
-      .mockResolvedValue(Result.Ok({ type: 'cleanup_listed', ids: [] }));
+      .mockResolvedValue(Result.Ok({ type: 'cleanup_empty', ids: [] }));
     state.process.mockImplementation(async (id) =>
       id === 'a'
         ? Result.Error(
@@ -42,10 +42,38 @@ describe('render cleanup workflow', () => {
           })
     );
     const actual = await renderOutputCleanupWorkflow();
-    expect(actual).toEqual({ completed: 1, failed: 1, blocked: 1 });
+    expect(actual).toEqual({
+      completed: 1,
+      failed: 1,
+      blockedThisRun: 1,
+      blockedTotal: 1,
+    });
     expect(state.list).toHaveBeenNthCalledWith(2, {
       before: '2026-11-06T07:00:00.000Z',
       after: cursor,
     });
+  });
+  it('rejects a missing cursor before processing the malformed page', async () => {
+    state.list.mockResolvedValue(
+      Result.Ok({ type: 'cleanup_page', ids: ['a'] })
+    );
+    await expect(renderOutputCleanupWorkflow()).rejects.toThrow(
+      'RENDER_CLEANUP_CURSOR_INVALID'
+    );
+    expect(state.process).not.toHaveBeenCalled();
+  });
+  it('stops a repeated cursor without processing a page twice', async () => {
+    state.list.mockResolvedValue(
+      Result.Ok({
+        type: 'cleanup_page',
+        ids: ['a'],
+        cursor: { nextAttemptAt: '2000-01-01T00:00:00.000Z', objectKey: 'a' },
+      })
+    );
+    state.process.mockResolvedValue(Result.Ok({ type: 'cleanup_completed' }));
+    await expect(renderOutputCleanupWorkflow()).rejects.toThrow(
+      'RENDER_CLEANUP_CURSOR_INVALID'
+    );
+    expect(state.process).toHaveBeenCalledOnce();
   });
 });

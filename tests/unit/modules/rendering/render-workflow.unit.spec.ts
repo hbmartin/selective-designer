@@ -10,6 +10,7 @@ const pipeline = vi.hoisted(() => ({
   persistSubmission: vi.fn(),
   cleanup: vi.fn(),
   reportSubmissionUnresolved: vi.fn(),
+  reportSubmissionException: vi.fn(),
   dispatchAccounting: vi.fn(),
   poll: vi.fn(),
   markFailed: vi.fn(),
@@ -374,6 +375,33 @@ describe('render workflow', () => {
     expect(pipeline.poll).not.toHaveBeenCalled();
   });
   it.each([undefined, 'invalid'])(
+    'continues an initially saved acceptance with malformed deadline: %s',
+    async (attemptDeadlineAt) => {
+      pipeline.submit.mockResolvedValue(
+        Result.Ok({
+          type: 'result_accepted',
+          submission: {
+            ...execution,
+            providerRequestId: 'paid',
+            attemptDeadlineAt,
+            accountingIdentity: { receipt: { id: 'accepted-call' } },
+          },
+        })
+      );
+      pipeline.persistSubmission.mockResolvedValue(
+        Result.Ok({ type: 'result_submitted', providerRequestId: 'paid' })
+      );
+      pipeline.poll.mockResolvedValue(Result.Ok({ type: 'result_succeeded' }));
+      expect(await renderResultWorkflow(attempt)).toEqual({
+        result: 'result_succeeded',
+      });
+      expect(pipeline.persistSubmission).toHaveBeenCalledOnce();
+      expect(pipeline.submit).toHaveBeenCalledOnce();
+      expect(pipeline.dispatchAccounting).toHaveBeenCalledWith('accepted-call');
+      expect(pipeline.markFailed).not.toHaveBeenCalled();
+    }
+  );
+  it.each([undefined, 'invalid'])(
     'fails invalid deadline metadata explicitly after attempting persistence: %s',
     async (attemptDeadlineAt) => {
       pipeline.submit.mockResolvedValue(
@@ -441,9 +469,41 @@ describe('render workflow', () => {
     });
     expect(pipeline.dispatchAccounting).toHaveBeenCalledWith('accepted-call');
     expect(pipeline.reportSubmissionUnresolved).toHaveBeenCalledWith(
-      expect.objectContaining({ receiptCapture: 'confirmed' })
+      expect.objectContaining({ receiptCapture: 'confirmed', code: 'DB_DOWN' })
+    );
+    expect(pipeline.reportSubmissionException).toHaveBeenCalledWith(
+      expect.objectContaining({ code: 'DB_DOWN', errorNames: ['Error'] })
     );
     expect(pipeline.submit).toHaveBeenCalledTimes(1);
+  });
+  it('continues persistence when exception diagnostics cannot be written', async () => {
+    pipeline.submit.mockResolvedValue(
+      Result.Ok({
+        type: 'result_accepted',
+        submission: {
+          ...execution,
+          providerRequestId: 'paid',
+          attemptDeadlineAt: '2026-11-06T19:01:00Z',
+          accountingIdentity: { receipt: { id: 'accepted-call' } },
+        },
+      })
+    );
+    pipeline.persistSubmission
+      .mockRejectedValueOnce(new Error('lost reply'))
+      .mockResolvedValueOnce(
+        Result.Ok({ type: 'result_submitted', providerRequestId: 'paid' })
+      );
+    pipeline.reportSubmissionException.mockImplementationOnce(() => {
+      throw new Error('diagnostics unavailable');
+    });
+    pipeline.poll.mockResolvedValue(Result.Ok({ type: 'result_succeeded' }));
+    expect(await renderResultWorkflow(attempt)).toEqual({
+      result: 'result_succeeded',
+    });
+    expect(pipeline.submit).toHaveBeenCalledOnce();
+    expect(pipeline.persistSubmission).toHaveBeenCalledTimes(2);
+    expect(pipeline.markFailed).not.toHaveBeenCalled();
+    expect(pipeline.dispatchAccounting).toHaveBeenCalledWith('accepted-call');
   });
   it('backs off from 2 s to 10 s', () => {
     expect([0, 1, 5, 8, 100].map(pollDelayMs)).toEqual([

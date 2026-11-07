@@ -36,6 +36,7 @@ import type { RenderOutputCheckpoint } from '../../domain/render-output';
 import {
   RENDER_OUTPUT_EXTENSIONS,
   renderOutputKey,
+  safeRenderIdentity,
   validateRenderOutputTarget,
 } from '../../domain/render-output-target';
 import { RENDER_RETRY_AFTER_MS } from '../../domain/render-retry-policy';
@@ -244,21 +245,6 @@ export async function persistSubmission(
       new SubmissionPersistenceError(captured.getError(), false)
     );
   }
-  if (
-    typeof input.attemptDeadlineAt !== 'string' ||
-    !Number.isFinite(Date.parse(input.attemptDeadlineAt))
-  )
-    return Result.Error(
-      new SubmissionPersistenceError(
-        new AppError({
-          code: 'RENDER_SUBMISSION_DEADLINE_INVALID',
-          category: 'system',
-          status: 500,
-          retryable: false,
-        }),
-        true
-      )
-    );
   const saved = await deps.renderRepository.saveSubmission(input);
   if (saved.isError()) {
     deps.logger.warn({
@@ -323,12 +309,7 @@ export const discardLostOutput = async (
     deps.logger.warn({
       event: 'rendering.result.cleanup_failed',
       details: {
-        resultId: /^[A-Za-z0-9_-]+$/u.test(input.resultId)
-          ? input.resultId
-          : undefined,
-        attempt: Number.isSafeInteger(input.attempt)
-          ? input.attempt
-          : undefined,
+        ...safeRenderIdentity(input),
         code: target.getError().code,
       },
     });

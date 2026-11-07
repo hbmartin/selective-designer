@@ -1836,20 +1836,18 @@ describe('accepted submission handoff', () => {
     }
   );
   it.each([undefined, 'invalid'])(
-    'captures a valid receipt before rejecting invalid deadline metadata: %s',
+    'persists a valid acceptance despite invalid deadline metadata: %s',
     async (attemptDeadlineAt) => {
       const ctx = await acceptedSetup();
       const result = await ctx.rawPipeline.persistSubmission({
         ...ctx.accepted,
         attemptDeadlineAt: attemptDeadlineAt as string,
       });
-      expect(result.isError() && result.getError()).toMatchObject({
-        code: 'RENDER_SUBMISSION_DEADLINE_INVALID',
-        retryable: false,
-        receiptCaptured: true,
+      expect(result.isOk() && result.get()).toMatchObject({
+        type: 'result_submitted',
       });
       expect(ctx.calls.receipts.size).toBe(1);
-      expect(ctx.result.status).toBe('pending');
+      expect(ctx.result.status).toBe('submitted');
     }
   );
   it.each(['replacement', 'deletion'])(

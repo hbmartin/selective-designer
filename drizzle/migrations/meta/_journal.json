@@ -127,6 +127,13 @@
       "when": 1794010407678,
       "tag": "0017_productive_silver_sable",
       "breakpoints": true
+    },
+    {
+      "idx": 18,
+      "version": "7",
+      "when": 1794063099264,
+      "tag": "0018_dapper_mister_sinister",
+      "breakpoints": true
     }
   ]
 }

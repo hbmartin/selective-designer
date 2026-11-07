@@ -27,7 +27,7 @@ import {
   renderResultStatuses,
 } from '@/modules/rendering/domain/render';
 
-import { createOutputCleanupStore } from './output-cleanup-drizzle';
+import { enqueueOutputCleanup } from './output-cleanup-records';
 import {
   render as renderTable,
   renderDraft as draftTable,
@@ -604,7 +604,7 @@ export const createRenderRepository = ({
         if (!rows[0]) return Result.Ok({ type: 'result_attempt_superseded' });
         let cleanupId: string | null = null;
         if (previous?.checkpoint) {
-          const queued = await createOutputCleanupStore({ db }).enqueue({
+          const queued = await enqueueOutputCleanup(db, {
             resultId: input.resultId,
             attempt: input.expectedAttempt,
             objectKey: previous.checkpoint.objectKey,

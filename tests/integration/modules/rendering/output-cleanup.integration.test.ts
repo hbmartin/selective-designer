@@ -26,6 +26,7 @@ import {
   createOutputCleanupStore,
   renderOutputCleanup,
   renderOutputCleanupBlocked,
+  renderOutputCleanupRecovery,
 } from '@/modules/rendering/testing';
 
 describe('durable render output cleanup', () => {
@@ -133,13 +134,13 @@ describe('durable render output cleanup', () => {
       expect(evidence[0]?.fingerprint).toMatch(/^[a-f0-9]{64}$/u);
       expect(JSON.stringify(evidence)).not.toContain('private');
       expect(JSON.stringify(evidence)).not.toContain('https:');
-      expect(okValue(await store.summary()).blocked).toBe(1);
+      expect(okValue(await store.summary()).blockedTotal).toBe(1);
     }
   );
   it('fingerprints equivalent malformed objects independently of property ordering', async () => {
     okValue(await store.enqueue({ ...target, objectKey: { a: 1, b: 2 } }));
     okValue(await store.enqueue({ ...target, objectKey: { b: 2, a: 1 } }));
-    expect(okValue(await store.summary()).blocked).toBe(1);
+    expect(okValue(await store.summary()).blockedTotal).toBe(1);
   });
   it('quarantines a corrupt claimed row atomically before any storage or reference access', async () => {
     const objectKey = 'https://secret.example/x?token=private';
@@ -259,7 +260,7 @@ describe('durable render output cleanup', () => {
     const [row] = await database.db.select().from(renderOutputCleanup);
     expect(row?.completedAt).toBeNull();
     expect(row?.claimToken).toBeNull();
-    expect(okValue(await store.summary()).blocked).toBe(0);
+    expect(okValue(await store.summary()).blockedTotal).toBe(0);
     await expire();
     expect(
       okValue(await cleanupRenderOutput(deps, queued.cleanupId)).type
@@ -278,6 +279,8 @@ describe('durable render output cleanup', () => {
     const before = okValue(await store.cutoff()).before;
     const first = okValue(await store.list({ before, limit: 100 }));
     expect(first.ids).toHaveLength(100);
+    if (first.type !== 'cleanup_page')
+      throw new Error('Expected nonempty page');
     await database.db
       .update(renderOutputCleanup)
       .set({
@@ -290,5 +293,229 @@ describe('durable render output cleanup', () => {
     );
     expect(second.ids).toHaveLength(21);
     expect(new Set([...first.ids, ...second.ids]).size).toBe(121);
+  });
+  it('uses the tuple cursor while every earlier row remains eligible, including timestamp ties and milliseconds', async () => {
+    await database.db.insert(renderOutputCleanup).values(
+      Array.from({ length: 241 }, (_, i) => ({
+        resultId: `result-${i}`,
+        attempt: 1,
+        objectKey: `results/result-${i}/1/raw.png`,
+        createdAt: new Date('2000-01-01'),
+        nextAttemptAt: new Date(Date.UTC(2000, 0, 1, 0, i % 3, 0, 123)),
+      }))
+    );
+    const before = okValue(await store.cutoff()).before;
+    const first = okValue(await store.list({ before, limit: 100 }));
+    if (first.type !== 'cleanup_page') throw new Error('Expected page');
+    const second = okValue(
+      await store.list({ before, after: first.cursor, limit: 100 })
+    );
+    if (second.type !== 'cleanup_page') throw new Error('Expected page');
+    const third = okValue(
+      await store.list({ before, after: second.cursor, limit: 100 })
+    );
+    if (third.type !== 'cleanup_page') throw new Error('Expected page');
+    expect([first.ids.length, second.ids.length, third.ids.length]).toEqual([
+      100, 100, 41,
+    ]);
+    expect(new Set([...first.ids, ...second.ids, ...third.ids]).size).toBe(241);
+    expect(
+      okValue(await store.list({ before, after: third.cursor, limit: 100 }))
+        .type
+    ).toBe('cleanup_empty');
+    expect(first.cursor.nextAttemptAt.endsWith('.123Z')).toBe(true);
+  });
+  const blockedTarget = async () => {
+    okValue(
+      await store.enqueue({
+        ...target,
+        resultId: okValue(toRenderResultId('incorrect-owner')),
+      })
+    );
+    const records = okValue(await store.blocked(100)).records;
+    expect(JSON.stringify(records)).not.toContain(target.objectKey);
+    return records[0]!;
+  };
+  const repairInput = async (requestId = 'repair-1') => ({
+    requestId,
+    fingerprint: (await blockedTarget()).fingerprint,
+    resultId: target.resultId,
+    attempt: target.attempt,
+  });
+  it('retains safe locators only for privileged inspection and atomically requeues corrected ownership', async () => {
+    const input = await repairInput();
+    const inspected = okValue(await store.inspect(input.fingerprint));
+    expect(inspected).toMatchObject({
+      type: 'blocked_cleanup_found',
+      locator: target.objectKey,
+      recoveries: [],
+    });
+    expect(okValue(await store.requeue(input)).type).toBe('cleanup_requeued');
+    expect(okValue(await store.requeue(input)).type).toBe('cleanup_requeued');
+    expect(
+      await database.db.select().from(renderOutputCleanupRecovery)
+    ).toHaveLength(1);
+    expect(okValue(await store.requeue({ ...input, attempt: 2 })).type).toBe(
+      'cleanup_repair_conflict'
+    );
+    expect(
+      okValue(await cleanupRenderOutput(depsFor(), target.objectKey)).type
+    ).toBe('cleanup_completed');
+    expect(
+      await database.db.select().from(renderOutputCleanupBlocked)
+    ).toHaveLength(1);
+  });
+  it('leaves historical fingerprint-only evidence unchanged and refuses unavailable locators', async () => {
+    const input = await repairInput();
+    await database.db
+      .update(renderOutputCleanupBlocked)
+      .set({ safeObjectKey: null });
+    await blockedTarget();
+    expect(okValue(await store.requeue(input)).type).toBe(
+      'locator_unavailable'
+    );
+    expect(okValue(await store.inspect(input.fingerprint))).toMatchObject({
+      locator: null,
+    });
+    expect(await database.db.select().from(renderOutputCleanup)).toEqual([]);
+  });
+  it('rejects mismatched ownership and unrelated namespaces before enqueue or storage', async () => {
+    const input = await repairInput();
+    expect(okValue(await store.requeue({ ...input, attempt: 2 })).type).toBe(
+      'cleanup_target_mismatch'
+    );
+    okValue(
+      await store.enqueue({ ...target, objectKey: 'region-masks/a.png' })
+    );
+    const records = okValue(await store.blocked(100)).records;
+    for (const record of records) {
+      const view = okValue(await store.inspect(record.fingerprint));
+      if (
+        view.type === 'blocked_cleanup_found' &&
+        view.locator === 'region-masks/a.png'
+      )
+        expect(
+          okValue(
+            await store.requeue({
+              ...input,
+              requestId: 'unrelated',
+              fingerprint: record.fingerprint,
+            })
+          ).type
+        ).toBe('cleanup_target_mismatch');
+    }
+    expect(await database.db.select().from(renderOutputCleanup)).toEqual([]);
+    expect(
+      await database.db.select().from(renderOutputCleanupRecovery)
+    ).toEqual([]);
+  });
+  it('preserves a live pending claim during repair and isolates concurrent repair requests', async () => {
+    const input = await repairInput();
+    const outcomes = await Promise.all([
+      store.requeue(input),
+      store.requeue({ ...input, requestId: 'repair-2' }),
+    ]);
+    expect(outcomes.map((outcome) => okValue(outcome).type).sort()).toEqual([
+      'cleanup_already_pending',
+      'cleanup_requeued',
+    ]);
+    okValue(
+      await store.claim({ cleanupId: target.objectKey, claimId: 'current' })
+    );
+    expect(
+      okValue(await store.requeue({ ...input, requestId: 'repair-3' })).type
+    ).toBe('cleanup_already_pending');
+    const [row] = await database.db.select().from(renderOutputCleanup);
+    expect(row?.claimToken).toBe('current');
+    expect(row?.attempts).toBe(1);
+    expect(
+      await database.db.select().from(renderOutputCleanupRecovery)
+    ).toHaveLength(3);
+  });
+  it('explicitly rechecks retained objects, preserving old completion, and never reopens deleted tombstones', async () => {
+    const input = await repairInput();
+    await enqueue();
+    const deps = depsFor();
+    vi.spyOn(deps.resultOutputReferences, 'check').mockResolvedValue(
+      Result.Ok({ type: 'output_referenced' })
+    );
+    okValue(await cleanupRenderOutput(deps, target.objectKey));
+    const [old] = await database.db.select().from(renderOutputCleanup);
+    expect(old?.outcome).toBe('output_retained');
+    expect(okValue(await store.requeue(input)).type).toBe('cleanup_requeued');
+    const [event] = await database.db
+      .select()
+      .from(renderOutputCleanupRecovery);
+    expect(event?.previousOutcome).toBe('output_retained');
+    expect(event?.previousCompletedAt).toEqual(old?.completedAt);
+    okValue(await cleanupRenderOutput(depsFor(), target.objectKey));
+    expect(
+      okValue(await store.requeue({ ...input, requestId: 'after-delete' })).type
+    ).toBe('cleanup_already_completed');
+    expect(okValue(await list()).ids).toEqual([]);
+  });
+  it.skipIf(!process.env.RECOVERY_TEST_DATABASE_URL)(
+    'rolls back a repair queue insert if its audit write fails',
+    async () => {
+      const input = await repairInput();
+      await database.db.execute(
+        sql`alter table render_output_cleanup_recovery add constraint reject_recovery check(false)`
+      );
+      try {
+        expect((await store.requeue(input)).isError()).toBe(true);
+        expect(await database.db.select().from(renderOutputCleanup)).toEqual(
+          []
+        );
+        expect(
+          await database.db.select().from(renderOutputCleanupRecovery)
+        ).toEqual([]);
+        expect(
+          await database.db.select().from(renderOutputCleanupBlocked)
+        ).toHaveLength(1);
+      } finally {
+        await database.db.execute(
+          sql`alter table render_output_cleanup_recovery drop constraint reject_recovery`
+        );
+      }
+    }
+  );
+  it('reconciles a lost commit reply using the recovery request identity', async () => {
+    const input = await repairInput();
+    const original = database.db.$runInTransaction!;
+    vi.spyOn(database.db, '$runInTransaction').mockImplementationOnce(
+      async (work, options) => {
+        await original(work, options);
+        throw new Error('lost commit reply');
+      }
+    );
+    expect(okValue(await store.requeue(input)).type).toBe('cleanup_requeued');
+    expect(
+      await database.db.select().from(renderOutputCleanupRecovery)
+    ).toHaveLength(1);
+    expect(okValue(await store.requeue(input)).type).toBe('cleanup_requeued');
+  });
+  it('preserves an uncertain repair write when reconciliation is unavailable, then replays without duplicate work', async () => {
+    const input = await repairInput();
+    const original = database.db.$runInTransaction!;
+    vi.spyOn(database.db, '$runInTransaction').mockImplementationOnce(
+      async (work, options) => {
+        await original(work, options);
+        throw Object.assign(new Error('lost reply'), { code: 'EPIPE' });
+      }
+    );
+    vi.spyOn(database.db, 'select').mockImplementationOnce(() => {
+      throw Object.assign(new Error('read unavailable'), {
+        code: 'ECONNRESET',
+      });
+    });
+    const result = await store.requeue(input);
+    expect(result.isError() && result.getError()).toMatchObject({
+      cause: { code: 'EPIPE' },
+      details: { reconciliation: { errorCodes: ['ECONNRESET'] } },
+    });
+    expect(okValue(await store.requeue(input)).type).toBe('cleanup_requeued');
+    expect(
+      await database.db.select().from(renderOutputCleanupRecovery)
+    ).toHaveLength(1);
   });
 });
