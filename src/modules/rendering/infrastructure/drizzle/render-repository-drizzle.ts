@@ -28,6 +28,7 @@ import {
   renderResultStatuses,
 } from '@/modules/rendering/domain/render';
 
+import { createOutputCleanupStore } from './output-cleanup-drizzle';
 import {
   render as renderTable,
   renderDraft as draftTable,
@@ -556,28 +557,15 @@ export const createRenderRepository = ({
     async retryAttempt(input) {
       try {
         if (isRootDatabase(db)) {
-          return await runRepositoryTransaction(db, async (tx) => {
-            const [previous] = await tx
-              .select({ checkpoint: resultTable.outputCheckpoint })
-              .from(resultTable)
-              .where(eq(resultTable.id, input.resultId))
-              .for('update');
-            const claimed = await createRenderRepository({
-              db: tx,
-              modelOrder,
-            }).retryAttempt(input);
-            if (claimed.isError()) throw claimed.getError();
-            if (claimed.get().type !== 'result_retry_claimed') return claimed;
-            const key = previous?.checkpoint
-              ? toObjectKey(previous.checkpoint.objectKey)
-              : undefined;
-            if (key?.isError()) throw key.getError();
-            return Result.Ok({
-              ...claimed.get(),
-              replacedObjectKey: key?.isOk() ? key.get() : null,
-            });
-          });
+          return await runRepositoryTransaction(db, (tx) =>
+            createRenderRepository({ db: tx, modelOrder }).retryAttempt(input)
+          );
         }
+        const [previous] = await db
+          .select({ checkpoint: resultTable.outputCheckpoint })
+          .from(resultTable)
+          .where(eq(resultTable.id, input.resultId))
+          .for('update');
         const rows = await db
           .update(resultTable)
           .set({
@@ -614,15 +602,27 @@ export const createRenderRepository = ({
             )
           )
           .returning({ attempt: resultTable.attempt });
-        return Result.Ok(
-          rows[0]
-            ? {
-                type: 'result_retry_claimed',
-                attempt: rows[0].attempt,
-                replacedObjectKey: null,
-              }
-            : { type: 'result_attempt_superseded' }
-        );
+        if (!rows[0]) return Result.Ok({ type: 'result_attempt_superseded' });
+        let cleanupId: string | null = null;
+        if (previous?.checkpoint) {
+          const key = toObjectKey(previous.checkpoint.objectKey);
+          if (key.isError()) throw key.getError();
+          const queued = await createOutputCleanupStore({ db }).enqueue(
+            {
+              resultId: input.resultId,
+              attempt: input.expectedAttempt,
+              objectKey: key.get(),
+            },
+            input.startedAt
+          );
+          if (queued.isError()) throw queued.getError();
+          cleanupId = queued.get().cleanupId;
+        }
+        return Result.Ok({
+          type: 'result_retry_claimed',
+          attempt: rows[0].attempt,
+          cleanupId,
+        });
       } catch (error) {
         return Result.Error(dbError(error));
       }
@@ -645,9 +645,25 @@ export const createRenderRepository = ({
               eq(resultTable.attempt, input.attempt),
               eq(resultTable.workflowRunId, input.workflowRunId),
               inArray(resultTable.status, ['pending', 'submitted']),
-              input.providerRequestId === undefined
-                ? undefined
-                : eq(resultTable.providerRequestId, input.providerRequestId)
+              input.submissionPersistenceFailure
+                ? or(
+                    and(
+                      eq(resultTable.status, 'pending'),
+                      isNull(resultTable.providerRequestId)
+                    ),
+                    input.providerRequestId === undefined
+                      ? undefined
+                      : eq(
+                          resultTable.providerRequestId,
+                          input.providerRequestId
+                        )
+                  )
+                : input.providerRequestId === undefined
+                  ? and(
+                      eq(resultTable.status, 'pending'),
+                      isNull(resultTable.providerRequestId)
+                    )
+                  : eq(resultTable.providerRequestId, input.providerRequestId)
             )
           )
           .returning({ id: resultTable.id });

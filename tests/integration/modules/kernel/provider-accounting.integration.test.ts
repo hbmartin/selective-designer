@@ -213,6 +213,32 @@ describe('durable provider accounting', () => {
       ).ids
     ).toHaveLength(1);
   });
+  it.each(['timestamp', 'identity', 'mismatch'] as const)(
+    'preserves permanent %s capture errors without retrying',
+    async (kind) => {
+      const receipt = makeProviderReceipt();
+      if (kind === 'mismatch') okValue(await gateway().capture(receipt));
+      const result = await gateway().capture({
+        ...receipt,
+        ...(kind === 'timestamp' ? { startedAt: 'invalid' } : {}),
+        ...(kind === 'identity'
+          ? { providerRequestId: 'https://private.example/request' }
+          : {}),
+        ...(kind === 'mismatch' ? { subjectId: 'other-subject' } : {}),
+      });
+      expect(result.isError()).toBe(true);
+      if (result.isError())
+        expect(result.getError()).toMatchObject({
+          retryable: false,
+          code:
+            kind === 'timestamp'
+              ? 'PROVIDER_RECEIPT_INVALID_TIMESTAMP'
+              : kind === 'identity'
+                ? 'PROVIDER_RECEIPT_INVALID_IDENTITY'
+                : 'PROVIDER_RECEIPT_IDENTITY_MISMATCH',
+        });
+    }
+  );
   it.skipIf(!process.env.RECOVERY_TEST_DATABASE_URL)(
     'arbitrates simultaneous delivery on native connections',
     async () => {

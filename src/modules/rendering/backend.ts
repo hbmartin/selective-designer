@@ -1,3 +1,4 @@
+export { createOutputCleanupStore } from './infrastructure/drizzle/output-cleanup-drizzle';
 export { createRenderRepository } from './infrastructure/drizzle/render-repository-drizzle';
 export * as renderingDrizzleSchema from './infrastructure/drizzle/schema';
 export {

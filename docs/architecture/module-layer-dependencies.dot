@@ -208,6 +208,7 @@ digraph ModuleLayerDependencies {
   "moodboard/transport" -> "moodboard/domain" [style="solid"];
   "rendering/application" -> "kernel/domain" [style="solid"];
   "rendering/application" -> "rendering/domain" [style="solid"];
+  "rendering/domain" -> "kernel/domain" [style="solid"];
   "rendering/infrastructure" -> "design/infrastructure" [style="solid"];
   "rendering/infrastructure" -> "kernel/domain" [style="solid"];
   "rendering/infrastructure" -> "kernel/infrastructure" [style="solid"];

@@ -1,5 +1,5 @@
 import { Result } from '@bloodyowl/boxed';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { AppError } from '@/modules/kernel';
 
@@ -7,7 +7,8 @@ type Outcome = { type: string; [key: string]: unknown };
 const pipeline = vi.hoisted(() => ({
   submit: vi.fn(),
   persistSubmission: vi.fn(),
-  discardOutput: vi.fn(),
+  cleanup: vi.fn(),
+  reportSubmissionUnresolved: vi.fn(),
   dispatchAccounting: vi.fn(),
   poll: vi.fn(),
   markFailed: vi.fn(),
@@ -18,9 +19,13 @@ vi.mock('workflow', () => ({
   sleep: vi.fn(async () => {}),
   getWorkflowMetadata: () => ({ workflowRunId: 'workflow-1' }),
 }));
+vi.mock('@/composition/render-output-cleanup', () => ({
+  getRenderOutputCleanup: () => ({ process: pipeline.cleanup }),
+}));
 vi.mock('@/composition/rendering-pipeline', () => ({
   getRenderingPipelineUseCases: () => pipeline,
 }));
+const { sleep } = await import('workflow');
 const { renderResultWorkflow, renderWorkflow, MAX_POLLS, pollDelayMs } =
   await import('@/modules/rendering/testing');
 const ok = (value: Outcome) => Promise.resolve(Result.Ok(value));
@@ -30,6 +35,11 @@ const execution = { ...attempt, workflowRunId: 'workflow-1' };
 describe('render workflow', () => {
   beforeEach(() => {
     vi.resetAllMocks();
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-11-06T19:00:00Z'));
+    vi.mocked(sleep).mockImplementation(async (duration) => {
+      vi.setSystemTime(Date.now() + Number(duration));
+    });
     pipeline.submit.mockImplementation(() =>
       ok({ type: 'result_submitted', providerRequestId: 'request-1' })
     );
@@ -37,6 +47,7 @@ describe('render workflow', () => {
       ok({ type: 'result_marked_failed' })
     );
   });
+  afterEach(() => vi.useRealTimers());
   it('passes the dispatched attempt and workflow ownership to each independent result', async () => {
     pipeline.poll.mockImplementation(({ resultId }) =>
       ok(
@@ -132,10 +143,11 @@ describe('render workflow', () => {
       reason: 'timed_out',
     });
   });
-  it('persists accepted metadata in a separate step and leaves exhausted acceptance unresolved', async () => {
+  it('retries journaled acceptance until the original deadline without resubmitting', async () => {
     const submission = {
       ...execution,
       providerRequestId: 'accepted-request',
+      attemptDeadlineAt: '2026-11-06T19:30:00.000Z',
       accountingIdentity: { receipt: { id: 'accepted-call' } },
     };
     pipeline.submit.mockResolvedValue(
@@ -153,10 +165,108 @@ describe('render workflow', () => {
     expect(pipeline.poll).not.toHaveBeenCalled();
     expect(pipeline.markFailed).not.toHaveBeenCalled();
   });
+  it('recovers a database outage with durable 5, 10 and 20 second backoff', async () => {
+    const submission = {
+      ...execution,
+      providerRequestId: 'accepted-request',
+      attemptDeadlineAt: '2026-11-06T19:30:00.000Z',
+      accountingIdentity: { receipt: { id: 'accepted-call' } },
+    };
+    pipeline.submit.mockResolvedValue(
+      Result.Ok({ type: 'result_accepted', submission })
+    );
+    const unavailable = Result.Error(
+      new AppError({ code: 'DB_DOWN', category: 'system', status: 503 })
+    );
+    pipeline.persistSubmission
+      .mockResolvedValueOnce(unavailable)
+      .mockResolvedValueOnce(unavailable)
+      .mockResolvedValueOnce(unavailable)
+      .mockResolvedValue(
+        Result.Ok({
+          type: 'result_submitted',
+          providerRequestId: 'accepted-request',
+        })
+      );
+    pipeline.poll.mockResolvedValue(Result.Ok({ type: 'result_succeeded' }));
+    expect(await renderResultWorkflow(attempt)).toEqual({
+      result: 'result_succeeded',
+    });
+    expect(vi.mocked(sleep).mock.calls).toEqual([[5000], [10000], [20000]]);
+    expect(pipeline.submit).toHaveBeenCalledTimes(1);
+    expect(pipeline.persistSubmission).toHaveBeenCalledTimes(4);
+    expect(pipeline.poll).toHaveBeenCalledWith({
+      ...execution,
+      providerRequestId: 'accepted-request',
+    });
+  });
+  it('fails an owned accepted attempt immediately on a permanent identity error', async () => {
+    pipeline.submit.mockResolvedValue(
+      Result.Ok({
+        type: 'result_accepted',
+        submission: {
+          ...execution,
+          providerRequestId: 'accepted-request',
+          attemptDeadlineAt: '2026-11-06T19:30:00.000Z',
+          accountingIdentity: { receipt: { id: 'accepted-call' } },
+        },
+      })
+    );
+    pipeline.persistSubmission.mockResolvedValue(
+      Result.Error(
+        new AppError({
+          code: 'PROVIDER_RECEIPT_IDENTITY_MISMATCH',
+          category: 'system',
+          status: 500,
+          retryable: false,
+        })
+      )
+    );
+    expect(await renderResultWorkflow(attempt)).toEqual({
+      result: 'result_failed',
+    });
+    expect(pipeline.persistSubmission).toHaveBeenCalledTimes(1);
+    expect(sleep).not.toHaveBeenCalled();
+    expect(pipeline.markFailed).toHaveBeenCalledWith({
+      ...execution,
+      providerRequestId: 'accepted-request',
+      submissionPersistenceFailure: true,
+      reason: 'PROVIDER_RECEIPT_IDENTITY_MISMATCH',
+    });
+  });
+  it('clamps its last wait to the deadline and never marks transient exhaustion failed', async () => {
+    pipeline.submit.mockResolvedValue(
+      Result.Ok({
+        type: 'result_accepted',
+        submission: {
+          ...execution,
+          providerRequestId: 'accepted-request',
+          attemptDeadlineAt: '2026-11-06T19:00:03.000Z',
+          accountingIdentity: { receipt: { id: 'accepted-call' } },
+        },
+      })
+    );
+    pipeline.persistSubmission.mockResolvedValue(
+      Result.Error(
+        new AppError({ code: 'DB_DOWN', category: 'system', status: 503 })
+      )
+    );
+    expect(await renderResultWorkflow(attempt)).toEqual({
+      result: 'result_submission_unresolved',
+    });
+    expect(sleep).toHaveBeenCalledWith(3000);
+    expect(pipeline.persistSubmission).toHaveBeenCalledTimes(1);
+    expect(pipeline.markFailed).not.toHaveBeenCalled();
+    expect(pipeline.reportSubmissionUnresolved).toHaveBeenCalledWith({
+      ...execution,
+      code: 'DB_DOWN',
+    });
+  });
   it('starts polling before dispatch and dispatches only after output completion', async () => {
     const submission = {
       ...execution,
       providerRequestId: 'accepted-request',
+      attemptDeadlineAt: '2026-11-06T19:30:00.000Z',
       accountingIdentity: { receipt: { id: 'accepted-call' } },
     };
     pipeline.submit.mockResolvedValue(
@@ -197,18 +307,15 @@ describe('render workflow', () => {
   });
   it('continues the replacement while cleanup fails', async () => {
     pipeline.poll.mockResolvedValue(Result.Ok({ type: 'result_succeeded' }));
-    pipeline.discardOutput.mockRejectedValue(new Error('cleanup unavailable'));
+    pipeline.cleanup.mockRejectedValue(new Error('cleanup unavailable'));
     expect(
       await renderResultWorkflow({
         ...attempt,
-        replacedObjectKey: 'results/old/1/raw.png',
+        cleanupId: 'results/res-a/1/raw.png',
       })
     ).toEqual({ result: 'result_succeeded' });
-    expect(pipeline.submit).toHaveBeenCalledBefore(pipeline.discardOutput);
-    expect(pipeline.discardOutput).toHaveBeenCalledWith({
-      ...execution,
-      objectKey: 'results/old/1/raw.png',
-    });
+    expect(pipeline.submit).toHaveBeenCalledBefore(pipeline.cleanup);
+    expect(pipeline.cleanup).toHaveBeenCalledWith('results/res-a/1/raw.png');
   });
   it('backs off from 2 s to 10 s', () => {
     expect([0, 1, 5, 8, 100].map(pollDelayMs)).toEqual([

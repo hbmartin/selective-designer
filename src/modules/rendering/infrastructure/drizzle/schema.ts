@@ -111,3 +111,29 @@ export const renderResult = pgTable(
 export type RenderRow = typeof render.$inferSelect;
 export type RenderResultRow = typeof renderResult.$inferSelect;
 export type RenderDraftRow = typeof renderDraft.$inferSelect;
+
+/** Independent cleanup responsibility; intentionally survives result/design deletion. */
+export const renderOutputCleanup = pgTable(
+  'render_output_cleanup',
+  {
+    objectKey: text('objectKey').primaryKey(),
+    resultId: text('resultId').notNull(),
+    attempt: integer('attempt').notNull(),
+    createdAt: timestamp('createdAt', { precision: 3, mode: 'date' }).notNull(),
+    nextAttemptAt: timestamp('nextAttemptAt', {
+      precision: 3,
+      mode: 'date',
+    }).notNull(),
+    leaseUntil: timestamp('leaseUntil', { precision: 3, mode: 'date' }),
+    claimToken: text('claimToken'),
+    attempts: integer('attempts').notNull().default(0),
+    lastErrorCode: text('lastErrorCode'),
+    outcome: text('outcome'),
+    completedAt: timestamp('completedAt', { precision: 3, mode: 'date' }),
+  },
+  (t) => [
+    index('render_output_cleanup_pending_idx')
+      .on(t.nextAttemptAt, t.objectKey)
+      .where(sql`${t.completedAt} is null`),
+  ]
+);

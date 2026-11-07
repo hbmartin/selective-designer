@@ -33,6 +33,7 @@ import { Route as ManagerDashboardIndexRouteImport } from './routes/manager/dash
 import { Route as ManagerUsersIndexRouteImport } from './routes/manager/users/index'
 import { Route as ApiImagesImageIdDownloadRouteImport } from './routes/api/images.$imageId.download'
 import { Route as ApiInternalAccountingReconcileRouteImport } from './routes/api/internal.accounting.reconcile'
+import { Route as ApiInternalRenderingCleanupRouteImport } from './routes/api/internal.rendering.cleanup'
 import { Route as AppDesignsDesignIdIndexRouteImport } from './routes/app/designs/$designId/index'
 import { Route as AppDesignsDesignIdCompareRouteImport } from './routes/app/designs/$designId/compare'
 import { Route as AppDesignsDesignIdEditRouteImport } from './routes/app/designs/$designId/edit'
@@ -166,6 +167,12 @@ const ApiInternalAccountingReconcileRoute =
     path: '/api/internal/accounting/reconcile',
     getParentRoute: () => rootRouteImport,
   } as any)
+const ApiInternalRenderingCleanupRoute =
+  ApiInternalRenderingCleanupRouteImport.update({
+    id: '/api/internal/rendering/cleanup',
+    path: '/api/internal/rendering/cleanup',
+    getParentRoute: () => rootRouteImport,
+  } as any)
 const AppDesignsDesignIdIndexRoute = AppDesignsDesignIdIndexRouteImport.update({
   id: '/designs/$designId/',
   path: '/designs/$designId/',
@@ -242,6 +249,7 @@ export interface FileRoutesByFullPath {
   '/manager/users/': typeof ManagerUsersIndexRoute
   '/api/images/$imageId/download': typeof ApiImagesImageIdDownloadRoute
   '/api/internal/accounting/reconcile': typeof ApiInternalAccountingReconcileRoute
+  '/api/internal/rendering/cleanup': typeof ApiInternalRenderingCleanupRoute
   '/app/designs/$designId/compare': typeof AppDesignsDesignIdCompareRoute
   '/app/designs/$designId/edit': typeof AppDesignsDesignIdEditRoute
   '/app/designs/$designId/': typeof AppDesignsDesignIdIndexRoute
@@ -273,6 +281,7 @@ export interface FileRoutesByTo {
   '/manager/users': typeof ManagerUsersIndexRoute
   '/api/images/$imageId/download': typeof ApiImagesImageIdDownloadRoute
   '/api/internal/accounting/reconcile': typeof ApiInternalAccountingReconcileRoute
+  '/api/internal/rendering/cleanup': typeof ApiInternalRenderingCleanupRoute
   '/app/designs/$designId/compare': typeof AppDesignsDesignIdCompareRoute
   '/app/designs/$designId/edit': typeof AppDesignsDesignIdEditRoute
   '/app/designs/$designId': typeof AppDesignsDesignIdIndexRoute
@@ -309,6 +318,7 @@ export interface FileRoutesById {
   '/manager/users/': typeof ManagerUsersIndexRoute
   '/api/images/$imageId/download': typeof ApiImagesImageIdDownloadRoute
   '/api/internal/accounting/reconcile': typeof ApiInternalAccountingReconcileRoute
+  '/api/internal/rendering/cleanup': typeof ApiInternalRenderingCleanupRoute
   '/app/designs/$designId/compare': typeof AppDesignsDesignIdCompareRoute
   '/app/designs/$designId/edit': typeof AppDesignsDesignIdEditRoute
   '/app/designs/$designId/': typeof AppDesignsDesignIdIndexRoute
@@ -346,6 +356,7 @@ export interface FileRouteTypes {
     | '/manager/users/'
     | '/api/images/$imageId/download'
     | '/api/internal/accounting/reconcile'
+    | '/api/internal/rendering/cleanup'
     | '/app/designs/$designId/compare'
     | '/app/designs/$designId/edit'
     | '/app/designs/$designId/'
@@ -377,6 +388,7 @@ export interface FileRouteTypes {
     | '/manager/users'
     | '/api/images/$imageId/download'
     | '/api/internal/accounting/reconcile'
+    | '/api/internal/rendering/cleanup'
     | '/app/designs/$designId/compare'
     | '/app/designs/$designId/edit'
     | '/app/designs/$designId'
@@ -412,6 +424,7 @@ export interface FileRouteTypes {
     | '/manager/users/'
     | '/api/images/$imageId/download'
     | '/api/internal/accounting/reconcile'
+    | '/api/internal/rendering/cleanup'
     | '/app/designs/$designId/compare'
     | '/app/designs/$designId/edit'
     | '/app/designs/$designId/'
@@ -437,6 +450,7 @@ export interface RootRouteChildren {
   ApiWebhooksResendRoute: typeof ApiWebhooksResendRoute
   ApiImagesImageIdDownloadRoute: typeof ApiImagesImageIdDownloadRoute
   ApiInternalAccountingReconcileRoute: typeof ApiInternalAccountingReconcileRoute
+  ApiInternalRenderingCleanupRoute: typeof ApiInternalRenderingCleanupRoute
   ApiTelemetryOtelV1MetricsRoute: typeof ApiTelemetryOtelV1MetricsRoute
   ApiTelemetryOtelV1TracesRoute: typeof ApiTelemetryOtelV1TracesRoute
 }
@@ -611,6 +625,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof ApiInternalAccountingReconcileRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/api/internal/rendering/cleanup': {
+      id: '/api/internal/rendering/cleanup'
+      path: '/api/internal/rendering/cleanup'
+      fullPath: '/api/internal/rendering/cleanup'
+      preLoaderRoute: typeof ApiInternalRenderingCleanupRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/app/designs/$designId/': {
       id: '/app/designs/$designId/'
       path: '/designs/$designId'
@@ -768,6 +789,7 @@ const rootRouteChildren: RootRouteChildren = {
   ApiWebhooksResendRoute: ApiWebhooksResendRoute,
   ApiImagesImageIdDownloadRoute: ApiImagesImageIdDownloadRoute,
   ApiInternalAccountingReconcileRoute: ApiInternalAccountingReconcileRoute,
+  ApiInternalRenderingCleanupRoute: ApiInternalRenderingCleanupRoute,
   ApiTelemetryOtelV1MetricsRoute: ApiTelemetryOtelV1MetricsRoute,
   ApiTelemetryOtelV1TracesRoute: ApiTelemetryOtelV1TracesRoute,
 }

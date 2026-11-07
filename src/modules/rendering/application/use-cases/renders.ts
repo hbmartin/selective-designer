@@ -653,9 +653,7 @@ export async function retryResult(
   const scheduled = await deps.renderScheduler.scheduleResult({
     resultId: input.resultId,
     attempt: claimed.attempt,
-    ...(claimed.replacedObjectKey
-      ? { replacedObjectKey: claimed.replacedObjectKey }
-      : {}),
+    ...(claimed.cleanupId ? { cleanupId: claimed.cleanupId } : {}),
   });
   if (scheduled.isError()) return Result.Error(scheduled.getError());
   return reloadView(deps, ownedOutcome.render.id);

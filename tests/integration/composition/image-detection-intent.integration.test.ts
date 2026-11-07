@@ -543,6 +543,7 @@ describe('atomic image and detection writes', () => {
           ...ctx.identity,
           settings: {},
           prompt: '',
+          attemptDeadlineAt: '2026-11-06T19:30:00.000Z',
           submittedAt: ctx.kernel.clock.now().toISOString(),
           accountingIdentity,
         })
@@ -657,7 +658,11 @@ describe('atomic image and detection writes', () => {
             startedAt: ctx.kernel.clock.now().toISOString(),
           }),
           source: { kind: 'url', url: 'https://provider.test/old' },
-          objectKey: okValue(toObjectKey('results/old.img')),
+          objectKey: okValue(
+            toObjectKey(
+              `results/${ctx.identity.resultId}/${ctx.identity.attempt}/raw.img`
+            )
+          ),
           contentType: null,
           modelVersion: null,
           costUsdMicros: 1,
@@ -714,6 +719,7 @@ describe('atomic image and detection writes', () => {
           providerRequestId: 'stale',
           settings: {},
           prompt: '',
+          attemptDeadlineAt: '2026-11-06T19:30:00.000Z',
           submittedAt: new Date().toISOString(),
           accountingIdentity: {
             invocationId: 'replacement',

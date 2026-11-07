@@ -44,19 +44,24 @@ export async function accountingReconcileWorkflow() {
     // oxlint-disable-next-line no-await-in-loop -- durable cursor advances after a bounded batch.
     const page = await listStep({ before, after });
     if (!page.ids.length) break;
-    // oxlint-disable-next-line no-await-in-loop -- isolate exhausted receipts and continue the batch.
-    for (let offset = 0; offset < page.ids.length; offset += 5) {
-      // oxlint-disable-next-line no-await-in-loop -- cap database delivery concurrency independently of page size.
-      const results = await Promise.allSettled(
-        page.ids.slice(offset, offset + 5).map((id) => deliverStep(id))
-      );
-      delivered += results.filter(
-        (result) =>
-          result.status === 'fulfilled' &&
-          result.value.type === 'receipt_delivered'
-      ).length;
-      failed += results.filter((result) => result.status === 'rejected').length;
-    }
+    let next = 0;
+    const worker = async () => {
+      while (next < page.ids.length) {
+        const id = page.ids[next++];
+        if (id === undefined) break;
+        try {
+          // oxlint-disable-next-line no-await-in-loop -- replenish each slot independently of slow receipts.
+          const result = await deliverStep(id);
+          if (result.type === 'receipt_delivered') delivered++;
+        } catch {
+          failed++;
+        }
+      }
+    };
+    // oxlint-disable-next-line no-await-in-loop -- maintain five durable slots per page.
+    await Promise.all(
+      Array.from({ length: Math.min(5, page.ids.length) }, worker)
+    );
     after = page.ids.at(-1);
   }
   const summary = await summaryStep();

@@ -2,11 +2,13 @@ import { FatalError, getWorkflowMetadata, sleep } from 'workflow';
 
 import { failureCode } from '@/modules/kernel/domain/errors/failure-code';
 import {
-  toObjectKey,
   toProviderCallId,
   toRenderResultId,
 } from '@/modules/kernel/domain/ids';
-import { unwrapStepResult } from '@/modules/kernel/transport/workflow/step-result-mapper';
+import {
+  isRetryableAppError,
+  unwrapStepResult,
+} from '@/modules/kernel/transport/workflow/step-result-mapper';
 
 import type { AcceptedRenderSubmission } from '../../application/ports/ports';
 
@@ -41,7 +43,59 @@ async function submitStep(input: Execution) {
 }
 async function persistSubmissionStep(input: AcceptedRenderSubmission) {
   'use step';
-  return unwrapStepResult(await (await pipeline()).persistSubmission(input));
+  const result = await (await pipeline()).persistSubmission(input);
+  if (result.isOk()) return result.get();
+  const error = result.getError();
+  return {
+    type: 'submission_persistence_error' as const,
+    code: error.code,
+    retryable: isRetryableAppError(error),
+  };
+}
+persistSubmissionStep.maxRetries = 0;
+async function unresolvedSubmissionStep(input: Execution, code: string) {
+  'use step';
+  (await pipeline()).reportSubmissionUnresolved({
+    resultId: input.resultId,
+    attempt: input.attempt,
+    workflowRunId: input.workflowRunId,
+    code,
+  });
+}
+
+export const persistenceDelayMs = (retry: number) =>
+  Math.min(60_000, 5_000 * 2 ** Math.min(retry, 4));
+
+async function recoverSubmission(input: AcceptedRenderSubmission) {
+  let retry = 0;
+  let code = 'RENDER_SUBMISSION_PERSISTENCE_UNRESOLVED';
+  const deadline = Date.parse(input.attemptDeadlineAt);
+  while (true) {
+    if (!Number.isFinite(deadline) || Date.now() >= deadline) {
+      await unresolvedSubmissionStep(input, code);
+      return { type: 'result_submission_unresolved' as const };
+    }
+    let result;
+    try {
+      // oxlint-disable-next-line no-await-in-loop -- replay the same journaled acceptance.
+      result = await persistSubmissionStep(input);
+    } catch (error) {
+      result = {
+        type: 'submission_persistence_error' as const,
+        code: failureCode(error, code),
+        retryable: true,
+      };
+    }
+    if (result.type !== 'submission_persistence_error') return result;
+    code = result.code;
+    if (!result.retryable)
+      return { type: 'submission_persistence_blocked' as const, code };
+    const remaining = deadline - Date.now();
+    if (remaining > 0) {
+      // oxlint-disable-next-line no-await-in-loop -- durable backoff never extends the attempt deadline.
+      await sleep(Math.min(persistenceDelayMs(retry++), remaining));
+    }
+  }
 }
 async function dispatchAccountingStep(receiptId: string) {
   'use step';
@@ -49,17 +103,11 @@ async function dispatchAccountingStep(receiptId: string) {
     unwrapStepResult(toProviderCallId(receiptId))
   );
 }
-async function cleanupOutputStep(objectKey: string, input: Execution) {
+async function cleanupOutputStep(cleanupId: string) {
   'use step';
-  return unwrapStepResult(
-    await (
-      await pipeline()
-    ).discardOutput({
-      ...input,
-      resultId: resultIdOrFail(input.resultId),
-      objectKey: unwrapStepResult(toObjectKey(objectKey)),
-    })
-  );
+  const { getRenderOutputCleanup } =
+    await import('@/composition/render-output-cleanup');
+  return unwrapStepResult(await getRenderOutputCleanup().process(cleanupId));
 }
 
 async function pollStep(input: Execution & { providerRequestId: string }) {
@@ -71,7 +119,10 @@ async function pollStep(input: Execution & { providerRequestId: string }) {
   );
 }
 async function markFailedStep(
-  input: Execution & { providerRequestId?: string },
+  input: Execution & {
+    providerRequestId?: string;
+    submissionPersistenceFailure?: true;
+  },
   reason: string
 ) {
   'use step';
@@ -86,9 +137,15 @@ async function markFailedStep(
 async function runResult(input: Execution): Promise<string> {
   let providerRequestId: string | undefined;
   let receiptId: string | undefined;
-  const fail = async (reason: string) => {
+  const fail = async (reason: string, submissionPersistenceFailure?: true) => {
     const failed = await markFailedStep(
-      { ...input, ...(providerRequestId ? { providerRequestId } : {}) },
+      {
+        ...input,
+        ...(providerRequestId ? { providerRequestId } : {}),
+        ...(submissionPersistenceFailure
+          ? { submissionPersistenceFailure }
+          : {}),
+      },
       reason
     );
     return failed.type === 'result_marked_failed'
@@ -102,16 +159,13 @@ async function runResult(input: Execution): Promise<string> {
     else if (accepted.type === 'result_already_submitted')
       receiptId = accepted.receiptId;
     let submitted:
-      | Awaited<ReturnType<typeof persistSubmissionStep>>
+      | Awaited<ReturnType<typeof recoverSubmission>>
       | Exclude<typeof accepted, { type: 'result_accepted' }>;
     if (accepted.type === 'result_accepted') {
       providerRequestId = accepted.submission.providerRequestId;
-      try {
-        submitted = await persistSubmissionStep(accepted.submission);
-      } catch {
-        // Acceptance is durable; preserve this attempt and its existing Retry deadline.
-        return 'result_submission_unresolved';
-      }
+      submitted = await recoverSubmission(accepted.submission);
+      if (submitted.type === 'submission_persistence_blocked')
+        return await fail(submitted.code, true);
     } else submitted = accepted;
     if (
       submitted.type !== 'result_submitted' &&
@@ -159,7 +213,7 @@ export async function renderWorkflow(input: {
 export async function renderResultWorkflow(input: {
   resultId: string;
   attempt: number;
-  replacedObjectKey?: string;
+  cleanupId?: string;
 }) {
   'use workflow';
   const execution = {
@@ -168,8 +222,8 @@ export async function renderResultWorkflow(input: {
     workflowRunId: getWorkflowMetadata().workflowRunId,
   };
   const result = runResult(execution);
-  const cleanup = input.replacedObjectKey
-    ? cleanupOutputStep(input.replacedObjectKey, execution)
+  const cleanup = input.cleanupId
+    ? cleanupOutputStep(input.cleanupId)
     : Promise.resolve();
   const [rendered] = await Promise.allSettled([result, cleanup]);
   return {

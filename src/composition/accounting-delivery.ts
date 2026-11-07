@@ -1,4 +1,4 @@
-import { getDeadline, waitUntil } from '@vercel/functions';
+import { getEnv, waitUntil } from '@vercel/functions';
 
 import type { Logger, ProviderAccounting } from '@/modules/kernel';
 import { safeErrorDiagnostics } from '@/modules/kernel/domain/errors/safe-error-diagnostics';
@@ -13,13 +13,17 @@ const schedule = async (receiptId: ProviderCallId) => {
   await start(accountingDeliveryWorkflow, [{ receiptId }]);
 };
 
-/** The deadline is a public positive signal that a host owns the request lifetime. */
+/** The deployed Vercel request host owns waitUntil, independently of deadline metadata. */
 export function deferAccountingDelivery(
   task: () => Promise<void>,
   logger: Logger
 ) {
   try {
-    if (getDeadline() === undefined) {
+    const env = getEnv();
+    if (
+      env.VERCEL !== '1' ||
+      !['production', 'preview'].includes(env.VERCEL_ENV ?? '')
+    ) {
       logger.info({
         event: 'provider_accounting.dispatch_deferred',
         details: { reason: 'request_lifetime_unavailable' },
@@ -36,6 +40,28 @@ export function deferAccountingDelivery(
       },
     });
   }
+}
+
+/** Cover the entire facade, so newly exposed operations inherit delivery ownership. */
+export function createAccountingFacade<
+  T extends Record<string, (input: never) => Promise<unknown>>,
+>(input: {
+  accounting: ProviderAccounting;
+  logger: Logger;
+  owner: 'workflow' | 'http';
+  create: (accounting: ProviderAccounting) => T;
+}): T {
+  const facade = input.create(input.accounting);
+  return Object.fromEntries(
+    Object.keys(facade).map((key) => [
+      key,
+      (value: never) =>
+        withAccountingDelivery({
+          ...input,
+          operation: (accounting) => input.create(accounting)[key]!(value),
+        }),
+    ])
+  ) as T;
 }
 
 /** A workflow-owned post-operation step may dispatch a previously captured receipt. */

@@ -59,6 +59,7 @@ export type RenderAccountingIdentity = {
 };
 /** Server-only handoff persisted by the workflow before database persistence retries. */
 export type AcceptedRenderSubmission = RenderExecution & {
+  attemptDeadlineAt: string;
   providerRequestId: string;
   settings: ModelSettings;
   prompt: string;
@@ -111,7 +112,7 @@ export interface RenderRepository {
       | {
           type: 'result_retry_claimed';
           attempt: number;
-          replacedObjectKey: ObjectKey | null;
+          cleanupId: string | null;
         }
       | { type: 'result_attempt_superseded' }
     >
@@ -121,6 +122,8 @@ export interface RenderRepository {
       providerRequestId?: string;
       reason: string;
       now: Date;
+      /** A journaled acceptance may not yet have reached the submitted row. */
+      submissionPersistenceFailure?: true;
     }
   ): Promise<
     ApplicationResult<
@@ -404,7 +407,7 @@ export interface RenderScheduler {
   scheduleResult(input: {
     resultId: RenderResultId;
     attempt: number;
-    replacedObjectKey?: ObjectKey;
+    cleanupId?: string;
   }): Promise<ApplicationResult<{ type: 'render_scheduled' }>>;
 }
 

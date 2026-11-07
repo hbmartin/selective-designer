@@ -1,6 +1,6 @@
 import { Result } from '@bloodyowl/boxed';
 
-import { AppError } from '@/modules/kernel';
+import { AppError, type ProviderAccounting } from '@/modules/kernel';
 import type { ImageId } from '@/modules/kernel/domain/ids';
 import type {
   Draft,
@@ -11,7 +11,10 @@ import type {
 import { isRenderRetryable } from '@/modules/rendering';
 
 /** In-memory {@link RenderRepository} with the same revision semantics. */
-export const createFakeRenderRepository = (now: () => Date) => {
+export const createFakeRenderRepository = (
+  now: () => Date,
+  accounting?: ProviderAccounting
+) => {
   const drafts = new Map<ImageId, Draft>();
   const renders: Render[] = [];
   const owners = new Map<string, string>();
@@ -194,6 +197,10 @@ export const createFakeRenderRepository = (now: () => Date) => {
       return Result.Ok({ type: 'result_submitted' });
     },
     async saveOutput(input) {
+      if (accounting) {
+        const captured = await accounting.capture(input.checkpoint.receipt);
+        if (captured.isError()) return Result.Error(captured.getError());
+      }
       const found = findResult(input.resultId);
       if (
         found?.result.attempt === input.attempt &&
@@ -223,8 +230,7 @@ export const createFakeRenderRepository = (now: () => Date) => {
         !isRenderRetryable(found.result, input.expiredBeforeMs)
       )
         return Result.Ok({ type: 'result_attempt_superseded' });
-      const replacedObjectKey =
-        checkpoints.get(input.resultId)?.objectKey ?? null;
+      const cleanupId = checkpoints.get(input.resultId)?.objectKey ?? null;
       accountingIdentities.delete(input.resultId);
       Object.assign(found.result, {
         status: 'pending',
@@ -245,7 +251,7 @@ export const createFakeRenderRepository = (now: () => Date) => {
       return Result.Ok({
         type: 'result_retry_claimed',
         attempt: found.result.attempt,
-        replacedObjectKey,
+        cleanupId,
       });
     },
     async failResultAttempt(input) {
@@ -255,8 +261,16 @@ export const createFakeRenderRepository = (now: () => Date) => {
         !['pending', 'submitted'].includes(found.result.status) ||
         found.result.attempt !== input.attempt ||
         owners.get(input.resultId) !== input.workflowRunId ||
+        (input.providerRequestId === undefined &&
+          (found.result.status !== 'pending' ||
+            found.result.providerRequestId !== null)) ||
         (input.providerRequestId !== undefined &&
-          found.result.providerRequestId !== input.providerRequestId)
+          found.result.providerRequestId !== input.providerRequestId &&
+          !(
+            input.submissionPersistenceFailure &&
+            found.result.status === 'pending' &&
+            found.result.providerRequestId === null
+          ))
       )
         return Result.Ok({ type: 'result_attempt_superseded' });
       const checkpoint = checkpoints.get(input.resultId);
