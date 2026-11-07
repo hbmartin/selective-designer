@@ -19,7 +19,13 @@ describe('render cleanup workflow', () => {
       Result.Ok({ type: 'cleanup_cutoff', before: '2026-11-06T07:00:00.000Z' })
     );
     state.summary.mockResolvedValue(
-      Result.Ok({ type: 'cleanup_summary', blockedTotal: 1, reasons: [] })
+      Result.Ok({
+        type: 'cleanup_summary',
+        blockedTotal: 1,
+        blockedOutstanding: 1,
+        reasons: [],
+        outstandingReasons: [],
+      })
     );
   });
   it('uses the database snapshot and original tuple cursor while isolating failed and blocked work', async () => {
@@ -47,6 +53,9 @@ describe('render cleanup workflow', () => {
       failed: 1,
       blockedThisRun: 1,
       blockedTotal: 1,
+      blockedOutstanding: 1,
+      blockedReasons: [],
+      outstandingReasons: [],
     });
     expect(state.list).toHaveBeenNthCalledWith(2, {
       before: '2026-11-06T07:00:00.000Z',
@@ -75,5 +84,22 @@ describe('render cleanup workflow', () => {
       'RENDER_CLEANUP_CURSOR_INVALID'
     );
     expect(state.process).toHaveBeenCalledOnce();
+  });
+  it('rejects a cyclic cursor before processing an earlier page again', async () => {
+    const page = (id: string) =>
+      Result.Ok({
+        type: 'cleanup_page',
+        ids: [id],
+        cursor: { nextAttemptAt: '2000-01-01T00:00:00.123Z', objectKey: id },
+      });
+    state.list
+      .mockResolvedValueOnce(page('a'))
+      .mockResolvedValueOnce(page('b'))
+      .mockResolvedValue(page('a'));
+    state.process.mockResolvedValue(Result.Ok({ type: 'cleanup_completed' }));
+    await expect(renderOutputCleanupWorkflow()).rejects.toThrow(
+      'RENDER_CLEANUP_CURSOR_INVALID'
+    );
+    expect(state.process.mock.calls.map(([id]) => id)).toEqual(['a', 'b']);
   });
 });

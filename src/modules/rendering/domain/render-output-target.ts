@@ -50,6 +50,8 @@ const invalidTarget = () =>
     status: 400,
     retryable: false,
   });
+const outputKeyText = (resultId: string, attempt: number, extension: string) =>
+  `results/${resultId}/${attempt}/raw.${extension}`;
 export function renderOutputKey(
   resultId: RenderResultId,
   attempt: number,
@@ -58,7 +60,7 @@ export function renderOutputKey(
   if (!validIdentity(resultId, attempt) || !RENDER_OUTPUT_EXTENSIONS[format])
     return Result.Error(invalidTarget());
   return toObjectKey(
-    `results/${resultId}/${attempt}/raw.${RENDER_OUTPUT_EXTENSIONS[format]}`
+    outputKeyText(resultId, attempt, RENDER_OUTPUT_EXTENSIONS[format])
   );
 }
 
@@ -72,14 +74,32 @@ export type RenderOutputTarget = {
 export function validateRenderOutputTarget(
   target: RenderOutputTarget
 ): BoxedResult<{ type: 'render_output_target_valid' }, AppError> {
-  const prefix = `results/${target.resultId}/${target.attempt}/raw.`;
   const valid =
     validIdentity(target.resultId, target.attempt) &&
-    target.objectKey.startsWith(prefix) &&
     Object.values(RENDER_OUTPUT_EXTENSIONS).some(
-      (extension) => target.objectKey === `${prefix}${extension}`
+      (extension) =>
+        target.objectKey ===
+        outputKeyText(target.resultId, target.attempt, extension)
     );
   return valid
     ? Result.Ok({ type: 'render_output_target_valid' as const })
     : Result.Error(invalidTarget());
+}
+
+/** Terminal attempts cannot regain publication rights without incrementing their attempt. */
+export function cleanupAttemptEligibility(
+  targetAttempt: number,
+  current?: { attempt: number; status: string }
+) {
+  if (!current || targetAttempt < current.attempt)
+    return { type: 'cleanup_attempt_eligible' as const };
+  if (targetAttempt > current.attempt || !validRenderAttempt(current.attempt))
+    return { type: 'cleanup_attempt_invalid' as const };
+  if (current.status === 'pending' || current.status === 'submitted')
+    return { type: 'cleanup_attempt_active' as const };
+  return current.status === 'succeeded' ||
+    current.status === 'failed' ||
+    current.status === 'skipped'
+    ? { type: 'cleanup_attempt_eligible' as const }
+    : { type: 'cleanup_attempt_invalid' as const };
 }

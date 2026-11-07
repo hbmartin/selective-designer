@@ -188,10 +188,12 @@ node_rendering_domain --> node_kernel_domain
 node_rendering_infrastructure --> node_design_infrastructure
 node_rendering_infrastructure --> node_kernel_domain
 node_rendering_infrastructure --> node_kernel_infrastructure
+node_rendering_infrastructure --> node_rendering_application
 node_rendering_infrastructure --> node_rendering_domain
 node_rendering_presentation --> node_auth_public
 node_rendering_presentation --> node_rendering_domain
 node_rendering_presentation --> node_rendering_public
+node_rendering_public --> node_kernel_domain
 node_rendering_public --> node_rendering_application
 node_rendering_public --> node_rendering_domain
 node_rendering_public --> node_rendering_infrastructure
@@ -262,17 +264,17 @@ linkStyle 92 stroke-dasharray: 1 4
 linkStyle 94 stroke-dasharray: 1 4
 linkStyle 95 stroke-dasharray: 1 4
 linkStyle 96 stroke-dasharray: 6 4
-linkStyle 111 stroke-dasharray: 1 4
 linkStyle 113 stroke-dasharray: 1 4
-linkStyle 114 stroke-dasharray: 1 4
-linkStyle 115 stroke-dasharray: 6 4
-linkStyle 135 stroke-dasharray: 1 4
-linkStyle 136 stroke-dasharray: 1 4
-linkStyle 137 stroke-dasharray: 6 4
-linkStyle 149 stroke-dasharray: 1 4
-linkStyle 150 stroke-dasharray: 1 4
+linkStyle 115 stroke-dasharray: 1 4
+linkStyle 116 stroke-dasharray: 1 4
+linkStyle 117 stroke-dasharray: 6 4
+linkStyle 137 stroke-dasharray: 1 4
+linkStyle 138 stroke-dasharray: 1 4
+linkStyle 139 stroke-dasharray: 6 4
 linkStyle 151 stroke-dasharray: 1 4
-linkStyle 152 stroke-dasharray: 6 4
+linkStyle 152 stroke-dasharray: 1 4
+linkStyle 153 stroke-dasharray: 1 4
+linkStyle 154 stroke-dasharray: 6 4
 ```
 
 ## Edge Styles

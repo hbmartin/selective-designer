@@ -25,6 +25,9 @@ const resultIdOrFail = (value: string) => {
   return id.get();
 };
 const loadModule = lazyModule(() => import('@/composition/rendering-pipeline'));
+const loadCleanupModule = lazyModule(
+  () => import('@/composition/render-output-cleanup')
+);
 const pipeline = async () =>
   (await loadModule()).getRenderingPipelineUseCases();
 
@@ -47,6 +50,10 @@ async function persistSubmissionStep(input: AcceptedRenderSubmission) {
     retryable: isRetryableAppError(error),
     receiptCaptured:
       error instanceof SubmissionPersistenceError && error.receiptCaptured,
+    submissionWrite:
+      error instanceof SubmissionPersistenceError
+        ? error.submissionWrite
+        : ('unknown' as const),
   };
 }
 persistSubmissionStep.maxRetries = 0;
@@ -68,11 +75,27 @@ async function unresolvedSubmissionStep(
 export const persistenceDelayMs = (retry: number) =>
   Math.min(60_000, 5_000 * 2 ** Math.min(retry, 4));
 
+async function tryReconcileSubmission(input: AcceptedRenderSubmission) {
+  try {
+    return await reconcileSubmissionStep(input);
+  } catch {
+    return { type: 'submission_reconciliation_unavailable' as const };
+  }
+}
 async function recoverSubmission(input: AcceptedRenderSubmission) {
   let retry = 0;
   let receiptCaptured = false;
   let lastCode = 'RENDER_SUBMISSION_PERSISTENCE_UNRESOLVED';
-  const deadline = Date.parse(input.attemptDeadlineAt);
+  let deadline = Date.parse(input.attemptDeadlineAt);
+  let uncertainWrite = false;
+  const unresolved = async (code: string) => {
+    try {
+      await unresolvedSubmissionStep(input, code, receiptCaptured);
+    } catch {
+      /* Diagnostics cannot terminalize an unresolved accepted request. */
+    }
+    return { type: 'result_submission_unresolved' as const, receiptCaptured };
+  };
   while (true) {
     let result;
     try {
@@ -81,48 +104,82 @@ async function recoverSubmission(input: AcceptedRenderSubmission) {
     } catch (error) {
       try {
         await persistenceExceptionStep(
-          input,
+          {
+            resultId: input.resultId,
+            attempt: input.attempt,
+            workflowRunId: input.workflowRunId,
+          },
           failureCode(error, lastCode),
           safeErrorDiagnostics(error)
         );
       } catch {
-        // Diagnostic delivery must not abandon the journaled acceptance or its capture progress.
+        /* Diagnostics cannot abandon acceptance or capture progress. */
       }
       result = {
         type: 'submission_persistence_error' as const,
         code: failureCode(error, lastCode),
         retryable: true,
         receiptCaptured: false,
+        submissionWrite: 'unknown' as const,
       };
     }
-    if (result.type === 'submission_persistence_error') lastCode = result.code;
     receiptCaptured ||= result.receiptCaptured;
     if (result.type !== 'submission_persistence_error')
       return { ...result, receiptCaptured };
-    const code = Number.isFinite(deadline)
-      ? result.code
-      : 'RENDER_SUBMISSION_DEADLINE_INVALID';
-    if (!result.retryable || !Number.isFinite(deadline))
+    lastCode = result.code;
+    uncertainWrite ||= result.submissionWrite === 'unknown';
+    if (!result.retryable && !uncertainWrite)
       return {
         type: 'submission_persistence_blocked' as const,
-        code,
+        code: lastCode,
         receiptCaptured,
       };
-    const remaining = deadline - Date.now();
-    if (remaining <= 0) {
-      await unresolvedSubmissionStep(input, code, receiptCaptured);
-      return { type: 'result_submission_unresolved' as const, receiptCaptured };
+    if (
+      !Number.isFinite(deadline) ||
+      !result.retryable ||
+      Date.now() >= deadline
+    ) {
+      // oxlint-disable-next-line no-await-in-loop -- reconcile before deciding after malformed metadata or uncertainty.
+      const restored = await tryReconcileSubmission(input);
+      if (
+        restored.type === 'result_submitted' ||
+        restored.type === 'result_attempt_superseded'
+      )
+        return { ...restored, receiptCaptured };
+      if (
+        restored.type === 'submission_recovery_window' &&
+        !Number.isFinite(deadline)
+      )
+        deadline = Date.parse(restored.attemptDeadlineAt);
+      if (!Number.isFinite(deadline) || !result.retryable)
+        return unresolved(lastCode);
     }
-    // oxlint-disable-next-line no-await-in-loop -- durable backoff never extends the attempt deadline.
+    const remaining = deadline - Date.now();
+    if (remaining <= 0) return unresolved(lastCode);
+    // oxlint-disable-next-line no-await-in-loop -- durable backoff never extends the original deadline.
     await sleep(Math.min(persistenceDelayMs(retry++), remaining));
     if (Date.now() >= deadline) {
-      await unresolvedSubmissionStep(input, code, receiptCaptured);
-      return { type: 'result_submission_unresolved' as const, receiptCaptured };
+      if (uncertainWrite) {
+        const restored = await tryReconcileSubmission(input);
+        if (
+          restored.type === 'result_submitted' ||
+          restored.type === 'result_attempt_superseded'
+        )
+          return { ...restored, receiptCaptured };
+      }
+      return unresolved(lastCode);
     }
   }
 }
+async function reconcileSubmissionStep(input: AcceptedRenderSubmission) {
+  'use step';
+  const result = await (await pipeline()).reconcileSubmission(input);
+  if (result.isOk()) return result.get();
+  return { type: 'submission_reconciliation_unavailable' as const };
+}
+reconcileSubmissionStep.maxRetries = 0;
 async function persistenceExceptionStep(
-  input: AcceptedRenderSubmission,
+  input: Execution,
   errorCode: string,
   diagnostics: ReturnType<typeof safeErrorDiagnostics>
 ) {
@@ -132,6 +189,7 @@ async function persistenceExceptionStep(
     attempt: input.attempt,
     workflowRunId: input.workflowRunId,
     code: errorCode,
+    lastKnownCode: errorCode,
     ...diagnostics,
   });
 }
@@ -144,8 +202,7 @@ async function dispatchAccountingStep(receiptId: string) {
 }
 async function cleanupOutputStep(cleanupId: string) {
   'use step';
-  const { getRenderOutputCleanup } =
-    await import('@/composition/render-output-cleanup');
+  const { getRenderOutputCleanup } = await loadCleanupModule();
   return unwrapStepResult(await getRenderOutputCleanup().process(cleanupId));
 }
 
@@ -176,6 +233,7 @@ async function markFailedStep(
 async function runResult(input: Execution): Promise<string> {
   let providerRequestId: string | undefined;
   let receiptId: string | undefined;
+  let acceptanceUnresolved = false;
   const fail = async (reason: string, submissionPersistenceFailure?: true) => {
     const failed = await markFailedStep(
       {
@@ -200,7 +258,9 @@ async function runResult(input: Execution): Promise<string> {
       | Exclude<typeof accepted, { type: 'result_accepted' }>;
     if (accepted.type === 'result_accepted') {
       providerRequestId = accepted.submission.providerRequestId;
+      acceptanceUnresolved = true;
       submitted = await recoverSubmission(accepted.submission);
+      acceptanceUnresolved = false;
       if ('receiptCaptured' in submitted && submitted.receiptCaptured)
         receiptId = accepted.submission.accountingIdentity.receipt.id;
       if (submitted.type === 'submission_persistence_blocked')
@@ -221,6 +281,7 @@ async function runResult(input: Execution): Promise<string> {
     }
     return await fail('timed_out');
   } catch (error) {
+    if (acceptanceUnresolved) return 'result_submission_unresolved';
     return await fail(failureCode(error, 'render_step_failed'));
   } finally {
     if (receiptId) {

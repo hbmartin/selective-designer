@@ -1,6 +1,8 @@
 import { Result } from '@bloodyowl/boxed';
+import { makeUserRow } from '@tests/server/db-fixtures';
 import { createRecoveryTestDatabase } from '@tests/server/recovery-database';
 import { createFakeObjectStorage } from '@tests/support/fake-kernel-ports';
+import { updateRenderResultFixture } from '@tests/support/render-result-fixture';
 import { okValue } from '@tests/support/result';
 import { inArray, sql } from 'drizzle-orm';
 import {
@@ -14,16 +16,26 @@ import {
   vi,
 } from 'vitest';
 
+import { toDesignName } from '@/modules/design';
+import { createDesignRepository } from '@/modules/design/testing';
 import { AppError } from '@/modules/kernel';
+import {
+  toDesignId,
+  toImageId,
+  toRenderId,
+  toUserId,
+} from '@/modules/kernel/domain/ids';
 import {
   toGeneratedId,
   toObjectKey,
   toRenderResultId,
 } from '@/modules/kernel/domain/ids';
+import { user as userTable } from '@/modules/kernel/infrastructure/db/schema';
 import { type OutputCleanupDeps } from '@/modules/rendering';
 import {
   cleanupRenderOutput,
   createOutputCleanupStore,
+  createRenderRepository,
   renderOutputCleanup,
   renderOutputCleanupBlocked,
   renderOutputCleanupRecovery,
@@ -518,4 +530,297 @@ describe('durable render output cleanup', () => {
       await database.db.select().from(renderOutputCleanupRecovery)
     ).toHaveLength(1);
   });
+  const seedAttempt = async (
+    status: 'pending' | 'submitted' | 'succeeded' | 'failed' | 'skipped',
+    attempt = 1
+  ) => {
+    const ownerId = okValue(toUserId('cleanup-owner'));
+    const designId = okValue(toDesignId('cleanup-design'));
+    const imageId = okValue(toImageId('cleanup-base'));
+    await database.db.insert(userTable).values(makeUserRow({ id: ownerId }));
+    okValue(
+      await createDesignRepository({ db: database.db }).create({
+        id: designId,
+        ownerId,
+        name: okValue(toDesignName('Cleanup')),
+        copiedFromDesignId: null,
+        baseImage: {
+          id: imageId,
+          kind: 'base',
+          originalKey: okValue(toObjectKey('base-images/x.png')),
+          originalContentType: 'image/png',
+          original: { width: 10, height: 10 },
+          workingKey: okValue(toObjectKey('working-images/x.png')),
+          working: { width: 10, height: 10 },
+        },
+      })
+    );
+    okValue(
+      await createRenderRepository({ db: database.db }).createRender({
+        id: okValue(toRenderId('cleanup-render')),
+        designId,
+        renderSourceImageId: imageId,
+        batchId: null,
+        batchOptionItemId: null,
+        attemptStartedAt: new Date('2026-11-07T00:00:00.000Z'),
+        recipe: {
+          renderSourceImageId: imageId,
+          source: { workingKey: 'working-images/x.png', width: 10, height: 10 },
+          edits: [],
+          editMaskKey: null,
+          prompt: '',
+        },
+        results: [
+          {
+            id: target.resultId,
+            modelId: 'krea-3',
+            status: 'pending',
+            skipReason: null,
+          },
+        ],
+      })
+    );
+    await updateRenderResultFixture(database.db, {
+      resultId: target.resultId,
+      changes: { status, attempt },
+    });
+  };
+  it.each(['pending', 'submitted'] as const)(
+    'rejects repair of a live %s attempt before queueing',
+    async (status) => {
+      await seedAttempt(status);
+      const input = await repairInput();
+      expect(okValue(await store.requeue(input)).type).toBe(
+        'cleanup_attempt_active'
+      );
+      expect(await database.db.select().from(renderOutputCleanup)).toEqual([]);
+      expect(
+        await database.db.select().from(renderOutputCleanupRecovery)
+      ).toEqual([]);
+      expect(okValue(await store.summary())).toMatchObject({
+        blockedTotal: 1,
+        blockedOutstanding: 1,
+      });
+    }
+  );
+  it('quarantines an already queued active attempt before reference or storage access', async () => {
+    await seedAttempt('submitted');
+    await enqueue();
+    const deps = depsFor();
+    const reference = vi.spyOn(deps.resultOutputReferences, 'check');
+    const deletion = vi.spyOn(deps.objectStorage, 'deleteObject');
+    expect(okValue(await cleanupRenderOutput(deps, target.objectKey))).toEqual({
+      type: 'cleanup_blocked',
+      reasonCode: 'RENDER_OUTPUT_ATTEMPT_ACTIVE',
+    });
+    expect(reference).not.toHaveBeenCalled();
+    expect(deletion).not.toHaveBeenCalled();
+    expect(await database.db.select().from(renderOutputCleanup)).toEqual([]);
+    const evidence = okValue(await store.blocked(100)).records[0]!;
+    expect(evidence.reasonCode).toBe('RENDER_OUTPUT_ATTEMPT_ACTIVE');
+    await updateRenderResultFixture(database.db, {
+      resultId: target.resultId,
+      changes: { status: 'failed' },
+    });
+    expect(okValue(await list()).ids).toEqual([]);
+    expect(
+      okValue(
+        await store.requeue({
+          requestId: 'after-terminal',
+          fingerprint: evidence.fingerprint,
+          ...target,
+        })
+      ).type
+    ).toBe('cleanup_requeued');
+  });
+  it.each(['succeeded', 'failed', 'skipped'] as const)(
+    'allows a terminal %s attempt but keeps referenced objects',
+    async (status) => {
+      await seedAttempt(status);
+      const input = await repairInput();
+      expect(okValue(await store.requeue(input)).type).toBe('cleanup_requeued');
+      const deps = depsFor();
+      vi.spyOn(deps.resultOutputReferences, 'check').mockResolvedValue(
+        Result.Ok({ type: 'output_referenced' })
+      );
+      const deletion = vi.spyOn(deps.objectStorage, 'deleteObject');
+      okValue(await cleanupRenderOutput(deps, target.objectKey));
+      expect(deletion).not.toHaveBeenCalled();
+      expect(
+        (await database.db.select().from(renderOutputCleanup))[0]?.outcome
+      ).toBe('output_retained');
+    }
+  );
+  it('allows replaced attempts but rejects targets beyond the current attempt', async () => {
+    await seedAttempt('submitted', 2);
+    const input = await repairInput();
+    expect(okValue(await store.requeue(input)).type).toBe('cleanup_requeued');
+    await updateRenderResultFixture(database.db, {
+      resultId: target.resultId,
+      changes: { attempt: 1 },
+    });
+    const futureKey = okValue(toObjectKey('results/result-1/2/raw.png'));
+    okValue(
+      await store.enqueue({
+        resultId: okValue(toRenderResultId('wrong')),
+        attempt: 2,
+        objectKey: futureKey,
+      })
+    );
+    const record = okValue(await store.blocked(100)).records.find(
+      (row) => row.attempt === 2
+    )!;
+    expect(
+      okValue(
+        await store.requeue({
+          ...input,
+          requestId: 'future',
+          fingerprint: record.fingerprint,
+          attempt: 2,
+        })
+      ).type
+    ).toBe('cleanup_attempt_invalid');
+  });
+  it('hands off intervention responsibility without deleting blocked evidence', async () => {
+    const input = await repairInput();
+    expect(okValue(await store.summary()).blockedOutstanding).toBe(1);
+    okValue(await store.requeue(input));
+    expect(okValue(await store.summary())).toMatchObject({
+      blockedTotal: 1,
+      blockedOutstanding: 0,
+      outstandingReasons: [],
+    });
+    expect(
+      okValue(await store.blocked({ limit: 100, outstanding: true })).records
+    ).toEqual([]);
+    expect(okValue(await store.blocked(100)).records[0]?.intervention).toBe(
+      'handed_off'
+    );
+  });
+  it('audits acknowledgment only for unavailable locators and protects request identities across actions', async () => {
+    const input = await repairInput();
+    expect(okValue(await store.acknowledge(input)).type).toBe(
+      'locator_available'
+    );
+    await database.db
+      .update(renderOutputCleanupBlocked)
+      .set({ safeObjectKey: null });
+    expect(okValue(await store.acknowledge(input)).type).toBe(
+      'cleanup_acknowledged'
+    );
+    expect(okValue(await store.acknowledge(input)).type).toBe(
+      'cleanup_acknowledged'
+    );
+    expect(okValue(await store.requeue(input)).type).toBe(
+      'cleanup_repair_conflict'
+    );
+    expect(okValue(await store.summary())).toMatchObject({
+      blockedTotal: 1,
+      blockedOutstanding: 0,
+    });
+    expect(await database.db.select().from(renderOutputCleanup)).toEqual([]);
+    const [event] = await database.db
+      .select()
+      .from(renderOutputCleanupRecovery);
+    expect(event).toMatchObject({
+      outcome: 'cleanup_acknowledged',
+      reasonCode: 'locator_unavailable_retained',
+      resultId: null,
+      attempt: null,
+      objectKey: null,
+    });
+    expect(okValue(await store.inspect(input.fingerprint))).toMatchObject({
+      record: { intervention: 'acknowledged' },
+    });
+  });
+  it('pages blocked history and outstanding evidence without removing earlier rows', async () => {
+    const records = Array.from({ length: 121 }, (_, index) => ({
+      fingerprint: index.toString(16).padStart(64, '0'),
+      resultId: 'wrong',
+      attempt: 1,
+      reasonCode: 'RENDER_OUTPUT_TARGET_INVALID',
+      createdAt: new Date(
+        index < 110 ? '2026-11-07T01:02:03.123Z' : '2026-11-07T01:02:02.122Z'
+      ),
+    }));
+    await database.db.insert(renderOutputCleanupBlocked).values(records);
+    const first = okValue(
+      await store.blocked({ limit: 100, outstanding: true })
+    );
+    expect(first.records).toHaveLength(100);
+    if (first.pagination.type !== 'blocked_more')
+      throw new Error('Expected next page');
+    const second = okValue(
+      await store.blocked({
+        limit: 100,
+        outstanding: true,
+        after: first.pagination.cursor,
+      })
+    );
+    expect(second.records).toHaveLength(21);
+    expect(second.pagination.type).toBe('blocked_end');
+    expect(
+      new Set(
+        [...first.records, ...second.records].map((row) => row.fingerprint)
+      ).size
+    ).toBe(121);
+    expect(first.pagination.cursor.createdAt.endsWith('.123Z')).toBe(true);
+    expect(
+      await database.db.select().from(renderOutputCleanupBlocked)
+    ).toHaveLength(121);
+  });
+  it.skipIf(!process.env.RECOVERY_TEST_DATABASE_URL)(
+    'rolls back quarantine when blocked bookkeeping cannot commit',
+    async () => {
+      await seedAttempt('submitted');
+      await enqueue();
+      await database.db.execute(
+        sql`alter table render_output_cleanup_blocked add constraint reject_blocked check(false)`
+      );
+      try {
+        const deps = depsFor();
+        const deletion = vi.spyOn(deps.objectStorage, 'deleteObject');
+        expect(
+          (await cleanupRenderOutput(deps, target.objectKey)).isError()
+        ).toBe(true);
+        expect(deletion).not.toHaveBeenCalled();
+        const [row] = await database.db.select().from(renderOutputCleanup);
+        expect(row).toMatchObject({
+          claimToken: null,
+          leaseUntil: null,
+          attempts: 0,
+        });
+        expect(
+          await database.db.select().from(renderOutputCleanupBlocked)
+        ).toEqual([]);
+      } finally {
+        await database.db.execute(
+          sql`alter table render_output_cleanup_blocked drop constraint reject_blocked`
+        );
+      }
+    }
+  );
+  it.skipIf(!process.env.RECOVERY_TEST_DATABASE_URL)(
+    'rolls back failed acknowledgment and keeps intervention outstanding',
+    async () => {
+      const input = await repairInput();
+      await database.db
+        .update(renderOutputCleanupBlocked)
+        .set({ safeObjectKey: null });
+      await database.db.execute(
+        sql`alter table render_output_cleanup_recovery add constraint reject_ack check(false)`
+      );
+      try {
+        expect((await store.acknowledge(input)).isError()).toBe(true);
+        expect(okValue(await store.summary()).blockedOutstanding).toBe(1);
+        expect(
+          await database.db.select().from(renderOutputCleanupRecovery)
+        ).toEqual([]);
+      } finally {
+        await database.db.execute(
+          sql`alter table render_output_cleanup_recovery drop constraint reject_ack`
+        );
+      }
+    }
+  );
 });

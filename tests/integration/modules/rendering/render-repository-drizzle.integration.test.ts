@@ -1032,11 +1032,25 @@ describe('RenderRepositoryDrizzle', () => {
       try {
         const saved = await repository.saveSubmission(submission);
         expect(saved.isError()).toBe(true);
+        expect(saved.isError() && saved.getError()).toMatchObject({
+          certainty: 'unknown',
+        });
         if (saved.isError())
           expect([...errorCauses(saved.getError())]).toContain(lost);
       } finally {
         spy.mockRestore();
       }
+      expect(
+        okValue(
+          await repository.reconcileSubmission({
+            ...submission,
+            attemptDeadlineAt: 'invalid',
+          })
+        )
+      ).toEqual({
+        type: 'result_submitted',
+        providerRequestId: input.providerRequestId,
+      });
       expect(okValue(await repository.saveSubmission(submission)).type).toBe(
         'result_submitted'
       );
@@ -1052,6 +1066,90 @@ describe('RenderRepositoryDrizzle', () => {
           accountingIdentity: { invocationId: 'accepted-invocation' },
         },
       });
+    }
+  );
+  const journaled = (
+    input: Awaited<ReturnType<typeof newAttempt>>['input'],
+    startedAt: Date
+  ) => ({
+    ...input,
+    settings: {},
+    prompt: 'test',
+    attemptDeadlineAt: 'invalid',
+    submittedAt: startedAt.toISOString(),
+    accountingIdentity: {
+      invocationId: 'accepted-invocation',
+      providerRequestId: input.providerRequestId,
+      receipt: makeProviderReceipt({
+        designId,
+        subjectId: input.resultId,
+        providerRequestId: input.providerRequestId,
+        startedAt: startedAt.toISOString(),
+        status: 'submitted',
+        costUsdMicros: undefined,
+        costSource: 'unavailable',
+        completedAt: undefined,
+      }),
+    },
+  });
+  it('restores only the matching owned attempt original cutoff and stops replaced or deleted attempts', async () => {
+    const { input, startedAt } = await newAttempt();
+    okValue(await repository.claimExecution(input));
+    const submission = journaled(input, startedAt);
+    expect(okValue(await repository.reconcileSubmission(submission))).toEqual({
+      type: 'submission_recovery_window',
+      attemptDeadlineAt: '2026-11-05T00:30:00.000Z',
+    });
+    expect(
+      okValue(
+        await repository.reconcileSubmission({
+          ...submission,
+          workflowRunId: 'other',
+        })
+      ).type
+    ).toBe('result_attempt_superseded');
+    okValue(
+      await repository.retryAttempt({
+        resultId: input.resultId,
+        expectedAttempt: 1,
+        startedAt: new Date('2026-11-07T01:00:00Z'),
+        expiredBeforeMs: Date.parse('2026-11-07T00:30:00Z'),
+      })
+    );
+    expect(okValue(await repository.reconcileSubmission(submission)).type).toBe(
+      'result_attempt_superseded'
+    );
+    await database.db.delete(imageTable);
+    expect(okValue(await repository.reconcileSubmission(submission)).type).toBe(
+      'result_attempt_superseded'
+    );
+  });
+  it.skipIf(!process.env.RECOVERY_TEST_DATABASE_URL)(
+    'reports a tested constraint rejection distinctly from an uncertain lost reply',
+    async () => {
+      const { input, startedAt } = await newAttempt();
+      okValue(await repository.claimExecution(input));
+      await database.db.execute(
+        sql`alter table render_result add constraint reject_submission check(status <> 'submitted')`
+      );
+      try {
+        const result = await repository.saveSubmission(
+          journaled(input, startedAt)
+        );
+        expect(result.isError() && result.getError()).toMatchObject({
+          certainty: 'rejected',
+          retryable: false,
+        });
+        expect(
+          okValue(
+            await repository.reconcileSubmission(journaled(input, startedAt))
+          ).type
+        ).toBe('submission_recovery_window');
+      } finally {
+        await database.db.execute(
+          sql`alter table render_result drop constraint reject_submission`
+        );
+      }
     }
   );
 });

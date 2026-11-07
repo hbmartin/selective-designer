@@ -1,5 +1,5 @@
 import { Result } from '@bloodyowl/boxed';
-import { sql } from 'drizzle-orm';
+import { eq, sql } from 'drizzle-orm';
 import { createHash } from 'node:crypto';
 
 import { AppError } from '@/modules/kernel/domain/errors/app-error';
@@ -10,9 +10,11 @@ import type { DbLike } from '@/modules/kernel/infrastructure/db/types';
 import {
   renderOutputCleanup as table,
   renderOutputCleanupBlocked as blocked,
+  renderResult,
 } from './schema';
 import type { OutputCleanupStore } from '../../application/ports/output-cleanup';
 import {
+  cleanupAttemptEligibility,
   safeBlockedObjectKey,
   safeRenderIdentity,
   validateRenderOutputTarget,
@@ -57,7 +59,8 @@ export const parseCleanupTarget = (row: CleanupEvidence) => {
 };
 export const recordBlockedCleanup = async (
   db: DbLike,
-  row: CleanupEvidence
+  row: CleanupEvidence,
+  reasonCode = cleanupBlockedReason
 ) => {
   const evidence = [
     row.resultId,
@@ -86,7 +89,7 @@ export const recordBlockedCleanup = async (
       resultId: identity.resultId ?? null,
       attempt: identity.attempt ?? null,
       safeObjectKey: safeBlockedObjectKey(row.objectKey),
-      reasonCode: cleanupBlockedReason,
+      reasonCode,
       createdAt: cleanupNow,
     })
     .onConflictDoNothing();
@@ -114,3 +117,16 @@ export const enqueueOutputCleanup = async (
     return Result.Error(cleanupError(cause));
   }
 };
+
+/** The caller owns the transaction; terminal/replaced identity can never become active again. */
+export async function checkCleanupEligibility(
+  db: DbLike,
+  target: { resultId: string; attempt: number }
+) {
+  const [row] = await db
+    .select({ attempt: renderResult.attempt, status: renderResult.status })
+    .from(renderResult)
+    .where(eq(renderResult.id, target.resultId))
+    .for('update');
+  return cleanupAttemptEligibility(target.attempt, row);
+}

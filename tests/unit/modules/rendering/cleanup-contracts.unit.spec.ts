@@ -10,7 +10,10 @@ import {
   safeRenderIdentity,
   validateCleanupPage,
 } from '@/modules/rendering';
-import { parseRenderCleanupCommand } from '@/modules/rendering/backend';
+import {
+  encodeBlockedCursor,
+  parseRenderCleanupCommand,
+} from '@/modules/rendering/backend';
 import {
   createOutputCleanupStore,
   SubmissionPersistenceError,
@@ -126,8 +129,7 @@ describe('cleanup and recovery contracts', () => {
   it('uses the root transaction runner even when the HTTP driver is not transaction capable', async () => {
     const query = {
       from: vi.fn().mockReturnThis(),
-      where: vi.fn().mockReturnThis(),
-      for: vi.fn().mockResolvedValue([]),
+      where: vi.fn().mockResolvedValue([]),
     };
     const select = vi.fn(() => query);
     const runner = vi.fn(async (work: (tx: unknown) => Promise<unknown>) =>
@@ -163,5 +165,26 @@ describe('cleanup and recovery contracts', () => {
     await expect(get()).resolves.toEqual({ ready: true });
     await expect(get()).resolves.toEqual({ ready: true });
     expect(load).toHaveBeenCalledTimes(2);
+  });
+  it('accepts paged operator browsing and explicit replay identities, rejecting unknown flags', () => {
+    const requestId = '7a2b2513-6c27-4ce9-b183-48b1698796b1';
+    const token = encodeBlockedCursor({
+      createdAt: '2026-11-07T01:02:03.123Z',
+      fingerprint: 'a'.repeat(64),
+    });
+    for (const args of [
+      ['blocked', '50', '--outstanding', '--after', token],
+      ['acknowledge', 'a'.repeat(64), '--request-id', requestId],
+      ['requeue', 'a'.repeat(64), 'result-a', '1', '--request-id', requestId],
+    ])
+      expect(parseRenderCleanupCommand(args).isOk()).toBe(true);
+    for (const args of [
+      ['blocked', '--after', 'bad'],
+      ['blocked', '--request-id', requestId],
+      ['acknowledge', 'a'.repeat(64), '--request-id', 'bad'],
+      ['blocked', '--outstanding', '--outstanding'],
+      ['blocked', '--unknown'],
+    ])
+      expect(parseRenderCleanupCommand(args).isError()).toBe(true);
   });
 });

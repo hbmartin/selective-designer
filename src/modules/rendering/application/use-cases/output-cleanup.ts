@@ -90,7 +90,10 @@ export async function cleanupRenderOutput(
 
 export function createRenderOutputCleanup(deps: OutputCleanupDeps) {
   return {
-    blocked: (limit: number) => deps.store.blocked(limit),
+    blocked: (input: Parameters<OutputCleanupStore['blocked']>[0]) =>
+      deps.store.blocked(input),
+    acknowledge: (input: Parameters<OutputCleanupStore['acknowledge']>[0]) =>
+      deps.store.acknowledge(input),
     inspect: (fingerprint: string) => deps.store.inspect(fingerprint),
     requeue: (input: Parameters<OutputCleanupStore['requeue']>[0]) =>
       deps.store.requeue(input),
@@ -105,6 +108,8 @@ export function createRenderOutputCleanup(deps: OutputCleanupDeps) {
           event: 'rendering.cleanup.summary',
           details: {
             blockedTotal: summary.get().blockedTotal,
+            blockedOutstanding: summary.get().blockedOutstanding,
+            outstandingReasons: summary.get().outstandingReasons,
             reasons: summary.get().reasons,
           },
         });

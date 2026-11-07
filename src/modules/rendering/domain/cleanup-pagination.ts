@@ -1,6 +1,5 @@
-import { Result } from '@bloodyowl/boxed';
+import { type Result as BoxedResult, Result } from '@bloodyowl/boxed';
 
-import type { ApplicationResult } from '@/modules/kernel/application/result';
 import { AppError } from '@/modules/kernel/domain/errors/app-error';
 
 /** Defend protocol consumers before they process a malformed or repeated page. */
@@ -9,13 +8,18 @@ export function validateCleanupPage(
     ids: string[];
     cursor?: { nextAttemptAt: string; objectKey: string };
   },
-  after?: { nextAttemptAt: string; objectKey: string }
-): ApplicationResult<{ type: 'cleanup_page_valid' }> {
+  after?: { nextAttemptAt: string; objectKey: string },
+  seen: ReadonlySet<string> = new Set()
+): BoxedResult<{ type: 'cleanup_page_valid' }, AppError> {
   if (
     page.ids.length &&
     (!page.cursor ||
       page.cursor.objectKey !== page.ids.at(-1) ||
       !Number.isFinite(Date.parse(page.cursor.nextAttemptAt)) ||
+      seen.has(cleanupCursorIdentity(page.cursor)) ||
+      (after &&
+        Date.parse(page.cursor.nextAttemptAt) <
+          Date.parse(after.nextAttemptAt)) ||
       (after &&
         page.cursor.nextAttemptAt === after.nextAttemptAt &&
         page.cursor.objectKey === after.objectKey))
@@ -31,3 +35,8 @@ export function validateCleanupPage(
   }
   return Result.Ok({ type: 'cleanup_page_valid' as const });
 }
+
+export const cleanupCursorIdentity = (cursor: {
+  nextAttemptAt: string;
+  objectKey: string;
+}) => JSON.stringify([Date.parse(cursor.nextAttemptAt), cursor.objectKey]);

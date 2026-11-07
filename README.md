@@ -419,4 +419,22 @@ Repair and audit commit atomically. Existing pending jobs keep their leases. An 
 
 Sweep reports use `completed`, `failed` and `blockedThisRun` for this execution, plus `blockedTotal` and reason counts for all retained blocked evidence, including evidence linked to past repair requests. Unknown CLI arguments fail instead of starting a sweep.
 
-A valid journaled acceptance receives its initial fenced save even if the retry deadline is malformed. Successful persistence continues the current request. If persistence fails, invalid deadline metadata ends recovery explicitly; it never creates a new deadline or makes another provider submission. Valid deadlines retain the original 30-minute cutoff.
+A valid journaled acceptance receives its initial fenced save even if the retry deadline is malformed. Successful persistence continues the current request. If persistence fails, recovery can restore the original cutoff from the matching owned attempt’s database start time. A reconciled save continues polling; unresolved persistence remains pending/submitted when reconciliation is unavailable or the cutoff is exhausted. It never creates a new deadline, treats uncertainty as rollback, or makes another provider submission. Valid deadlines retain the original 30-minute cutoff.
+
+### Safe cleanup intervention and replay
+
+Apply migration **0019_adorable_catseye.sql** before deploying. It extends the retained recovery audit for locator-unavailable acknowledgments and adds the blocked-list time/fingerprint index. It does not rewrite existing evidence or recovery events. The additive schema changes and ordinary index build require coordinated schema/write locks; earlier migrations remain immutable.
+
+Cleanup repair permits replaced attempts, missing parents and terminal current attempts. A current pending/submitted attempt or future attempt is ineligible, even when its output is not yet referenced. Workers quarantine unexpectedly active queued targets before storage access; finishing the render does not automatically revive that cleanup. Explicit repair is required later. Every eligible deletion still checks global image and checkpoint references.
+
+```sh
+pnpm rendering:cleanup blocked 100                    # Historical view; safe metadata only
+pnpm rendering:cleanup blocked 100 --outstanding      # Still requires operator intervention
+pnpm rendering:cleanup blocked 100 --after CURSOR     # Use the previous response's nextCursor
+pnpm rendering:cleanup requeue FINGERPRINT RESULT_ID ATTEMPT --request-id UUID
+pnpm rendering:cleanup acknowledge FINGERPRINT --request-id UUID
+```
+
+Requeue and acknowledgment print a generated request ID before writing when none is supplied. Reuse the printed ID with the identical command to replay an uncertain outcome; changing its action or target returns a conflict. Inspection includes the retained audit history. Acknowledgment is allowed only when no validated locator exists and records `locator_unavailable_retained`; it retains the file and cannot accept a replacement key or bypass deletion safeguards.
+
+`blockedTotal` and its reason counts include all retained evidence. `blockedOutstanding` and `outstandingReasons` count only evidence without a successful audited handoff or acknowledgment. A matching pending/completed cleanup job counts as handoff; workers then own remaining cleanup. Reports retain execution-local `completed`, `failed` and `blockedThisRun` separately. No evidence, audit events or completion tombstones are pruned or backfilled.

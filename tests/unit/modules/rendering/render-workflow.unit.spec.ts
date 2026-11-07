@@ -8,6 +8,7 @@ type Outcome = { type: string; [key: string]: unknown };
 const pipeline = vi.hoisted(() => ({
   submit: vi.fn(),
   persistSubmission: vi.fn(),
+  reconcileSubmission: vi.fn(),
   cleanup: vi.fn(),
   reportSubmissionUnresolved: vi.fn(),
   reportSubmissionException: vi.fn(),
@@ -37,6 +38,12 @@ const execution = { ...attempt, workflowRunId: 'workflow-1' };
 describe('render workflow', () => {
   beforeEach(() => {
     vi.resetAllMocks();
+    pipeline.reconcileSubmission.mockResolvedValue(
+      Result.Ok({
+        type: 'submission_recovery_window',
+        attemptDeadlineAt: '2026-11-06T19:30:00.000Z',
+      })
+    );
     vi.useFakeTimers();
     vi.setSystemTime(new Date('2026-11-06T19:00:00Z'));
     vi.mocked(sleep).mockImplementation(async (duration) => {
@@ -216,12 +223,15 @@ describe('render workflow', () => {
     );
     pipeline.persistSubmission.mockResolvedValue(
       Result.Error(
-        new AppError({
-          code: 'PROVIDER_RECEIPT_IDENTITY_MISMATCH',
-          category: 'system',
-          status: 500,
-          retryable: false,
-        })
+        new SubmissionPersistenceError(
+          new AppError({
+            code: 'PROVIDER_RECEIPT_IDENTITY_MISMATCH',
+            category: 'system',
+            status: 500,
+            retryable: false,
+          }),
+          false
+        )
       )
     );
     expect(await renderResultWorkflow(attempt)).toEqual({
@@ -402,7 +412,7 @@ describe('render workflow', () => {
     }
   );
   it.each([undefined, 'invalid'])(
-    'fails invalid deadline metadata explicitly after attempting persistence: %s',
+    'restores the original deadline after failed persistence with malformed metadata: %s',
     async (attemptDeadlineAt) => {
       pipeline.submit.mockResolvedValue(
         Result.Ok({
@@ -415,31 +425,29 @@ describe('render workflow', () => {
           },
         })
       );
-      pipeline.persistSubmission.mockResolvedValue(
-        Result.Error(
-          new SubmissionPersistenceError(
-            new AppError({
-              code: 'RENDER_SUBMISSION_DEADLINE_INVALID',
-              category: 'system',
-              status: 500,
-              retryable: false,
-            }),
-            true
+      pipeline.persistSubmission
+        .mockResolvedValueOnce(
+          Result.Error(
+            new SubmissionPersistenceError(
+              new AppError({
+                code: 'DB_DOWN',
+                category: 'system',
+                status: 503,
+              }),
+              true
+            )
           )
         )
-      );
+        .mockResolvedValueOnce(
+          Result.Ok({ type: 'result_submitted', providerRequestId: 'paid' })
+        );
+      pipeline.poll.mockResolvedValue(Result.Ok({ type: 'result_succeeded' }));
       expect(await renderResultWorkflow(attempt)).toEqual({
-        result: 'result_failed',
+        result: 'result_succeeded',
       });
-      expect(pipeline.persistSubmission).toHaveBeenCalledTimes(1);
-      expect(sleep).not.toHaveBeenCalled();
-      expect(pipeline.markFailed).toHaveBeenCalledWith(
-        expect.objectContaining({
-          reason: 'RENDER_SUBMISSION_DEADLINE_INVALID',
-          submissionPersistenceFailure: true,
-        })
-      );
-      expect(pipeline.dispatchAccounting).toHaveBeenCalledWith('accepted-call');
+      expect(sleep).toHaveBeenCalledWith(5000);
+      expect(pipeline.submit).toHaveBeenCalledOnce();
+      expect(pipeline.markFailed).not.toHaveBeenCalled();
     }
   );
   it('keeps confirmed receipt progress across later ambiguous persistence failures', async () => {
@@ -509,5 +517,121 @@ describe('render workflow', () => {
     expect([0, 1, 5, 8, 100].map(pollDelayMs)).toEqual([
       2000, 3000, 7000, 10_000, 10_000,
     ]);
+  });
+  const acceptedWithInvalidDeadline = () =>
+    pipeline.submit.mockResolvedValue(
+      Result.Ok({
+        type: 'result_accepted',
+        submission: {
+          ...execution,
+          providerRequestId: 'paid',
+          attemptDeadlineAt: 'invalid',
+          accountingIdentity: { receipt: { id: 'accepted-call' } },
+        },
+      })
+    );
+  const unknownSave = () =>
+    Result.Error(
+      new SubmissionPersistenceError(
+        new AppError({ code: 'DB_DOWN', category: 'system', status: 503 }),
+        true,
+        'unknown'
+      )
+    );
+  it('reconciles a committed save despite malformed metadata and an expired original deadline', async () => {
+    acceptedWithInvalidDeadline();
+    pipeline.persistSubmission.mockResolvedValue(unknownSave());
+    pipeline.reconcileSubmission.mockResolvedValue(
+      Result.Ok({ type: 'result_submitted', providerRequestId: 'paid' })
+    );
+    pipeline.poll.mockResolvedValue(Result.Ok({ type: 'result_succeeded' }));
+    expect(await renderResultWorkflow(attempt)).toEqual({
+      result: 'result_succeeded',
+    });
+    expect(pipeline.persistSubmission).toHaveBeenCalledOnce();
+    expect(pipeline.submit).toHaveBeenCalledOnce();
+    expect(pipeline.markFailed).not.toHaveBeenCalled();
+    expect(pipeline.dispatchAccounting).toHaveBeenCalledWith('accepted-call');
+  });
+  it.each(['unavailable', 'invalid restored deadline', 'expired'])(
+    'preserves uncertainty rather than failing when original deadline recovery is %s',
+    async (kind) => {
+      acceptedWithInvalidDeadline();
+      pipeline.persistSubmission.mockResolvedValue(unknownSave());
+      pipeline.reconcileSubmission.mockResolvedValue(
+        kind === 'unavailable'
+          ? Result.Error(
+              new AppError({ code: 'DB_DOWN', category: 'system', status: 503 })
+            )
+          : Result.Ok({
+              type: 'submission_recovery_window',
+              attemptDeadlineAt:
+                kind === 'expired' ? '2026-11-06T19:00:00.000Z' : 'invalid',
+            })
+      );
+      expect(await renderResultWorkflow(attempt)).toEqual({
+        result: 'result_submission_unresolved',
+      });
+      expect(pipeline.markFailed).not.toHaveBeenCalled();
+      expect(sleep).not.toHaveBeenCalled();
+      expect(pipeline.submit).toHaveBeenCalledOnce();
+    }
+  );
+  it('preserves uncertainty through a later definitive rejection', async () => {
+    acceptedWithInvalidDeadline();
+    pipeline.persistSubmission
+      .mockResolvedValueOnce(unknownSave())
+      .mockResolvedValue(
+        Result.Error(
+          new SubmissionPersistenceError(
+            new AppError({
+              code: 'RECEIPT_INVALID',
+              category: 'system',
+              status: 500,
+              retryable: false,
+            }),
+            false,
+            'not_attempted'
+          )
+        )
+      );
+    expect(await renderResultWorkflow(attempt)).toEqual({
+      result: 'result_submission_unresolved',
+    });
+    expect(pipeline.markFailed).not.toHaveBeenCalled();
+    expect(pipeline.dispatchAccounting).toHaveBeenCalledWith('accepted-call');
+  });
+  it('stops safely when reconciliation observes deletion or replacement', async () => {
+    acceptedWithInvalidDeadline();
+    pipeline.persistSubmission.mockResolvedValue(unknownSave());
+    pipeline.reconcileSubmission.mockResolvedValue(
+      Result.Ok({ type: 'result_attempt_superseded' })
+    );
+    expect(await renderResultWorkflow(attempt)).toEqual({
+      result: 'result_attempt_superseded',
+    });
+    expect(pipeline.markFailed).not.toHaveBeenCalled();
+    expect(pipeline.poll).not.toHaveBeenCalled();
+  });
+  it('does not terminalize acceptance when a reconciliation step loses its reply', async () => {
+    acceptedWithInvalidDeadline();
+    pipeline.persistSubmission.mockResolvedValue(unknownSave());
+    pipeline.reconcileSubmission.mockRejectedValue(
+      new Error('step reply lost')
+    );
+    expect(await renderResultWorkflow(attempt)).toEqual({
+      result: 'result_submission_unresolved',
+    });
+    expect(pipeline.markFailed).not.toHaveBeenCalled();
+  });
+  it('does not fail a possibly committed acceptance when durable sleep itself loses execution', async () => {
+    acceptedWithInvalidDeadline();
+    pipeline.persistSubmission.mockResolvedValue(unknownSave());
+    vi.mocked(sleep).mockRejectedValue(new Error('runner unavailable'));
+    expect(await renderResultWorkflow(attempt)).toEqual({
+      result: 'result_submission_unresolved',
+    });
+    expect(pipeline.markFailed).not.toHaveBeenCalled();
+    expect(pipeline.submit).toHaveBeenCalledOnce();
   });
 });

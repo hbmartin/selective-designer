@@ -2,6 +2,7 @@ import { sql } from 'drizzle-orm';
 import {
   bigint,
   boolean,
+  check,
   index,
   integer,
   jsonb,
@@ -138,7 +139,7 @@ export const renderOutputCleanup = pgTable(
   ]
 );
 
-/** Sanitized, terminal evidence; never a storage reference or deletion target. */
+/** Retained evidence; only validated, eligible cleanup jobs can authorize deletion. */
 export const renderOutputCleanupBlocked = pgTable(
   'render_output_cleanup_blocked',
   {
@@ -148,7 +149,13 @@ export const renderOutputCleanupBlocked = pgTable(
     attempt: integer('attempt'),
     reasonCode: text('reasonCode').notNull(),
     createdAt: timestamp('createdAt', { precision: 3, mode: 'date' }).notNull(),
-  }
+  },
+  (table) => [
+    index('render_output_cleanup_blocked_page_idx').on(
+      table.createdAt.desc(),
+      table.fingerprint
+    ),
+  ]
 );
 
 /** Explicit operator recovery audit; no parent lifetime or storage-reference semantics. */
@@ -157,11 +164,13 @@ export const renderOutputCleanupRecovery = pgTable(
   {
     requestId: text('requestId').primaryKey(),
     fingerprint: text('fingerprint').notNull(),
-    resultId: text('resultId').notNull(),
-    attempt: integer('attempt').notNull(),
-    objectKey: text('objectKey').notNull(),
+    resultId: text('resultId'),
+    attempt: integer('attempt'),
+    objectKey: text('objectKey'),
+    reasonCode: text('reasonCode'),
     outcome: text('outcome')
       .$type<
+        | 'cleanup_acknowledged'
         | 'cleanup_requeued'
         | 'cleanup_already_pending'
         | 'cleanup_already_completed'
@@ -175,6 +184,10 @@ export const renderOutputCleanupRecovery = pgTable(
     createdAt: timestamp('createdAt', { precision: 3, mode: 'date' }).notNull(),
   },
   (table) => [
+    check(
+      'render_output_cleanup_recovery_shape',
+      sql`(${table.outcome} = 'cleanup_acknowledged' and ${table.reasonCode} = 'locator_unavailable_retained' and ${table.resultId} is null and ${table.attempt} is null and ${table.objectKey} is null) or (${table.outcome} in ('cleanup_requeued', 'cleanup_already_pending', 'cleanup_already_completed') and ${table.resultId} is not null and ${table.attempt} is not null and ${table.objectKey} is not null and ${table.reasonCode} is null)`
+    ),
     index('render_output_cleanup_recovery_fingerprint_idx').on(
       table.fingerprint,
       table.createdAt
