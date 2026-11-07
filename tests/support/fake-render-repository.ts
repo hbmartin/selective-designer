@@ -58,7 +58,6 @@ export const createFakeRenderRepository = (
         return Result.Ok({
           type: 'result_submitted',
           providerRequestId: input.providerRequestId,
-          receiptCaptured: true,
         });
       if (
         found.result.status !== 'pending' ||

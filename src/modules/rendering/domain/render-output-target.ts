@@ -7,7 +7,7 @@ import {
   toObjectKey,
 } from '@/modules/kernel/domain/ids';
 
-import { isTerminalStatus, renderResultStatuses } from './render';
+import { isRenderResultStatus, isTerminalStatus } from './render';
 
 export const RENDER_OUTPUT_EXTENSIONS = {
   url: 'img',
@@ -99,9 +99,8 @@ export function cleanupAttemptEligibility(
     return { type: 'cleanup_attempt_invalid' as const };
   if (current.status === 'pending' || current.status === 'submitted')
     return { type: 'cleanup_attempt_active' as const };
-  return renderResultStatuses.some(
-    (status) => status === current.status && isTerminalStatus(status)
-  )
+  return isRenderResultStatus(current.status) &&
+    isTerminalStatus(current.status)
     ? { type: 'cleanup_attempt_eligible' as const }
     : { type: 'cleanup_attempt_invalid' as const };
 }

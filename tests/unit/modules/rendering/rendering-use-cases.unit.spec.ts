@@ -1783,6 +1783,44 @@ describe('accepted submission handoff', () => {
       throw new Error('Expected accepted request');
     return { ...ctx, result, accepted: accepted.submission };
   };
+  it('interprets matching repository evidence as capture confirmation without reading or recapturing the receipt', async () => {
+    const ctx = await acceptedSetup();
+    okValue(await ctx.rawPipeline.persistSubmission(ctx.accepted));
+    const capture = vi.spyOn(ctx.calls.accounting, 'capture');
+    expect(
+      okValue(await ctx.renders.repository.reconcileSubmission(ctx.accepted))
+    ).toEqual({
+      type: 'result_submitted',
+      providerRequestId: ctx.accepted.providerRequestId,
+    });
+    expect(
+      okValue(await ctx.rawPipeline.reconcileSubmission(ctx.accepted))
+    ).toEqual({
+      type: 'result_submitted',
+      providerRequestId: ctx.accepted.providerRequestId,
+      receiptCaptured: true,
+    });
+    expect(capture).not.toHaveBeenCalled();
+  });
+  it('does not infer capture from an unfinished attempt or supersession', async () => {
+    const ctx = await acceptedSetup();
+    expect(
+      okValue(await ctx.rawPipeline.reconcileSubmission(ctx.accepted))
+    ).toEqual({
+      type: 'submission_recovery_window',
+      attemptDeadlineAt: ctx.accepted.attemptDeadlineAt,
+    });
+    expect(
+      okValue(
+        await ctx.rawPipeline.reconcileSubmission({
+          ...ctx.accepted,
+          attempt: ctx.accepted.attempt + 1,
+        })
+      )
+    ).toEqual({
+      type: 'result_attempt_superseded',
+    });
+  });
   it('retries persistence of journaled acceptance without another provider purchase', async () => {
     const ctx = await acceptedSetup();
     const original = ctx.renders.repository.saveSubmission;

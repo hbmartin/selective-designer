@@ -173,6 +173,10 @@ async function recoverSubmission(input: AcceptedRenderSubmission) {
       await sleep(Math.min(persistenceDelayMs(retry++), remaining));
     } catch (error) {
       await reportException(error);
+      if (uncertainWrite) {
+        const restored = await reconcile(false);
+        if (restored.type !== 'submission_recovery_continues') return restored;
+      }
       return unresolved(lastCode);
     }
     if (Date.now() >= deadline) {

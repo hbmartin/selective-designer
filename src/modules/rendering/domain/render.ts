@@ -31,6 +31,10 @@ export const renderResultStatuses = [
   'skipped',
 ] as const;
 export type RenderResultStatus = (typeof renderResultStatuses)[number];
+export const isRenderResultStatus = (
+  status: string
+): status is RenderResultStatus =>
+  (renderResultStatuses as readonly string[]).includes(status);
 
 export const isTerminalStatus = (status: RenderResultStatus) =>
   status === 'succeeded' || status === 'failed' || status === 'skipped';

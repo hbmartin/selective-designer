@@ -82,7 +82,6 @@ export interface RenderRepository {
       | {
           type: 'result_submitted';
           providerRequestId: string;
-          receiptCaptured: true;
         }
       | { type: 'submission_recovery_window'; attemptDeadlineAt: string }
       | { type: 'result_attempt_superseded' }

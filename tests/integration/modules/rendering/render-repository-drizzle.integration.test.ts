@@ -1050,7 +1050,6 @@ describe('RenderRepositoryDrizzle', () => {
       ).toEqual({
         type: 'result_submitted',
         providerRequestId: input.providerRequestId,
-        receiptCaptured: true,
       });
       expect(okValue(await repository.saveSubmission(submission)).type).toBe(
         'result_submitted'
@@ -1153,7 +1152,7 @@ describe('RenderRepositoryDrizzle', () => {
       }
     }
   );
-  it('requires every saved-submission attribute before confirming receipt capture', async () => {
+  it('requires every saved-submission attribute before reporting matching persistence evidence', async () => {
     const { input, startedAt } = await newAttempt();
     okValue(await repository.claimExecution(input));
     const submission = journaled(input, startedAt);
@@ -1161,7 +1160,6 @@ describe('RenderRepositoryDrizzle', () => {
     expect(okValue(await repository.reconcileSubmission(submission))).toEqual({
       type: 'result_submitted',
       providerRequestId: input.providerRequestId,
-      receiptCaptured: true,
     });
     for (const changed of [
       { prompt: 'other' },
@@ -1218,10 +1216,24 @@ describe('RenderRepositoryDrizzle', () => {
         expect(reads).toBe(1);
         expect(
           okValue(await repository.reconcileSubmission(submission))
-        ).toMatchObject({ type: 'result_submitted', receiptCaptured: true });
+        ).toEqual({
+          type: 'result_submitted',
+          providerRequestId: input.providerRequestId,
+        });
       } finally {
         spy.mockRestore();
       }
     }
   );
+  it('marks invalid persisted render status as non-retryable', async () => {
+    const { input } = await newAttempt();
+    await database.db.execute(
+      sql`update render_result set status = 'corrupt' where id = ${input.resultId}`
+    );
+    const result = await repository.findResult(input.resultId);
+    expect(result.isError() && result.getError()).toMatchObject({
+      code: 'RENDER_ROW_INVALID',
+      retryable: false,
+    });
+  });
 });

@@ -530,11 +530,11 @@ describe('render workflow', () => {
         },
       })
     );
-  const unknownSave = () =>
+  const unknownSave = (captured = true) =>
     Result.Error(
       new SubmissionPersistenceError(
         new AppError({ code: 'DB_DOWN', category: 'system', status: 503 }),
-        true,
+        captured,
         'unknown'
       )
     );
@@ -703,6 +703,97 @@ describe('render workflow', () => {
       expect(pipeline.submit).toHaveBeenCalledOnce();
     }
   );
+  it('reconciles an uncertain save after a defensive wait rejection, even beyond the original deadline', async () => {
+    acceptedWithInvalidDeadline();
+    pipeline.persistSubmission.mockResolvedValue(unknownSave());
+    pipeline.reconcileSubmission
+      .mockResolvedValueOnce(
+        Result.Ok({
+          type: 'submission_recovery_window',
+          attemptDeadlineAt: '2026-11-06T19:30:00Z',
+        })
+      )
+      .mockResolvedValueOnce(
+        Result.Ok({
+          type: 'result_submitted',
+          providerRequestId: 'paid',
+          receiptCaptured: true,
+        })
+      );
+    vi.mocked(sleep).mockImplementationOnce(async () => {
+      vi.setSystemTime(new Date('2026-11-06T19:31:00Z'));
+      throw new Error('defensive wait failure');
+    });
+    pipeline.poll.mockResolvedValue(Result.Ok({ type: 'result_succeeded' }));
+    expect(await renderResultWorkflow(attempt)).toEqual({
+      result: 'result_succeeded',
+    });
+    expect(pipeline.reconcileSubmission).toHaveBeenCalledTimes(2);
+    expect(pipeline.poll).toHaveBeenCalledWith({
+      ...execution,
+      providerRequestId: 'paid',
+    });
+    expect(pipeline.dispatchAccounting).toHaveBeenCalledWith('accepted-call');
+    expect(pipeline.submit).toHaveBeenCalledOnce();
+    expect(pipeline.persistSubmission).toHaveBeenCalledOnce();
+    expect(pipeline.markFailed).not.toHaveBeenCalled();
+  });
+  it.each([false, true])(
+    'preserves capture=%s when reconciliation after a wait rejection is unavailable',
+    async (captured) => {
+      acceptedWithInvalidDeadline();
+      pipeline.persistSubmission.mockResolvedValue(
+        Result.Error(
+          new SubmissionPersistenceError(
+            new AppError({ code: 'DB_DOWN', category: 'system', status: 503 }),
+            captured,
+            'unknown'
+          )
+        )
+      );
+      pipeline.reconcileSubmission
+        .mockResolvedValueOnce(
+          Result.Ok({
+            type: 'submission_recovery_window',
+            attemptDeadlineAt: '2026-11-06T19:30:00Z',
+          })
+        )
+        .mockRejectedValueOnce(new Error('read unavailable'));
+      vi.mocked(sleep).mockRejectedValueOnce(
+        new Error('defensive wait failure')
+      );
+      expect(await renderResultWorkflow(attempt)).toEqual({
+        result: 'result_submission_unresolved',
+      });
+      expect(pipeline.reconcileSubmission).toHaveBeenCalledTimes(2);
+      expect(pipeline.dispatchAccounting).toHaveBeenCalledTimes(
+        captured ? 1 : 0
+      );
+      expect(pipeline.submit).toHaveBeenCalledOnce();
+      expect(pipeline.persistSubmission).toHaveBeenCalledOnce();
+      expect(pipeline.markFailed).not.toHaveBeenCalled();
+    }
+  );
+  it('stops a replaced uncertain save after a wait rejection without inferring capture', async () => {
+    acceptedWithInvalidDeadline();
+    pipeline.persistSubmission.mockResolvedValue(unknownSave(false));
+    pipeline.reconcileSubmission
+      .mockResolvedValueOnce(
+        Result.Ok({
+          type: 'submission_recovery_window',
+          attemptDeadlineAt: '2026-11-06T19:30:00Z',
+        })
+      )
+      .mockResolvedValueOnce(Result.Ok({ type: 'result_attempt_superseded' }));
+    vi.mocked(sleep).mockRejectedValueOnce(new Error('defensive wait failure'));
+    expect(await renderResultWorkflow(attempt)).toEqual({
+      result: 'result_attempt_superseded',
+    });
+    expect(pipeline.dispatchAccounting).not.toHaveBeenCalled();
+    expect(pipeline.poll).not.toHaveBeenCalled();
+    expect(pipeline.markFailed).not.toHaveBeenCalled();
+    expect(pipeline.submit).toHaveBeenCalledOnce();
+  });
   it('records a newer exception separately from the previous typed code', async () => {
     acceptedWithInvalidDeadline();
     pipeline.persistSubmission.mockResolvedValue(unknownSave());
