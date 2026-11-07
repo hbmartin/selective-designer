@@ -849,7 +849,10 @@ describe('RenderRepositoryDrizzle', () => {
         .select()
         .from(renderOutputCleanupBlocked);
       expect(evidence).toHaveLength(1);
-      expect(JSON.stringify(evidence)).not.toContain('private');
+      expect(evidence[0]?.safeObjectKey).toBe(
+        objectKey === 'region-masks/private.png' ? objectKey : null
+      );
+      expect(JSON.stringify(evidence)).not.toContain('token=private');
       expect(await database.db.select().from(renderOutputCleanup)).toEqual([]);
     }
   );

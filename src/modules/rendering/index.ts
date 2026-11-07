@@ -13,6 +13,7 @@ export type {
   RenderingPipelineDeps,
   RenderingUseCaseDeps,
 } from './application/use-cases/types';
+export { validateCleanupPage } from './domain/cleanup-pagination';
 export * from './domain/edit-set';
 export { hasFramingChanged } from './domain/image-framing';
 export * from './domain/model-catalog';

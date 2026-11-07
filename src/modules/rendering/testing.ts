@@ -6,6 +6,7 @@ export { createRenderRepository } from './infrastructure/drizzle/render-reposito
 export { renderOutputCleanupBlocked } from './infrastructure/drizzle/schema';
 export { renderOutputCleanup } from './infrastructure/drizzle/schema';
 export { renderResult as renderResultTable } from './infrastructure/drizzle/schema';
+export { renderOutputCleanupRecovery } from './infrastructure/drizzle/schema';
 export { createPngMaskCompositor } from './infrastructure/masks/png-mask-compositor';
 export { recordedSettings } from './infrastructure/providers/fal-image-models';
 export {

@@ -14,3 +14,4 @@ export {
   ideogramInput,
   kreaInput,
 } from './infrastructure/providers/fal-image-models';
+export { parseRenderCleanupCommand } from './transport/cli-cleanup-command';

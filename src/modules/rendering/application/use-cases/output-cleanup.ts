@@ -59,11 +59,7 @@ export async function cleanupRenderOutput(
   const settled = await deps.store.settle({
     cleanupId,
     claimId,
-    outcome: result.isError()
-      ? result.getError().code === 'RENDER_OUTPUT_TARGET_INVALID'
-        ? 'blocked'
-        : 'retry'
-      : result.get().type,
+    outcome: result.isError() ? 'retry' : result.get().type,
     ...(result.isError()
       ? {
           code: actionableErrorCode(
@@ -94,6 +90,10 @@ export async function cleanupRenderOutput(
 
 export function createRenderOutputCleanup(deps: OutputCleanupDeps) {
   return {
+    blocked: (limit: number) => deps.store.blocked(limit),
+    inspect: (fingerprint: string) => deps.store.inspect(fingerprint),
+    requeue: (input: Parameters<OutputCleanupStore['requeue']>[0]) =>
+      deps.store.requeue(input),
     process: (cleanupId: string) => cleanupRenderOutput(deps, cleanupId),
     list: (input: { before: string; after?: CleanupCursor }) =>
       deps.store.list({ ...input, limit: 100 }),
@@ -104,7 +104,7 @@ export function createRenderOutputCleanup(deps: OutputCleanupDeps) {
         deps.logger.info({
           event: 'rendering.cleanup.summary',
           details: {
-            blocked: summary.get().blocked,
+            blockedTotal: summary.get().blockedTotal,
             reasons: summary.get().reasons,
           },
         });

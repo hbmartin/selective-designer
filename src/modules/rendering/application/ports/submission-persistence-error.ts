@@ -6,6 +6,9 @@ export class SubmissionPersistenceError extends AppError {
   constructor(cause: AppError, receiptCaptured: boolean) {
     super({
       code: cause.code,
+      message: cause.message,
+      details: cause.details,
+      exposeDetails: cause.exposeDetails,
       category: cause.category,
       status: cause.status,
       retryable: cause.retryable,

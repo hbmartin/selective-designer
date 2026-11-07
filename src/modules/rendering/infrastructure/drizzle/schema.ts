@@ -143,9 +143,41 @@ export const renderOutputCleanupBlocked = pgTable(
   'render_output_cleanup_blocked',
   {
     fingerprint: text('fingerprint').primaryKey(),
+    safeObjectKey: text('safeObjectKey'),
     resultId: text('resultId'),
     attempt: integer('attempt'),
     reasonCode: text('reasonCode').notNull(),
     createdAt: timestamp('createdAt', { precision: 3, mode: 'date' }).notNull(),
   }
+);
+
+/** Explicit operator recovery audit; no parent lifetime or storage-reference semantics. */
+export const renderOutputCleanupRecovery = pgTable(
+  'render_output_cleanup_recovery',
+  {
+    requestId: text('requestId').primaryKey(),
+    fingerprint: text('fingerprint').notNull(),
+    resultId: text('resultId').notNull(),
+    attempt: integer('attempt').notNull(),
+    objectKey: text('objectKey').notNull(),
+    outcome: text('outcome')
+      .$type<
+        | 'cleanup_requeued'
+        | 'cleanup_already_pending'
+        | 'cleanup_already_completed'
+      >()
+      .notNull(),
+    previousOutcome: text('previousOutcome'),
+    previousCompletedAt: timestamp('previousCompletedAt', {
+      precision: 3,
+      mode: 'date',
+    }),
+    createdAt: timestamp('createdAt', { precision: 3, mode: 'date' }).notNull(),
+  },
+  (table) => [
+    index('render_output_cleanup_recovery_fingerprint_idx').on(
+      table.fingerprint,
+      table.createdAt
+    ),
+  ]
 );

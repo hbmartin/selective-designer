@@ -1,0 +1,167 @@
+import { describe, expect, it, vi } from 'vitest';
+
+vi.unmock('@/modules/kernel/infrastructure/db/client');
+
+import { AppError } from '@/modules/kernel';
+import type { Database } from '@/modules/kernel/infrastructure/db/types';
+import { lazyModule } from '@/modules/kernel/transport/workflow/lazy-module';
+import {
+  safeBlockedObjectKey,
+  safeRenderIdentity,
+  validateCleanupPage,
+} from '@/modules/rendering';
+import { parseRenderCleanupCommand } from '@/modules/rendering/backend';
+import {
+  createOutputCleanupStore,
+  SubmissionPersistenceError,
+} from '@/modules/rendering/testing';
+
+describe('cleanup and recovery contracts', () => {
+  it.each([
+    'https://host/output?token=secret',
+    '//host/x',
+    '/absolute/key',
+    'results/a/../raw.png',
+    'results//a.png',
+    'results/a%2fb.png',
+    'results/a?x',
+    'results/a#x',
+    'results/a\\b',
+    'results/a\nb',
+    ' results/a.png',
+    'results/a.png ',
+    'secret',
+    {},
+    null,
+    undefined,
+    'results/' + 'x'.repeat(1024),
+  ])('never retains unsafe locator %j', (value) => {
+    expect(safeBlockedObjectKey(value)).toBeNull();
+  });
+  it('retains exact safe locators separately from deletion eligibility', () => {
+    expect(safeBlockedObjectKey('region-masks/a.png')).toBe(
+      'region-masks/a.png'
+    );
+    expect(safeBlockedObjectKey('results/a/1/raw.png')).toBe(
+      'results/a/1/raw.png'
+    );
+    expect(
+      safeRenderIdentity({ resultId: 'https://secret', attempt: -1 })
+    ).toEqual({ resultId: undefined, attempt: undefined });
+    expect(
+      safeRenderIdentity({ resultId: 'a', attempt: 2147483648 }).attempt
+    ).toBeUndefined();
+  });
+  it.each([
+    ['typo'],
+    ['blocked', '0'],
+    ['blocked', '101'],
+    ['blocked', '1', 'extra'],
+    ['inspect', 'bad'],
+    ['requeue', 'a'.repeat(64), 'x', '0'],
+    ['requeue', 'a'.repeat(64), 'x', '2147483648'],
+    ['requeue', 'a'.repeat(64), 'x', '1', 'results/x/1/raw.png'],
+  ])('rejects invalid operator args before execution: %j', (...args) => {
+    expect(parseRenderCleanupCommand(args).isError()).toBe(true);
+  });
+  it('accepts only the documented commands', () => {
+    for (const args of [
+      [],
+      ['blocked'],
+      ['blocked', '3'],
+      ['inspect', 'a'.repeat(64)],
+      ['requeue', 'a'.repeat(64), 'result-a', '2'],
+    ])
+      expect(parseRenderCleanupCommand(args).isOk()).toBe(true);
+  });
+  it('rejects absent or repeated page cursors before processing', () => {
+    const cursor = {
+      nextAttemptAt: '2000-01-01T00:00:00.123Z',
+      objectKey: 'x',
+    };
+    expect(validateCleanupPage({ ids: ['x'] }).isError()).toBe(true);
+    expect(validateCleanupPage({ ids: ['x'], cursor }, cursor).isError()).toBe(
+      true
+    );
+    expect(validateCleanupPage({ ids: ['y'], cursor }).isError()).toBe(true);
+    expect(validateCleanupPage({ ids: ['x'], cursor }).isOk()).toBe(true);
+    expect(validateCleanupPage({ ids: [] }).isOk()).toBe(true);
+  });
+  it('preserves diagnostic and disclosure metadata inside the server error', () => {
+    const cause = new AppError({
+      code: 'WRITE_FAILED',
+      category: 'system',
+      status: 503,
+      message: 'Useful internal context',
+      details: { phase: 'write' },
+      exposeDetails: true,
+      retryable: false,
+      retryAfterMs: 100,
+      cause: new Error('transport'),
+    });
+    const wrapped = new SubmissionPersistenceError(cause, true);
+    expect(wrapped).toMatchObject({
+      code: cause.code,
+      message: cause.message,
+      details: cause.details,
+      exposeDetails: true,
+      retryable: false,
+      retryAfterMs: 100,
+      receiptCaptured: true,
+      cause,
+    });
+  });
+  it('fails closed for metadata-less roots before SQL', async () => {
+    const select = vi.fn();
+    const update = vi.fn();
+    const store = createOutputCleanupStore({
+      db: { select, update } as unknown as Database,
+    });
+    expect(
+      (await store.claim({ cleanupId: 'x', claimId: 'claim' })).isError()
+    ).toBe(true);
+    expect(select).not.toHaveBeenCalled();
+    expect(update).not.toHaveBeenCalled();
+  });
+  it('uses the root transaction runner even when the HTTP driver is not transaction capable', async () => {
+    const query = {
+      from: vi.fn().mockReturnThis(),
+      where: vi.fn().mockReturnThis(),
+      for: vi.fn().mockResolvedValue([]),
+    };
+    const select = vi.fn(() => query);
+    const runner = vi.fn(async (work: (tx: unknown) => Promise<unknown>) =>
+      work({ select })
+    );
+    const rootSelect = vi.fn();
+    const db = {
+      $driver: 'neon-http',
+      $transactionCapable: false,
+      $runInTransaction: runner,
+      select: rootSelect,
+    } as unknown as Database;
+    const result = await createOutputCleanupStore({ db }).claim({
+      cleanupId: 'x',
+      claimId: 'a',
+    });
+    expect(result.isOk() && result.get()).toEqual({
+      type: 'cleanup_unavailable',
+    });
+    expect(runner).toHaveBeenCalledOnce();
+    expect(rootSelect).not.toHaveBeenCalled();
+  });
+  it('shares module loading and retries a failed load without caching failure', async () => {
+    const original = new Error('load failed');
+    const load = vi
+      .fn()
+      .mockRejectedValueOnce(original)
+      .mockResolvedValue({ ready: true });
+    const get = lazyModule(load);
+    const first = get();
+    expect(get()).toBe(first);
+    await expect(first).rejects.toBe(original);
+    await expect(get()).resolves.toEqual({ ready: true });
+    await expect(get()).resolves.toEqual({ ready: true });
+    expect(load).toHaveBeenCalledTimes(2);
+  });
+});

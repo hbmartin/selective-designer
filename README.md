@@ -399,4 +399,24 @@ Only an owning workflow may fail a render. If execution never claims ownership, 
 
 Render acceptance always gets one database persistence attempt, even after its original 30-minute deadline. Further recovery retains that cutoff. Delivery is dispatched only after receipt capture is confirmed; an unconfirmed capture may remain solely in the workflow journal, and daily accounting reconciliation cannot recreate it.
 
-Apply migration **0017** before deploying this change. It adds the independent blocked-cleanup registry; prior migrations remain unchanged. Invalid checkpoint keys retain their files and produce sanitized blocked evidence in the Retry transaction instead of blocking the user. Invalid queued targets are quarantined before storage access. `pnpm rendering:cleanup` reports blocked counts and static reasons as well as completed and failed work. Blocked evidence and completed queue records are retained; no automatic repair or pruning is provided. Queue eligibility, leases and snapshot pagination use database time and the indexed time/key order. No active workflows require adoption for this release.
+Apply migration **0017** before deploying this change. It adds the independent blocked-cleanup registry; prior migrations remain unchanged. Invalid checkpoint keys retain their files and produce blocked evidence in the Retry transaction instead of blocking the user. Invalid queued targets are quarantined before storage access. `pnpm rendering:cleanup` reports blocked counts and static reasons as well as completed and failed work. Blocked evidence and completed queue records are retained; no automatic repair or pruning is provided. Explicit operator recovery is described below. Queue eligibility, leases and snapshot pagination use database time and the indexed time/key order. No active workflows require adoption for this release.
+
+### Blocked render cleanup recovery
+
+Apply migration **0018** before deploying. It adds a nullable safe locator to blocked evidence and a new append-only recovery audit table with its lookup index. No existing fingerprints or accounting are backfilled. The additive changes still require brief schema locks; preserve earlier migration rollout constraints.
+
+```sh
+pnpm rendering:cleanup                         # Sweep eligible cleanup work
+pnpm rendering:cleanup blocked 100             # Recent blocked evidence; no locators
+pnpm rendering:cleanup inspect FINGERPRINT     # Explicit privileged locator/history inspection
+pnpm rendering:cleanup requeue FINGERPRINT RESULT_ID ATTEMPT
+pnpm rendering:cleanup                         # Process repaired work without calling providers
+```
+
+Requeue uses the retained locator, never a supplied key. It accepts only the exact `results/<result>/<attempt>/raw.<extension>` target and enqueues normal reference-checked cleanup. Safe locators are bounded, unchanged ASCII relative paths; URLs, query strings, encoded escapes, traversal, whitespace and malformed values remain fingerprint-only. Normal logs and HTTP responses never expose locators. Existing fingerprint-only evidence reports `locator_unavailable`; there is no historical scan or reconstruction.
+
+Repair and audit commit atomically. Existing pending jobs keep their leases. An operator may explicitly recheck a previously retained object, with its old completion outcome saved in history; deleted-object tombstones stay closed. Requeue alone does not access storage or contact providers. Referenced objects remain retained, and uncertain reference checks or deletion failures remain pending. If a repair write is uncertain, the command prints its request identity; inspect the evidence/history before issuing another request. Records survive parent deletion and do not pin objects.
+
+Sweep reports use `completed`, `failed` and `blockedThisRun` for this execution, plus `blockedTotal` and reason counts for all retained blocked evidence, including evidence linked to past repair requests. Unknown CLI arguments fail instead of starting a sweep.
+
+A valid journaled acceptance receives its initial fenced save even if the retry deadline is malformed. Successful persistence continues the current request. If persistence fails, invalid deadline metadata ends recovery explicitly; it never creates a new deadline or makes another provider submission. Valid deadlines retain the original 30-minute cutoff.

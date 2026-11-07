@@ -1,18 +1,13 @@
+import { lazyModule } from '@/modules/kernel/transport/workflow/lazy-module';
+
 import { unwrapStepResult } from '../workflow/step-result-mapper';
 import { runWorkerPage } from '../workflow/worker-page';
 import { toProviderCallId } from '../../domain/ids';
 
-type RecoveryModule = typeof import('@/composition/accounting-pipeline');
-let recoveryModule: Promise<RecoveryModule> | undefined;
-const recovery = async () => {
-  recoveryModule ??= import('@/composition/accounting-pipeline').catch(
-    (error: unknown) => {
-      recoveryModule = undefined;
-      throw error;
-    }
-  );
-  return (await recoveryModule).getAccountingRecovery();
-};
+const loadModule = lazyModule(
+  () => import('@/composition/accounting-pipeline')
+);
+const recovery = async () => (await loadModule()).getAccountingRecovery();
 
 async function deliverStep(receiptId: string) {
   'use step';

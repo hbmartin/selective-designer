@@ -58,6 +58,19 @@ export function createRenderingPipelineUseCases(deps: RenderingPipelineDeps) {
     persistSubmission: (input: Input<typeof persistSubmission>) =>
       persistSubmission(deps, input),
     poll: (input: Input<typeof pollResult>) => pollResult(deps, input),
+    reportSubmissionException: (input: {
+      resultId: string;
+      attempt: number;
+      workflowRunId: string;
+      code: string;
+      errorNames: string[];
+      errorCodes: string[];
+    }) => {
+      deps.logger.warn({
+        event: 'rendering.result.submission_persistence_exception',
+        details: input,
+      });
+    },
     reportSubmissionUnresolved: (input: {
       resultId: string;
       attempt: number;
