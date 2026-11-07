@@ -77,6 +77,15 @@ export type RenderPublicationContext = {
 };
 
 export interface RenderRepository {
+  reconcileSubmission(
+    input: AcceptedRenderSubmission
+  ): Promise<
+    ApplicationResult<
+      | { type: 'result_submitted'; providerRequestId: string }
+      | { type: 'submission_recovery_window'; attemptDeadlineAt: string }
+      | { type: 'result_attempt_superseded' }
+    >
+  >;
   claimExecution(
     input: RenderExecution
   ): Promise<

@@ -213,10 +213,12 @@ digraph ModuleLayerDependencies {
   "rendering/infrastructure" -> "design/infrastructure" [style="solid"];
   "rendering/infrastructure" -> "kernel/domain" [style="solid"];
   "rendering/infrastructure" -> "kernel/infrastructure" [style="solid"];
+  "rendering/infrastructure" -> "rendering/application" [style="solid"];
   "rendering/infrastructure" -> "rendering/domain" [style="solid"];
   "rendering/presentation" -> "auth/public" [style="solid"];
   "rendering/presentation" -> "rendering/domain" [style="solid"];
   "rendering/presentation" -> "rendering/public" [style="solid"];
+  "rendering/public" -> "kernel/domain" [style="solid"];
   "rendering/public" -> "rendering/application" [style="solid"];
   "rendering/public" -> "rendering/domain" [style="dotted"];
   "rendering/public" -> "rendering/infrastructure" [style="solid"];

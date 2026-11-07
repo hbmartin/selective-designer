@@ -1,7 +1,8 @@
 /** Deterministic workflow-side slots; a slow step occupies only its own slot. */
 export async function runWorkerPage<T>(
   items: readonly T[],
-  operation: (item: T) => Promise<boolean>
+  operation: (item: T) => Promise<boolean>,
+  concurrency: 1 | 5 = 5
 ) {
   let next = 0;
   let completed = 0;
@@ -18,6 +19,8 @@ export async function runWorkerPage<T>(
       }
     }
   };
-  await Promise.all(Array.from({ length: Math.min(5, items.length) }, worker));
+  await Promise.all(
+    Array.from({ length: Math.min(concurrency, items.length) }, worker)
+  );
   return { completed, failed };
 }

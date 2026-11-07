@@ -33,6 +33,35 @@ export const createFakeRenderRepository = (
   };
 
   const repository: RenderRepository = {
+    async reconcileSubmission(input) {
+      const found = findResult(input.resultId);
+      if (
+        !found ||
+        found.result.attempt !== input.attempt ||
+        owners.get(input.resultId) !== input.workflowRunId
+      )
+        return Result.Ok({ type: 'result_attempt_superseded' });
+      if (
+        found.result.providerRequestId === input.providerRequestId &&
+        (found.result.status === 'submitted' ||
+          found.result.status === 'succeeded')
+      )
+        return Result.Ok({
+          type: 'result_submitted',
+          providerRequestId: input.providerRequestId,
+        });
+      if (
+        found.result.status !== 'pending' ||
+        found.result.providerRequestId !== null
+      )
+        return Result.Ok({ type: 'result_attempt_superseded' });
+      return Result.Ok({
+        type: 'submission_recovery_window',
+        attemptDeadlineAt: new Date(
+          found.result.attemptStartedAt.getTime() + 30 * 60 * 1000
+        ).toISOString(),
+      });
+    },
     async findDraft(imageId) {
       const draft = drafts.get(imageId);
       return Result.Ok(

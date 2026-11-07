@@ -5,6 +5,7 @@ import { runRepositoryTransaction } from '@/modules/kernel/infrastructure/db/rep
 import type { Database } from '@/modules/kernel/infrastructure/db/types';
 
 import {
+  checkCleanupEligibility,
   cleanupBlockedReason,
   cleanupError,
   cleanupNow as now,
@@ -12,7 +13,10 @@ import {
   parseCleanupTarget,
   recordBlockedCleanup,
 } from './output-cleanup-records';
-import { createCleanupRepairStore } from './output-cleanup-repair-drizzle';
+import {
+  blockedOutstanding,
+  createCleanupRepairStore,
+} from './output-cleanup-repair-drizzle';
 import {
   renderOutputCleanup as table,
   renderOutputCleanupBlocked as blocked,
@@ -50,8 +54,18 @@ export const createOutputCleanupStore = ({
         .select({ code: blocked.reasonCode, count: count() })
         .from(blocked)
         .groupBy(blocked.reasonCode);
+      const outstanding = await db
+        .select({ code: blocked.reasonCode, count: count() })
+        .from(blocked)
+        .where(blockedOutstanding)
+        .groupBy(blocked.reasonCode);
       return Result.Ok({
         type: 'cleanup_summary',
+        blockedOutstanding: outstanding.reduce(
+          (total, row) => total + row.count,
+          0
+        ),
+        outstandingReasons: outstanding,
         blockedTotal: rows.reduce((total, row) => total + row.count, 0),
         reasons: rows,
       });
@@ -94,6 +108,24 @@ export const createOutputCleanupStore = ({
   async claim(input) {
     try {
       return await runRepositoryTransaction<CleanupClaim>(db, async (tx) => {
+        // Match Retry/repair lock order: result first, then queue. Re-read queue under its lock.
+        const [candidate] = await tx
+          .select()
+          .from(table)
+          .where(
+            and(
+              eq(table.objectKey, input.cleanupId),
+              isNull(table.completedAt),
+              lte(table.nextAttemptAt, now),
+              or(isNull(table.leaseUntil), lte(table.leaseUntil, now))
+            )
+          );
+        if (!candidate)
+          return Result.Ok({ type: 'cleanup_unavailable' as const });
+        const candidateTarget = parseCleanupTarget(candidate);
+        const eligible = candidateTarget
+          ? await checkCleanupEligibility(tx, candidateTarget)
+          : undefined;
         const [row] = await tx
           .select()
           .from(table)
@@ -106,15 +138,22 @@ export const createOutputCleanupStore = ({
             )
           )
           .for('update', { skipLocked: true });
-        if (!row) return Result.Ok({ type: 'cleanup_unavailable' as const });
+        if (
+          !row ||
+          row.resultId !== candidate.resultId ||
+          row.attempt !== candidate.attempt
+        )
+          return Result.Ok({ type: 'cleanup_unavailable' as const });
         const target = parseCleanupTarget(row);
-        if (!target) {
-          await recordBlockedCleanup(tx, row);
+        if (!target || eligible?.type !== 'cleanup_attempt_eligible') {
+          const reasonCode = !target
+            ? cleanupBlockedReason
+            : eligible?.type === 'cleanup_attempt_active'
+              ? 'RENDER_OUTPUT_ATTEMPT_ACTIVE'
+              : 'RENDER_OUTPUT_ATTEMPT_INVALID';
+          await recordBlockedCleanup(tx, row, reasonCode);
           await tx.delete(table).where(eq(table.objectKey, row.objectKey));
-          return Result.Ok({
-            type: 'cleanup_blocked' as const,
-            reasonCode: cleanupBlockedReason,
-          });
+          return Result.Ok({ type: 'cleanup_blocked' as const, reasonCode });
         }
         await tx
           .update(table)

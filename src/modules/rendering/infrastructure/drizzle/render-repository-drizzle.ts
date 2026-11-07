@@ -10,6 +10,7 @@ import {
   toRenderId,
   toRenderResultId,
 } from '@/modules/kernel/domain/ids';
+import { classifyDatabaseFailure } from '@/modules/kernel/infrastructure/db/db-error-details';
 import { observeRepository } from '@/modules/kernel/infrastructure/db/observability';
 import { createProviderReceiptStore } from '@/modules/kernel/infrastructure/db/provider-accounting-drizzle';
 import { runRepositoryTransaction } from '@/modules/kernel/infrastructure/db/repository-transaction';
@@ -36,6 +37,22 @@ import {
   type RenderResultRow,
   type RenderRow,
 } from './schema';
+import type { AcceptedRenderSubmission } from '../../application/ports/ports';
+import { SubmissionWriteError } from '../../application/ports/submission-persistence-error';
+import { RENDER_RETRY_AFTER_MS } from '../../domain/render-retry-policy';
+
+const savedSubmissionWhere = (input: AcceptedRenderSubmission) =>
+  and(
+    eq(resultTable.id, input.resultId),
+    eq(resultTable.attempt, input.attempt),
+    eq(resultTable.workflowRunId, input.workflowRunId),
+    eq(resultTable.providerRequestId, input.providerRequestId),
+    inArray(resultTable.status, ['submitted', 'succeeded']),
+    eq(resultTable.accountingIdentity, input.accountingIdentity),
+    eq(resultTable.settings, input.settings),
+    eq(resultTable.prompt, input.prompt),
+    eq(resultTable.submittedAt, new Date(input.submittedAt))
+  );
 
 const rowError = (cause: unknown) =>
   new AppError({
@@ -445,19 +462,7 @@ export const createRenderRepository = ({
         const rows = await db
           .select({ id: resultTable.id })
           .from(resultTable)
-          .where(
-            and(
-              eq(resultTable.id, input.resultId),
-              eq(resultTable.attempt, input.attempt),
-              eq(resultTable.workflowRunId, input.workflowRunId),
-              eq(resultTable.providerRequestId, input.providerRequestId),
-              inArray(resultTable.status, ['submitted', 'succeeded']),
-              eq(resultTable.accountingIdentity, input.accountingIdentity),
-              eq(resultTable.settings, input.settings),
-              eq(resultTable.prompt, input.prompt),
-              eq(resultTable.submittedAt, new Date(input.submittedAt))
-            )
-          );
+          .where(savedSubmissionWhere(input));
         return rows.length === 1;
       };
       try {
@@ -488,7 +493,13 @@ export const createRenderRepository = ({
               : 'result_attempt_superseded',
         });
       } catch (error) {
-        const original = dbError(error);
+        const classification = classifyDatabaseFailure(error);
+        const original = new SubmissionWriteError(
+          dbError(error),
+          classification.publication,
+          classification.publication === 'unknown' ||
+            classification.retryableRollback
+        );
         try {
           if (await matchesSaved())
             return Result.Ok({ type: 'result_submitted' });
@@ -496,6 +507,46 @@ export const createRenderRepository = ({
           return Result.Error(original);
         }
         return Result.Error(original);
+      }
+    },
+    async reconcileSubmission(input) {
+      try {
+        const [matched] = await db
+          .select({ id: resultTable.id })
+          .from(resultTable)
+          .where(savedSubmissionWhere(input));
+        if (matched)
+          return Result.Ok({
+            type: 'result_submitted',
+            providerRequestId: input.providerRequestId,
+          });
+        const [row] = await db
+          .select({
+            attempt: resultTable.attempt,
+            workflowRunId: resultTable.workflowRunId,
+            status: resultTable.status,
+            providerRequestId: resultTable.providerRequestId,
+            attemptStartedAt: resultTable.attemptStartedAt,
+          })
+          .from(resultTable)
+          .where(eq(resultTable.id, input.resultId));
+        if (
+          !row ||
+          row.attempt !== input.attempt ||
+          row.workflowRunId !== input.workflowRunId ||
+          row.status !== 'pending' ||
+          row.providerRequestId !== null
+        )
+          return Result.Ok({ type: 'result_attempt_superseded' });
+        const deadline = row.attemptStartedAt.getTime() + RENDER_RETRY_AFTER_MS;
+        if (!Number.isFinite(deadline))
+          return Result.Error(rowError(input.resultId));
+        return Result.Ok({
+          type: 'submission_recovery_window',
+          attemptDeadlineAt: new Date(deadline).toISOString(),
+        });
+      } catch (error) {
+        return Result.Error(dbError(error));
       }
     },
     async saveOutput(input) {

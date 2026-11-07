@@ -1,21 +1,26 @@
 import { randomUUID } from 'node:crypto';
 
 import { getRenderOutputCleanup } from '../src/composition/render-output-cleanup';
+import type { ApplicationResult } from '../src/modules/kernel';
 import { getDefaultDbClient } from '../src/modules/kernel/backend';
 import { actionableErrorCode } from '../src/modules/kernel/domain/errors/actionable-error-code';
 import { safeErrorDiagnostics } from '../src/modules/kernel/domain/errors/safe-error-diagnostics';
-import {
-  type CleanupCursor,
-  validateCleanupPage,
+import type {
+  CleanupAcknowledgmentOutcome,
+  CleanupRepairOutcome,
 } from '../src/modules/rendering';
-import { parseRenderCleanupCommand } from '../src/modules/rendering/backend';
+import {
+  encodeBlockedCursor,
+  parseRenderCleanupCommand,
+  runRenderCleanupSweep,
+} from '../src/modules/rendering/backend';
 
 async function main() {
   // run-jiti passes the script filename before the operator arguments.
   const parsed = parseRenderCleanupCommand(process.argv.slice(3));
   if (parsed.isError()) {
     console.error(
-      'Usage: pnpm rendering:cleanup [blocked [LIMIT] | inspect FINGERPRINT | requeue FINGERPRINT RESULT_ID ATTEMPT]'
+      'Usage: pnpm rendering:cleanup [blocked [LIMIT] [--after CURSOR] [--outstanding] | inspect FINGERPRINT | requeue FINGERPRINT RESULT_ID ATTEMPT [--request-id UUID] | acknowledge FINGERPRINT [--request-id UUID]]'
     );
     process.exitCode = 1;
     return;
@@ -25,9 +30,22 @@ async function main() {
   try {
     const cleanup = getRenderOutputCleanup();
     if (command.type === 'blocked') {
-      const result = await cleanup.blocked(command.limit);
+      const result = await cleanup.blocked(command);
       if (result.isError()) throw result.getError();
-      console.log(JSON.stringify(result.get(), null, 2));
+      const page = result.get();
+      console.log(
+        JSON.stringify(
+          {
+            ...page,
+            nextCursor:
+              page.pagination.type === 'blocked_more'
+                ? encodeBlockedCursor(page.pagination.cursor)
+                : undefined,
+          },
+          null,
+          2
+        )
+      );
       return;
     }
     if (command.type === 'inspect') {
@@ -38,18 +56,28 @@ async function main() {
       if (result.get().type === 'blocked_not_found') process.exitCode = 1;
       return;
     }
-    if (command.type === 'requeue') {
-      const requestId = randomUUID();
-      const result = await cleanup.requeue({ ...command, requestId });
+    if (command.type === 'requeue' || command.type === 'acknowledge') {
+      const requestId = command.requestId ?? randomUUID();
+      console.log({ requestId });
+      const result: ApplicationResult<
+        CleanupAcknowledgmentOutcome | CleanupRepairOutcome
+      > =
+        command.type === 'requeue'
+          ? await cleanup.requeue({ ...command, requestId })
+          : await cleanup.acknowledge({ ...command, requestId });
       if (result.isError()) {
-        console.error('Repair outcome is uncertain; inspect before retrying.', {
-          requestId,
-        });
+        console.error(
+          'Repair outcome is uncertain; inspect or replay using this request ID.',
+          {
+            requestId,
+          }
+        );
         throw result.getError();
       }
       console.log(result.get());
       if (
         ![
+          'cleanup_acknowledged',
           'cleanup_requeued',
           'cleanup_already_pending',
           'cleanup_already_completed',
@@ -58,48 +86,42 @@ async function main() {
         process.exitCode = 1;
       return;
     }
-    const cutoff = await cleanup.cutoff();
-    if (cutoff.isError()) throw cutoff.getError();
-    const before = cutoff.get().before;
-    let after: CleanupCursor | undefined;
-    let completed = 0;
-    let failed = 0;
-    let blockedThisRun = 0;
-    while (true) {
-      // oxlint-disable-next-line no-await-in-loop -- bounded snapshot pagination.
-      const result = await cleanup.list({ before, after });
-      if (result.isError()) throw result.getError();
-      const page = result.get();
-      const validated = validateCleanupPage(page, after);
-      if (validated.isError()) throw validated.getError();
-      if (page.type === 'cleanup_empty') break;
-      for (const id of page.ids) {
-        // oxlint-disable-next-line no-await-in-loop -- operator redrive uses one short operation at a time.
-        const processed = await cleanup.process(id);
-        if (processed.isError()) {
-          failed++;
-          console.warn('Render cleanup failed.', {
-            code: actionableErrorCode(
-              processed.getError(),
-              'RENDER_OUTPUT_CLEANUP_FAILED'
-            ),
-            ...safeErrorDiagnostics(processed.getError()),
-          });
-        } else if (processed.get().type === 'cleanup_completed') completed++;
-        else if (processed.get().type === 'cleanup_blocked') blockedThisRun++;
-      }
-      after = page.cursor;
-    }
-    const summary = await cleanup.summary();
-    if (summary.isError()) throw summary.getError();
-    console.log({
-      completed,
-      failed,
-      blockedThisRun,
-      blockedTotal: summary.get().blockedTotal,
-      blockedReasons: summary.get().reasons,
-    });
-    if (failed) process.exitCode = 1;
+    const sweep = await runRenderCleanupSweep(
+      {
+        cutoff: async () => {
+          const result = await cleanup.cutoff();
+          if (result.isError()) throw result.getError();
+          return result.get().before;
+        },
+        list: async (input) => {
+          const result = await cleanup.list(input);
+          if (result.isError()) throw result.getError();
+          return result.get();
+        },
+        process: async (id) => {
+          const result = await cleanup.process(id);
+          if (result.isError()) {
+            console.warn('Render cleanup failed.', {
+              code: actionableErrorCode(
+                result.getError(),
+                'RENDER_OUTPUT_CLEANUP_FAILED'
+              ),
+              ...safeErrorDiagnostics(result.getError()),
+            });
+            throw result.getError();
+          }
+          return result.get();
+        },
+        summary: async () => {
+          const result = await cleanup.summary();
+          if (result.isError()) throw result.getError();
+          return result.get();
+        },
+      },
+      1
+    );
+    console.log(sweep);
+    if (sweep.failed) process.exitCode = 1;
   } finally {
     try {
       await db.$close();

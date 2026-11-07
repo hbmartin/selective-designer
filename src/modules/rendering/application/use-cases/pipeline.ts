@@ -26,7 +26,10 @@ import type {
   RenderExecution,
   RenderPublicationContext,
 } from '../ports/ports';
-import { SubmissionPersistenceError } from '../ports/submission-persistence-error';
+import {
+  SubmissionPersistenceError,
+  SubmissionWriteError,
+} from '../ports/submission-persistence-error';
 import type { Edit } from '../../domain/edit-set';
 import { MODEL_CATALOG } from '../../domain/model-catalog';
 import { buildPrompt } from '../../domain/prompt-builder';
@@ -256,7 +259,14 @@ export async function persistSubmission(
         ...safeErrorDiagnostics(saved.getError()),
       },
     });
-    return Result.Error(new SubmissionPersistenceError(saved.getError(), true));
+    const error = saved.getError();
+    return Result.Error(
+      new SubmissionPersistenceError(
+        error,
+        true,
+        error instanceof SubmissionWriteError ? error.certainty : 'unknown'
+      )
+    );
   }
   if (saved.get().type === 'result_attempt_superseded')
     return Result.Ok({ type: 'result_attempt_superseded' });

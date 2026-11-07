@@ -12,56 +12,98 @@ import {
 } from '../domain/render-output-target';
 
 const fingerprint = z.string().regex(/^[a-f0-9]{64}$/u);
-const command = z.union([
-  z.tuple([]).transform(() => ({ type: 'sweep' as const })),
+const requestId = z.uuid().optional();
+const cursor = z.object({ createdAt: z.iso.datetime(), fingerprint }).strict();
+const command = z.discriminatedUnion('type', [
+  z.object({ type: z.literal('sweep') }).strict(),
   z
-    .tuple([
-      z.literal('blocked'),
-      z
+    .object({
+      type: z.literal('blocked'),
+      limit: z
         .string()
         .regex(/^[0-9]+$/u)
         .transform(Number)
-        .pipe(z.number().int().min(1).max(100))
-        .optional(),
-    ])
-    .transform(([, limit]) => ({
-      type: 'blocked' as const,
-      limit: limit ?? 100,
-    })),
-  z.tuple([z.literal('inspect'), fingerprint]).transform(([, fingerprint]) => ({
-    type: 'inspect' as const,
-    fingerprint,
-  })),
+        .pipe(z.number().int().min(1).max(100)),
+      after: cursor.optional(),
+      outstanding: z.boolean().optional(),
+    })
+    .strict(),
+  z.object({ type: z.literal('inspect'), fingerprint }).strict(),
+  z.object({ type: z.literal('acknowledge'), fingerprint, requestId }).strict(),
   z
-    .tuple([
-      z.literal('requeue'),
+    .object({
+      type: z.literal('requeue'),
       fingerprint,
-      z.string().refine(validRenderResultIdentity),
-      z
+      resultId: z.string().refine(validRenderResultIdentity),
+      attempt: z
         .string()
         .regex(/^[0-9]+$/u)
         .transform(Number)
         .refine(validRenderAttempt),
-    ])
-    .transform(([, fingerprint, resultId, attempt]) => ({
-      type: 'requeue' as const,
-      fingerprint,
-      resultId,
-      attempt,
-    })),
+      requestId,
+    })
+    .strict(),
 ]);
+export const encodeBlockedCursor = (value: z.output<typeof cursor>) =>
+  Buffer.from(JSON.stringify(value)).toString('base64url');
+
+/** Tokenization and one boundary schema parse; unknown, duplicate and incomplete flags fail. */
+function commandInput(argv: string[]) {
+  if (!argv.length) return { type: 'sweep' };
+  const [type, ...rest] = argv;
+  const positional: string[] = [];
+  const flags: Record<string, unknown> = {};
+  for (let index = 0; index < rest.length; index++) {
+    const token = rest[index]!;
+    if (!token.startsWith('--')) {
+      positional.push(token);
+      continue;
+    }
+    const key =
+      (
+        {
+          '--request-id': 'requestId',
+          '--outstanding': 'outstanding',
+          '--after': 'after',
+        } as Record<string, string>
+      )[token] ?? token;
+    if (key in flags) return { invalid: true };
+    if (key === 'outstanding') flags[key] = true;
+    else flags[key] = rest[++index];
+  }
+  if ('after' in flags) {
+    try {
+      flags.after = JSON.parse(
+        Buffer.from(String(flags.after), 'base64url').toString('utf8')
+      );
+    } catch {
+      return { invalid: true };
+    }
+  }
+  if (type === 'blocked' && positional.length <= 1)
+    return { type, limit: positional[0] ?? '100', ...flags };
+  if ((type === 'inspect' || type === 'acknowledge') && positional.length === 1)
+    return { type, fingerprint: positional[0], ...flags };
+  if (type === 'requeue' && positional.length === 3)
+    return {
+      type,
+      fingerprint: positional[0],
+      resultId: positional[1],
+      attempt: positional[2],
+      ...flags,
+    };
+  return { invalid: true };
+}
 type CleanupCommand =
   | Exclude<z.output<typeof command>, { type: 'requeue' }>
-  | {
-      type: 'requeue';
-      fingerprint: string;
-      resultId: RenderResultId;
-      attempt: number;
-    };
+  | (Omit<
+      Extract<z.output<typeof command>, { type: 'requeue' }>,
+      'resultId'
+    > & { resultId: RenderResultId });
 export function parseRenderCleanupCommand(
   argv: string[]
 ): ApplicationResult<CleanupCommand> {
-  const parsed = command.safeParse(argv);
+  const parsed = command.safeParse(commandInput(argv));
   if (!parsed.success)
     return Result.Error(
       new AppError({
@@ -73,7 +115,6 @@ export function parseRenderCleanupCommand(
     );
   if (parsed.data.type !== 'requeue') return Result.Ok(parsed.data);
   const resultId = toRenderResultId(parsed.data.resultId);
-  return resultId.isError()
-    ? Result.Error(resultId.getError())
-    : Result.Ok({ ...parsed.data, resultId: resultId.get() });
+  if (resultId.isError()) return Result.Error(resultId.getError());
+  return Result.Ok({ ...parsed.data, resultId: resultId.get() });
 }
