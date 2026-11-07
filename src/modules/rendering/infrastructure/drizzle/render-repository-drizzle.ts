@@ -511,17 +511,9 @@ export const createRenderRepository = ({
     },
     async reconcileSubmission(input) {
       try {
-        const [matched] = await db
-          .select({ id: resultTable.id })
-          .from(resultTable)
-          .where(savedSubmissionWhere(input));
-        if (matched)
-          return Result.Ok({
-            type: 'result_submitted',
-            providerRequestId: input.providerRequestId,
-          });
         const [row] = await db
           .select({
+            matchesSaved: sql<boolean>`${savedSubmissionWhere(input)}`,
             attempt: resultTable.attempt,
             workflowRunId: resultTable.workflowRunId,
             status: resultTable.status,
@@ -530,6 +522,13 @@ export const createRenderRepository = ({
           })
           .from(resultTable)
           .where(eq(resultTable.id, input.resultId));
+        // One statement snapshot: a concurrent commit cannot turn our own save into supersession.
+        if (row?.matchesSaved)
+          return Result.Ok({
+            type: 'result_submitted',
+            providerRequestId: input.providerRequestId,
+            receiptCaptured: true,
+          });
         if (
           !row ||
           row.attempt !== input.attempt ||

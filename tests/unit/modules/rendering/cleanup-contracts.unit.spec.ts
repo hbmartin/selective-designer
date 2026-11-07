@@ -13,10 +13,12 @@ import {
 import {
   encodeBlockedCursor,
   parseRenderCleanupCommand,
+  runRenderCleanupSweep,
 } from '@/modules/rendering/backend';
 import {
   createOutputCleanupStore,
   SubmissionPersistenceError,
+  SubmissionWriteError,
 } from '@/modules/rendering/testing';
 
 describe('cleanup and recovery contracts', () => {
@@ -57,6 +59,10 @@ describe('cleanup and recovery contracts', () => {
   });
   it.each([
     ['typo'],
+    ['acknowledge', 'a'.repeat(64), '--request-id'],
+    ['requeue', 'a'.repeat(64), 'x', '1', '--request-id'],
+    ['acknowledge', 'a'.repeat(64), '--request-id', '--outstanding'],
+    ['blocked', '--after'],
     ['blocked', '0'],
     ['blocked', '101'],
     ['blocked', '1', 'extra'],
@@ -90,30 +96,35 @@ describe('cleanup and recovery contracts', () => {
     expect(validateCleanupPage({ ids: ['x'], cursor }).isOk()).toBe(true);
     expect(validateCleanupPage({ ids: [] }).isOk()).toBe(true);
   });
-  it('preserves diagnostic and disclosure metadata inside the server error', () => {
-    const cause = new AppError({
-      code: 'WRITE_FAILED',
-      category: 'system',
-      status: 503,
-      message: 'Useful internal context',
-      details: { phase: 'write' },
-      exposeDetails: true,
-      retryable: false,
-      retryAfterMs: 100,
-      cause: new Error('transport'),
-    });
-    const wrapped = new SubmissionPersistenceError(cause, true);
-    expect(wrapped).toMatchObject({
-      code: cause.code,
-      message: cause.message,
-      details: cause.details,
-      exposeDetails: true,
-      retryable: false,
-      retryAfterMs: 100,
-      receiptCaptured: true,
-      cause,
-    });
-  });
+  it.each(['persistence', 'write'] as const)(
+    'preserves diagnostic and disclosure metadata inside the %s error',
+    (kind) => {
+      const cause = new AppError({
+        code: 'WRITE_FAILED',
+        category: 'system',
+        status: 503,
+        message: 'Useful internal context',
+        details: { phase: 'write' },
+        exposeDetails: true,
+        retryable: false,
+        retryAfterMs: 100,
+        cause: new Error('transport'),
+      });
+      const wrapped =
+        kind === 'persistence'
+          ? new SubmissionPersistenceError(cause, true)
+          : new SubmissionWriteError(cause, 'unknown');
+      expect(wrapped).toMatchObject({
+        code: cause.code,
+        message: cause.message,
+        details: cause.details,
+        exposeDetails: true,
+        retryable: false,
+        retryAfterMs: 100,
+        cause,
+      });
+    }
+  );
   it('fails closed for metadata-less roots before SQL', async () => {
     const select = vi.fn();
     const update = vi.fn();
@@ -186,5 +197,27 @@ describe('cleanup and recovery contracts', () => {
       ['blocked', '--unknown'],
     ])
       expect(parseRenderCleanupCommand(args).isError()).toBe(true);
+  });
+  it('keeps the cursor application error code for the operator sweep', async () => {
+    const process = vi.fn();
+    const sweep = runRenderCleanupSweep(
+      {
+        cutoff: async () => '2026-11-07T00:00:00Z',
+        list: async () => ({ type: 'cleanup_page', ids: ['a'] }) as never,
+        process,
+        summary: async () => ({
+          blockedTotal: 0,
+          blockedOutstanding: 0,
+          reasons: [],
+          outstandingReasons: [],
+        }),
+      },
+      1
+    );
+    await expect(sweep).rejects.toMatchObject({
+      code: 'RENDER_CLEANUP_CURSOR_INVALID',
+      retryable: false,
+    });
+    expect(process).not.toHaveBeenCalled();
   });
 });

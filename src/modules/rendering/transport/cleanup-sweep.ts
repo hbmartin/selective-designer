@@ -1,4 +1,3 @@
-import { unwrapStepResult } from '@/modules/kernel/transport/workflow/step-result-mapper';
 import { runWorkerPage } from '@/modules/kernel/transport/workflow/worker-page';
 
 import type {
@@ -37,7 +36,8 @@ export async function runRenderCleanupSweep(
   while (true) {
     // oxlint-disable-next-line no-await-in-loop -- deterministic snapshot pagination.
     const page = await operations.list({ before, after });
-    unwrapStepResult(validateCleanupPage(page, after, seen));
+    const valid = validateCleanupPage(page, after, seen);
+    if (valid.isError()) throw valid.getError();
     if (page.type === 'cleanup_empty') break;
     seen.add(cleanupCursorIdentity(page.cursor));
     // oxlint-disable-next-line no-await-in-loop -- finish each bounded page before advancing.

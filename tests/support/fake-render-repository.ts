@@ -1,4 +1,5 @@
 import { Result } from '@bloodyowl/boxed';
+import { isDeepStrictEqual } from 'node:util';
 
 import { AppError, type ProviderAccounting } from '@/modules/kernel';
 import type { ImageId } from '@/modules/kernel/domain/ids';
@@ -9,6 +10,7 @@ import type {
   RenderRepository,
 } from '@/modules/rendering';
 import { isRenderRetryable } from '@/modules/rendering';
+import { RENDER_RETRY_AFTER_MS } from '@/modules/rendering/testing';
 
 /** In-memory {@link RenderRepository} with the same revision semantics. */
 export const createFakeRenderRepository = (
@@ -43,12 +45,20 @@ export const createFakeRenderRepository = (
         return Result.Ok({ type: 'result_attempt_superseded' });
       if (
         found.result.providerRequestId === input.providerRequestId &&
+        isDeepStrictEqual(
+          accountingIdentities.get(input.resultId),
+          input.accountingIdentity
+        ) &&
+        isDeepStrictEqual(found.result.settings, input.settings) &&
+        found.result.prompt === input.prompt &&
+        found.result.submittedAt?.getTime() === Date.parse(input.submittedAt) &&
         (found.result.status === 'submitted' ||
           found.result.status === 'succeeded')
       )
         return Result.Ok({
           type: 'result_submitted',
           providerRequestId: input.providerRequestId,
+          receiptCaptured: true,
         });
       if (
         found.result.status !== 'pending' ||
@@ -58,7 +68,7 @@ export const createFakeRenderRepository = (
       return Result.Ok({
         type: 'submission_recovery_window',
         attemptDeadlineAt: new Date(
-          found.result.attemptStartedAt.getTime() + 30 * 60 * 1000
+          found.result.attemptStartedAt.getTime() + RENDER_RETRY_AFTER_MS
         ).toISOString(),
       });
     },

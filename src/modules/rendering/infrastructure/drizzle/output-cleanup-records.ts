@@ -127,6 +127,6 @@ export async function checkCleanupEligibility(
     .select({ attempt: renderResult.attempt, status: renderResult.status })
     .from(renderResult)
     .where(eq(renderResult.id, target.resultId))
-    .for('update');
+    .for('no key update');
   return cleanupAttemptEligibility(target.attempt, row);
 }

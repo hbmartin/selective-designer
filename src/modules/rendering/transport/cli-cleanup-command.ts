@@ -69,7 +69,12 @@ function commandInput(argv: string[]) {
       )[token] ?? token;
     if (key in flags) return { invalid: true };
     if (key === 'outstanding') flags[key] = true;
-    else flags[key] = rest[++index];
+    else {
+      const value = rest[++index];
+      if (value === undefined || value.startsWith('--'))
+        return { invalid: true };
+      flags[key] = value;
+    }
   }
   if ('after' in flags) {
     try {

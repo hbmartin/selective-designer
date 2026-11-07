@@ -77,11 +77,13 @@ export type RenderPublicationContext = {
 };
 
 export interface RenderRepository {
-  reconcileSubmission(
-    input: AcceptedRenderSubmission
-  ): Promise<
+  reconcileSubmission(input: AcceptedRenderSubmission): Promise<
     ApplicationResult<
-      | { type: 'result_submitted'; providerRequestId: string }
+      | {
+          type: 'result_submitted';
+          providerRequestId: string;
+          receiptCaptured: true;
+        }
       | { type: 'submission_recovery_window'; attemptDeadlineAt: string }
       | { type: 'result_attempt_superseded' }
     >

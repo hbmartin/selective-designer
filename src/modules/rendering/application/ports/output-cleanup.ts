@@ -19,11 +19,15 @@ export type CleanupAcknowledgmentInput = {
   fingerprint: string;
 };
 export type CleanupAcknowledgmentOutcome =
-  | { type: 'cleanup_acknowledged'; requestId: string }
+  | {
+      type: 'cleanup_acknowledged';
+      requestId: string;
+      canonicalRequestId: string;
+    }
   | {
       type:
         | 'blocked_not_found'
-        | 'locator_available'
+        | 'cleanup_already_handed_off'
         | 'cleanup_repair_conflict';
     };
 export type BlockedCleanupRecord = {
@@ -64,7 +68,7 @@ export type CleanupClaim =
 export type CleanupRecoveryEvent = { requestId: string; createdAt: Date } & (
   | {
       outcome: 'cleanup_acknowledged';
-      reasonCode: 'locator_unavailable_retained';
+      reasonCode: 'locator_unavailable_retained' | 'operator_retained';
     }
   | {
       outcome:
@@ -81,7 +85,7 @@ export interface OutputCleanupStore {
   acknowledge(
     input: CleanupAcknowledgmentInput
   ): Promise<ApplicationResult<CleanupAcknowledgmentOutcome>>;
-  blocked(input: number | BlockedListInput): Promise<
+  blocked(input: BlockedListInput): Promise<
     ApplicationResult<{
       type: 'blocked_cleanup_list';
       records: BlockedCleanupRecord[];

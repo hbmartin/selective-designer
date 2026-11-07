@@ -1050,6 +1050,7 @@ describe('RenderRepositoryDrizzle', () => {
       ).toEqual({
         type: 'result_submitted',
         providerRequestId: input.providerRequestId,
+        receiptCaptured: true,
       });
       expect(okValue(await repository.saveSubmission(submission)).type).toBe(
         'result_submitted'
@@ -1149,6 +1150,77 @@ describe('RenderRepositoryDrizzle', () => {
         await database.db.execute(
           sql`alter table render_result drop constraint reject_submission`
         );
+      }
+    }
+  );
+  it('requires every saved-submission attribute before confirming receipt capture', async () => {
+    const { input, startedAt } = await newAttempt();
+    okValue(await repository.claimExecution(input));
+    const submission = journaled(input, startedAt);
+    okValue(await repository.saveSubmission(submission));
+    expect(okValue(await repository.reconcileSubmission(submission))).toEqual({
+      type: 'result_submitted',
+      providerRequestId: input.providerRequestId,
+      receiptCaptured: true,
+    });
+    for (const changed of [
+      { prompt: 'other' },
+      { settings: { changed: true } },
+      { submittedAt: new Date(startedAt.getTime() + 1).toISOString() },
+      {
+        accountingIdentity: {
+          ...submission.accountingIdentity,
+          invocationId: 'other',
+        },
+      },
+      { providerRequestId: 'other' },
+      { workflowRunId: 'other' },
+      { attempt: 2 },
+    ])
+      expect(
+        okValue(
+          await repository.reconcileSubmission({ ...submission, ...changed })
+        )
+      ).toEqual({ type: 'result_attempt_superseded' });
+  });
+  it.skipIf(!process.env.RECOVERY_TEST_DATABASE_URL)(
+    'uses a single snapshot when a submission commits during reconciliation',
+    async () => {
+      const { input, startedAt } = await newAttempt();
+      okValue(await repository.claimExecution(input));
+      const submission = journaled(input, startedAt);
+      const query = database.db.$client.query.bind(database.db.$client);
+      let reads = 0;
+      let committed = false;
+      const spy = vi
+        .spyOn(database.db.$client, 'query')
+        .mockImplementation(async (text, values) => {
+          const statement =
+            typeof text === 'string' ? text : (text as { text: string }).text;
+          const result = await query(text, values);
+          if (
+            statement.startsWith('select') &&
+            statement.includes('"render_result"')
+          ) {
+            reads++;
+            if (!committed) {
+              committed = true;
+              // The SELECT snapshot is pending, then the other connection's UPDATE commits before return.
+              okValue(await repository.saveSubmission(submission));
+            }
+          }
+          return result;
+        });
+      try {
+        expect(
+          okValue(await repository.reconcileSubmission(submission)).type
+        ).toBe('submission_recovery_window');
+        expect(reads).toBe(1);
+        expect(
+          okValue(await repository.reconcileSubmission(submission))
+        ).toMatchObject({ type: 'result_submitted', receiptCaptured: true });
+      } finally {
+        spy.mockRestore();
       }
     }
   );

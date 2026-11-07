@@ -37,8 +37,10 @@ import {
   createOutputCleanupStore,
   createRenderRepository,
   renderOutputCleanup,
+  renderOutputCleanupAcknowledgmentRequest,
   renderOutputCleanupBlocked,
   renderOutputCleanupRecovery,
+  renderResultTable,
 } from '@/modules/rendering/testing';
 
 describe('durable render output cleanup', () => {
@@ -344,7 +346,7 @@ describe('durable render output cleanup', () => {
         resultId: okValue(toRenderResultId('incorrect-owner')),
       })
     );
-    const records = okValue(await store.blocked(100)).records;
+    const records = okValue(await store.blocked({ limit: 100 })).records;
     expect(JSON.stringify(records)).not.toContain(target.objectKey);
     return records[0]!;
   };
@@ -399,7 +401,7 @@ describe('durable render output cleanup', () => {
     okValue(
       await store.enqueue({ ...target, objectKey: 'region-masks/a.png' })
     );
-    const records = okValue(await store.blocked(100)).records;
+    const records = okValue(await store.blocked({ limit: 100 })).records;
     for (const record of records) {
       const view = okValue(await store.inspect(record.fingerprint));
       if (
@@ -616,7 +618,7 @@ describe('durable render output cleanup', () => {
     expect(reference).not.toHaveBeenCalled();
     expect(deletion).not.toHaveBeenCalled();
     expect(await database.db.select().from(renderOutputCleanup)).toEqual([]);
-    const evidence = okValue(await store.blocked(100)).records[0]!;
+    const evidence = okValue(await store.blocked({ limit: 100 })).records[0]!;
     expect(evidence.reasonCode).toBe('RENDER_OUTPUT_ATTEMPT_ACTIVE');
     await updateRenderResultFixture(database.db, {
       resultId: target.resultId,
@@ -667,7 +669,7 @@ describe('durable render output cleanup', () => {
         objectKey: futureKey,
       })
     );
-    const record = okValue(await store.blocked(100)).records.find(
+    const record = okValue(await store.blocked({ limit: 100 })).records.find(
       (row) => row.attempt === 2
     )!;
     expect(
@@ -693,15 +695,12 @@ describe('durable render output cleanup', () => {
     expect(
       okValue(await store.blocked({ limit: 100, outstanding: true })).records
     ).toEqual([]);
-    expect(okValue(await store.blocked(100)).records[0]?.intervention).toBe(
-      'handed_off'
-    );
+    expect(
+      okValue(await store.blocked({ limit: 100 })).records[0]?.intervention
+    ).toBe('handed_off');
   });
-  it('audits acknowledgment only for unavailable locators and protects request identities across actions', async () => {
+  it('audits unavailable-locator retention and protects request identities across actions', async () => {
     const input = await repairInput();
-    expect(okValue(await store.acknowledge(input)).type).toBe(
-      'locator_available'
-    );
     await database.db
       .update(renderOutputCleanupBlocked)
       .set({ safeObjectKey: null });
@@ -819,6 +818,205 @@ describe('durable render output cleanup', () => {
       } finally {
         await database.db.execute(
           sql`alter table render_output_cleanup_recovery drop constraint reject_ack`
+        );
+      }
+    }
+  );
+  it.each(['pending', 'submitted', 'non-render'] as const)(
+    'acknowledges intentional retention of %s without touching the render or cleanup queue',
+    async (kind) => {
+      if (kind !== 'non-render') await seedAttempt(kind);
+      const input = await repairInput();
+      if (kind === 'non-render')
+        await database.db
+          .update(renderOutputCleanupBlocked)
+          .set({ safeObjectKey: 'region-masks/keep.png' });
+      const before = await database.db.select().from(renderResultTable);
+      const acknowledged = okValue(await store.acknowledge(input));
+      expect(acknowledged).toEqual({
+        type: 'cleanup_acknowledged',
+        requestId: input.requestId,
+        canonicalRequestId: input.requestId,
+      });
+      expect(await database.db.select().from(renderResultTable)).toEqual(
+        before
+      );
+      expect(await database.db.select().from(renderOutputCleanup)).toEqual([]);
+      expect(okValue(await store.summary())).toMatchObject({
+        blockedTotal: 1,
+        blockedOutstanding: 0,
+      });
+      const view = okValue(await store.inspect(input.fingerprint));
+      expect(view).toMatchObject({
+        record: { intervention: 'acknowledged' },
+        recoveries: [{ reasonCode: 'operator_retained' }],
+      });
+      expect(
+        JSON.stringify(okValue(await store.blocked({ limit: 100 })))
+      ).not.toContain('raw.png');
+    }
+  );
+  it('coalesces concurrent acknowledgments while reserving every replay identity across actions', async () => {
+    const input = await repairInput('first');
+    const ids = ['first', 'second', 'third'];
+    const results = await Promise.all(
+      ids.map((requestId) => store.acknowledge({ ...input, requestId }))
+    );
+    const values = results.map(okValue);
+    const [event] = await database.db
+      .select()
+      .from(renderOutputCleanupRecovery);
+    expect(event).toBeDefined();
+    expect(
+      await database.db.select().from(renderOutputCleanupRecovery)
+    ).toHaveLength(1);
+    expect(
+      await database.db.select().from(renderOutputCleanupAcknowledgmentRequest)
+    ).toHaveLength(2);
+    for (const [index, value] of values.entries()) {
+      expect(value).toMatchObject({
+        type: 'cleanup_acknowledged',
+        requestId: ids[index],
+        canonicalRequestId: event!.requestId,
+      });
+      expect(
+        okValue(await store.acknowledge({ ...input, requestId: ids[index]! }))
+      ).toEqual(value);
+      expect(
+        okValue(await store.requeue({ ...input, requestId: ids[index]! })).type
+      ).toBe('cleanup_repair_conflict');
+      expect(
+        okValue(
+          await store.acknowledge({
+            fingerprint: 'f'.repeat(64),
+            requestId: ids[index]!,
+          })
+        ).type
+      ).toBe('cleanup_repair_conflict');
+    }
+  });
+  it('preserves historical duplicate acknowledgments and aliases the earliest canonical event', async () => {
+    const input = await repairInput();
+    await database.db.insert(renderOutputCleanupRecovery).values(
+      ['old-first', 'old-second'].map((requestId, index) => ({
+        requestId,
+        fingerprint: input.fingerprint,
+        outcome: 'cleanup_acknowledged' as const,
+        reasonCode: 'locator_unavailable_retained',
+        createdAt: new Date(Date.UTC(2026, 0, index + 1)),
+      }))
+    );
+    const before = await database.db.select().from(renderOutputCleanupRecovery);
+    expect(okValue(await store.acknowledge(input))).toMatchObject({
+      canonicalRequestId: 'old-first',
+    });
+    expect(
+      okValue(await store.acknowledge({ ...input, requestId: 'old-second' }))
+    ).toMatchObject({ canonicalRequestId: 'old-first' });
+    expect(
+      await database.db.select().from(renderOutputCleanupRecovery)
+    ).toEqual(before);
+  });
+  it('allows repair after acknowledgment, shows handoff, rejects fresh acknowledgment and preserves old replays', async () => {
+    const input = await repairInput('ack');
+    const acknowledged = okValue(await store.acknowledge(input));
+    okValue(await store.acknowledge({ ...input, requestId: 'ack-alias' }));
+    expect(
+      okValue(await store.requeue({ ...input, requestId: 'repair' })).type
+    ).toBe('cleanup_requeued');
+    expect(okValue(await store.inspect(input.fingerprint))).toMatchObject({
+      record: { intervention: 'handed_off' },
+    });
+    expect(
+      okValue(await store.acknowledge({ ...input, requestId: 'fresh-ack' }))
+        .type
+    ).toBe('cleanup_already_handed_off');
+    expect(okValue(await store.acknowledge(input))).toEqual(acknowledged);
+    expect(
+      okValue(await store.acknowledge({ ...input, requestId: 'ack-alias' }))
+    ).toMatchObject({ canonicalRequestId: 'ack' });
+    expect(await database.db.select().from(renderOutputCleanup)).toHaveLength(
+      1
+    );
+    expect(
+      await database.db.select().from(renderOutputCleanupRecovery)
+    ).toHaveLength(2);
+  });
+  it('serializes acknowledgment against repair without canceling a handoff', async () => {
+    const input = await repairInput();
+    const [ack, repair] = await Promise.all([
+      store.acknowledge({ ...input, requestId: 'ack-race' }),
+      store.requeue(input),
+    ]);
+    expect(['cleanup_acknowledged', 'cleanup_already_handed_off']).toContain(
+      okValue(ack).type
+    );
+    expect(okValue(repair).type).toBe('cleanup_requeued');
+    expect(okValue(await store.inspect(input.fingerprint))).toMatchObject({
+      record: { intervention: 'handed_off' },
+    });
+    expect(okValue(await store.summary())).toMatchObject({
+      blockedTotal: 1,
+      blockedOutstanding: 0,
+    });
+  });
+  it('reconciles lost alias commits and preserves uncertainty until replay can confirm the canonical event', async () => {
+    const input = await repairInput('canonical');
+    okValue(await store.acknowledge(input));
+    const run = database.db.$runInTransaction!;
+    const loseReply = () =>
+      vi
+        .spyOn(database.db, '$runInTransaction')
+        .mockImplementationOnce(async (work, options) => {
+          await run(work, options);
+          throw Object.assign(new Error('reply lost'), { code: 'EPIPE' });
+        });
+    loseReply();
+    expect(
+      okValue(await store.acknowledge({ ...input, requestId: 'alias-1' }))
+    ).toMatchObject({ canonicalRequestId: 'canonical' });
+    loseReply();
+    vi.spyOn(database.db, 'select').mockImplementationOnce(() => {
+      throw Object.assign(new Error('unavailable'), { code: 'ECONNRESET' });
+    });
+    expect(
+      (await store.acknowledge({ ...input, requestId: 'alias-2' })).isError()
+    ).toBe(true);
+    expect(
+      okValue(await store.acknowledge({ ...input, requestId: 'alias-2' }))
+    ).toMatchObject({ canonicalRequestId: 'canonical' });
+    expect(
+      await database.db.select().from(renderOutputCleanupRecovery)
+    ).toHaveLength(1);
+    expect(
+      await database.db.select().from(renderOutputCleanupAcknowledgmentRequest)
+    ).toHaveLength(2);
+  });
+  it.skipIf(!process.env.RECOVERY_TEST_DATABASE_URL)(
+    'rolls back alias bookkeeping failure without duplicating acknowledgment',
+    async () => {
+      const input = await repairInput('canonical');
+      okValue(await store.acknowledge(input));
+      await database.db.execute(
+        sql`alter table render_output_cleanup_acknowledgment_request add constraint reject_alias check(false)`
+      );
+      try {
+        expect(
+          (
+            await store.acknowledge({ ...input, requestId: 'failed-alias' })
+          ).isError()
+        ).toBe(true);
+        expect(
+          await database.db
+            .select()
+            .from(renderOutputCleanupAcknowledgmentRequest)
+        ).toEqual([]);
+        expect(
+          await database.db.select().from(renderOutputCleanupRecovery)
+        ).toHaveLength(1);
+      } finally {
+        await database.db.execute(
+          sql`alter table render_output_cleanup_acknowledgment_request drop constraint reject_alias`
         );
       }
     }

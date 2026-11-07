@@ -1,5 +1,17 @@
 import { AppError } from '@/modules/kernel/domain/errors/app-error';
 
+const causedErrorOptions = (cause: AppError) => ({
+  code: cause.code,
+  message: cause.message,
+  details: cause.details,
+  exposeDetails: cause.exposeDetails,
+  category: cause.category,
+  status: cause.status,
+  retryable: cause.retryable,
+  retryAfterMs: cause.retryAfterMs,
+  cause,
+});
+
 /** Server-only progress; a submission write failure cannot erase confirmed capture. */
 export class SubmissionPersistenceError extends AppError {
   readonly receiptCaptured: boolean;
@@ -11,17 +23,7 @@ export class SubmissionPersistenceError extends AppError {
       ? 'unknown'
       : 'not_attempted'
   ) {
-    super({
-      code: cause.code,
-      message: cause.message,
-      details: cause.details,
-      exposeDetails: cause.exposeDetails,
-      category: cause.category,
-      status: cause.status,
-      retryable: cause.retryable,
-      retryAfterMs: cause.retryAfterMs,
-      cause,
-    });
+    super(causedErrorOptions(cause));
     this.receiptCaptured = receiptCaptured;
     this.submissionWrite = submissionWrite;
   }
@@ -35,15 +37,8 @@ export class SubmissionWriteError extends AppError {
     retryable = cause.retryable
   ) {
     super({
-      code: cause.code,
-      message: cause.message,
-      category: cause.category,
-      status: cause.status,
-      details: cause.details,
-      exposeDetails: cause.exposeDetails,
+      ...causedErrorOptions(cause),
       retryable,
-      retryAfterMs: cause.retryAfterMs,
-      cause,
     });
   }
 }
