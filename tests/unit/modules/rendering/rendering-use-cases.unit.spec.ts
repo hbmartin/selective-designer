@@ -16,8 +16,8 @@ import {
   toDesignId,
   toGeneratedId,
   toImageId,
-  toRenderResultId,
   toObjectKey,
+  toRenderResultId,
   toUserId,
 } from '@/modules/kernel/domain/ids';
 import { unwrapParseResult } from '@/modules/kernel/testing';
@@ -40,7 +40,10 @@ import {
   type ResultOutputReferences,
   type SourceImage,
 } from '@/modules/rendering';
-import { createPngMaskCompositor } from '@/modules/rendering/testing';
+import {
+  createPngMaskCompositor,
+  discardLostOutput,
+} from '@/modules/rendering/testing';
 
 const execution = (result: RenderResult) => ({
   resultId: result.id,
@@ -1678,11 +1681,15 @@ describe('independent render accounting', () => {
       expect(result.attempt).toBe(2);
       // Retry returns after scheduling; the workflow owns reference checks/deletion.
       expect(ctx.storage.objects.has(objectKey)).toBe(true);
-      const cleaned = await ctx.pipeline.discardOutput({
-        resultId: result.id,
-        attempt: 1,
-        objectKey,
-      });
+      const cleaned = await discardLostOutput(
+        {
+          logger,
+          objectStorage: ctx.storage.storage,
+          resultOutputReferences: ctx.resultOutputReferences,
+        },
+        { workflowRunId: 'test-cleanup', resultId: result.id, attempt: 1 },
+        objectKey
+      );
       expect(cleaned.isError()).toBe(
         state === 'unknown' || state === 'delete failure'
       );
@@ -1704,11 +1711,19 @@ describe('independent render accounting', () => {
       const remove = vi.spyOn(ctx.storage.storage, 'deleteObject');
       expect(
         (
-          await ctx.pipeline.discardOutput({
-            resultId: okValue(toRenderResultId('result-1')),
-            attempt: 1,
-            objectKey: key(value),
-          })
+          await discardLostOutput(
+            {
+              logger,
+              objectStorage: ctx.storage.storage,
+              resultOutputReferences: ctx.resultOutputReferences,
+            },
+            {
+              workflowRunId: 'test-cleanup',
+              resultId: okValue(toRenderResultId('result-1')),
+              attempt: 1,
+            },
+            key(value)
+          )
         ).isError()
       ).toBe(true);
       expect(refs).not.toHaveBeenCalled();
@@ -1796,6 +1811,47 @@ describe('accepted submission handoff', () => {
     ).toBe('result_submitted');
     expect(ctx.models.get('krea-3')!.requests).toHaveLength(1);
   });
+  it.each([
+    'submission_recovery_failed',
+    'PROVIDER_RECEIPT_IDENTITY_MISMATCH',
+    'RENDER_ACCOUNTING_IDENTITY_MISSING',
+  ])(
+    'maps stored recovery reasons into presentation tags: %s',
+    async (errorMessage) => {
+      const ctx = await acceptedSetup();
+      ctx.result.status = 'failed';
+      ctx.result.errorMessage = errorMessage;
+      const view = okValue(
+        await ctx.useCases.getRender({
+          currentUserId: ownerId,
+          renderId: ctx.renders.renders[0]!.id,
+        })
+      );
+      expect(view).toMatchObject({
+        type: 'render_found',
+        render: {
+          results: [{ failure: { type: 'recovery_failed' }, retryable: true }],
+        },
+      });
+    }
+  );
+  it.each([undefined, 'invalid'])(
+    'captures a valid receipt before rejecting invalid deadline metadata: %s',
+    async (attemptDeadlineAt) => {
+      const ctx = await acceptedSetup();
+      const result = await ctx.rawPipeline.persistSubmission({
+        ...ctx.accepted,
+        attemptDeadlineAt: attemptDeadlineAt as string,
+      });
+      expect(result.isError() && result.getError()).toMatchObject({
+        code: 'RENDER_SUBMISSION_DEADLINE_INVALID',
+        retryable: false,
+        receiptCaptured: true,
+      });
+      expect(ctx.calls.receipts.size).toBe(1);
+      expect(ctx.result.status).toBe('pending');
+    }
+  );
   it.each(['replacement', 'deletion'])(
     'captures accepted work after %s',
     async (loss) => {

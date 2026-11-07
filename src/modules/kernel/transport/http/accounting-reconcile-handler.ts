@@ -1,5 +1,4 @@
-import { timingSafeEqual } from 'node:crypto';
-
+import { hasCronAuthority } from './cron-authority';
 /** Separate cron authority; ordinary sessions cannot invoke reconciliation. */
 export async function handleAccountingReconcile(
   request: Request,
@@ -8,13 +7,7 @@ export async function handleAccountingReconcile(
     start: () => Promise<void>;
   }
 ) {
-  const supplied = Buffer.from(request.headers.get('authorization') ?? '');
-  const expected = Buffer.from(`Bearer ${deps.secret ?? ''}`);
-  if (
-    !deps.secret ||
-    supplied.length !== expected.length ||
-    !timingSafeEqual(supplied, expected)
-  )
+  if (!hasCronAuthority(request, deps.secret))
     return new Response('Unauthorized', { status: 401 });
   await deps.start();
   return Response.json(

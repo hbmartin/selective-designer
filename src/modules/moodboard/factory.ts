@@ -1,3 +1,8 @@
+import {
+  bindUseCases,
+  type UseCaseScope,
+} from '@/modules/kernel/application/bind-use-cases';
+
 import { copyItems } from './application/use-cases/copy-items';
 import {
   correctCutout,
@@ -37,13 +42,15 @@ export function createMoodboardUseCases(deps: MoodboardUseCaseDeps) {
 
 export type MoodboardUseCases = ReturnType<typeof createMoodboardUseCases>;
 
-export function createMoodboardPipelineUseCases(deps: MoodboardPipelineDeps) {
-  return {
-    removeBackground: (input: Input<typeof removeBackgroundForVersion>) =>
-      removeBackgroundForVersion(deps, input),
-    markCutoutFailed: (input: Input<typeof markCutoutFailed>) =>
-      markCutoutFailed(deps, input),
-  };
+export function createMoodboardPipelineUseCases(
+  deps: MoodboardPipelineDeps,
+  scope?: UseCaseScope<MoodboardPipelineDeps>
+) {
+  return bindUseCases(
+    deps,
+    { removeBackground: removeBackgroundForVersion, markCutoutFailed },
+    scope
+  );
 }
 
 export type MoodboardPipelineUseCases = ReturnType<

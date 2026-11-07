@@ -1,6 +1,7 @@
 import { getEnv, waitUntil } from '@vercel/functions';
 
 import type { Logger, ProviderAccounting } from '@/modules/kernel';
+import type { UseCaseScope } from '@/modules/kernel/application/bind-use-cases';
 import { safeErrorDiagnostics } from '@/modules/kernel/domain/errors/safe-error-diagnostics';
 import type { ProviderCallId } from '@/modules/kernel/domain/ids';
 import { dispatchProviderReceipt } from '@/modules/kernel/infrastructure/db/provider-accounting-dispatch';
@@ -42,26 +43,17 @@ export function deferAccountingDelivery(
   }
 }
 
-/** Cover the entire facade, so newly exposed operations inherit delivery ownership. */
-export function createAccountingFacade<
-  T extends Record<string, (input: never) => Promise<unknown>>,
->(input: {
-  accounting: ProviderAccounting;
-  logger: Logger;
-  owner: 'workflow' | 'http';
-  create: (accounting: ProviderAccounting) => T;
-}): T {
-  const facade = input.create(input.accounting);
-  return Object.fromEntries(
-    Object.keys(facade).map((key) => [
-      key,
-      (value: never) =>
-        withAccountingDelivery({
-          ...input,
-          operation: (accounting) => input.create(accounting)[key]!(value),
-        }),
-    ])
-  ) as T;
+/** Each factory binds definitions once; the scope isolates dependencies per invocation. */
+export function createAccountingScope<
+  D extends { providerAccounting: ProviderAccounting },
+>(input: { logger: Logger; owner: 'workflow' | 'http' }): UseCaseScope<D> {
+  return (deps, value, operation) =>
+    withAccountingDelivery({
+      ...input,
+      accounting: deps.providerAccounting,
+      operation: (providerAccounting) =>
+        operation({ ...deps, providerAccounting }, value),
+    });
 }
 
 /** A workflow-owned post-operation step may dispatch a previously captured receipt. */

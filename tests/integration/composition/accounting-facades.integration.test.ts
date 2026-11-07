@@ -22,6 +22,7 @@ import {
 const host = vi.hoisted(() => ({
   start: vi.fn(),
   tasks: [] as Promise<unknown>[],
+  release: [] as (() => void)[],
 }));
 vi.mock('workflow/api', () => ({ start: host.start }));
 vi.mock('@vercel/functions', () => ({
@@ -66,7 +67,12 @@ describe('production accounting facades', { timeout: 15000 }, () => {
   beforeEach(async () => {
     await database.truncate();
     host.tasks.length = 0;
-    host.start.mockReset().mockImplementation(() => new Promise(() => {}));
+    host.release.length = 0;
+    host.start
+      .mockReset()
+      .mockImplementation(
+        () => new Promise((resolve) => host.release.push(() => resolve({})))
+      );
     await database.db.insert(user).values(makeUserRow({ id: ownerId }));
     okValue(
       await createDesignRepository({ db: database.db }).create({
@@ -87,6 +93,8 @@ describe('production accounting facades', { timeout: 15000 }, () => {
     );
   });
   afterEach(async () => {
+    for (const release of host.release) release();
+    host.start.mockResolvedValue({});
     await Promise.allSettled(host.tasks);
   });
   afterAll(async () => {
@@ -124,7 +132,6 @@ describe('production accounting facades', { timeout: 15000 }, () => {
     expect(storage.objects.size).toBe(1);
     expect(calls.receipts.size).toBe(1);
     expect(host.tasks).toHaveLength(1);
-    host.start.mockResolvedValue({});
   });
 
   it('publishes actual automatic SAM regions before its workflow dispatch completes', async () => {
@@ -172,6 +179,7 @@ describe('production accounting facades', { timeout: 15000 }, () => {
       okValue(await regionRepository.listByImage(imageId)).regions
     ).toHaveLength(1);
     expect(calls.receipts.size).toBe(1);
+    for (const release of host.release) release();
     expect(okValue(await running).type).toBe('concept_detected');
   });
 
@@ -231,6 +239,7 @@ describe('production accounting facades', { timeout: 15000 }, () => {
       okValue(await items.repository.findVersion(versionId))
     ).toMatchObject({ version: { cutoutStatus: 'ready' } });
     expect(calls.receipts.size).toBe(1);
+    for (const release of host.release) release();
     expect(okValue(await running).type).toBe('cutout_ready');
   });
 });

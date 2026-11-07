@@ -43,4 +43,5 @@ export {
   readLimitedBody,
 } from './infrastructure/storage/limited-response-body';
 export { handleAccountingReconcile } from './transport/http/accounting-reconcile-handler';
+export { hasCronAuthority } from './transport/http/cron-authority';
 export { appErrorToResponse } from './transport/http/error-mapper';

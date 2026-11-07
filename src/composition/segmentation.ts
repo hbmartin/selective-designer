@@ -6,7 +6,7 @@ import {
 } from '@/modules/segmentation';
 import { createRegionRepository } from '@/modules/segmentation/backend';
 
-import { createAccountingFacade } from './accounting-delivery';
+import { createAccountingScope } from './accounting-delivery';
 import { getKernel, type Kernel } from './kernel';
 import { createImageAccess, createSegmenter } from './segmentation-pipeline';
 import { createAutoDetectionScheduler } from './segmentation-scheduler';
@@ -35,13 +35,10 @@ const build = (overrides?: SegmentationOverrides) => {
     clock: kernel.clock,
     logger: kernel.logger,
   };
-  return createAccountingFacade({
-    accounting: deps.providerAccounting,
-    logger: kernel.logger,
-    owner: 'http',
-    create: (providerAccounting) =>
-      createSegmentationUseCases({ ...deps, providerAccounting }),
-  });
+  return createSegmentationUseCases(
+    deps,
+    createAccountingScope({ logger: kernel.logger, owner: 'http' })
+  );
 };
 
 const factory = createCachedFactory(build);

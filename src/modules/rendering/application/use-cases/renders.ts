@@ -463,8 +463,15 @@ export async function submitBatch(
 // ---- Reading renders ------------------------------------------------------
 
 /** Provider request ids stay server-side. */
-export type RenderResultView = Omit<RenderResult, 'providerRequestId'> & {
+export type RenderResultView = Omit<
+  RenderResult,
+  'providerRequestId' | 'errorMessage'
+> & {
   retryable: boolean;
+  failure:
+    | { type: 'recovery_failed' }
+    | { type: 'render_failure'; message: string }
+    | { type: 'none' };
   outputUrl: string | null;
   outputSize: { width: number; height: number } | null;
 };
@@ -518,10 +525,23 @@ const toRenderView = async (
       if (signed.isError()) return Result.Error(signed.getError());
       output = signed.get();
     }
-    const { providerRequestId: _providerRequestId, ...visible } = result;
+    const {
+      providerRequestId: _providerRequestId,
+      errorMessage: _errorMessage,
+      ...visible
+    } = result;
     results.push({
       ...visible,
       retryable: isRenderRetryable(result, cutoff),
+      failure:
+        result.status !== 'failed'
+          ? { type: 'none' }
+          : result.errorMessage === 'submission_recovery_failed' ||
+              result.errorMessage?.startsWith('PROVIDER_RECEIPT_') ||
+              result.errorMessage === 'RENDER_ACCOUNTING_IDENTITY_MISSING' ||
+              result.errorMessage === 'RENDER_SUBMISSION_DEADLINE_INVALID'
+            ? { type: 'recovery_failed' }
+            : { type: 'render_failure', message: result.errorMessage ?? '' },
       outputUrl: output?.url ?? null,
       outputSize: output?.size ?? null,
     });

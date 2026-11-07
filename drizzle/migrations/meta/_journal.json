@@ -120,6 +120,13 @@
       "when": 1793994611954,
       "tag": "0016_fair_karma",
       "breakpoints": true
+    },
+    {
+      "idx": 17,
+      "version": "7",
+      "when": 1794010407678,
+      "tag": "0017_productive_silver_sable",
+      "breakpoints": true
     }
   ]
 }

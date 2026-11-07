@@ -395,3 +395,8 @@ Operators can redrive pending accounting with `pnpm accounting:reconcile`. The c
 Apply the additive accounting migration before serving the new app. The new ordinary indexes on image object keys and render checkpoint keys take a write lock while PostgreSQL builds them; coordinate rollout with writers, as for migration 0012. Existing migrations are immutable. Online index builds, historical accounting repair and orphan sweeps remain outside this release.
 
 Only an owning workflow may fail a render. If execution never claims ownership, the result stays pending and its owner can start a fresh, potentially paid attempt after 30 minutes. Replaced output deletion is best effort after confirmed loss and global reference checks.
+
+
+Render acceptance always gets one database persistence attempt, even after its original 30-minute deadline. Further recovery retains that cutoff. Delivery is dispatched only after receipt capture is confirmed; an unconfirmed capture may remain solely in the workflow journal, and daily accounting reconciliation cannot recreate it.
+
+Apply migration **0017** before deploying this change. It adds the independent blocked-cleanup registry; prior migrations remain unchanged. Invalid checkpoint keys retain their files and produce sanitized blocked evidence in the Retry transaction instead of blocking the user. Invalid queued targets are quarantined before storage access. `pnpm rendering:cleanup` reports blocked counts and static reasons as well as completed and failed work. Blocked evidence and completed queue records are retained; no automatic repair or pruning is provided. Queue eligibility, leases and snapshot pagination use database time and the indexed time/key order. No active workflows require adoption for this release.

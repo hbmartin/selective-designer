@@ -1,5 +1,5 @@
 import { createDesignRepository } from '@/modules/design/backend';
-import { cleanupRenderOutput } from '@/modules/rendering';
+import { createRenderOutputCleanup } from '@/modules/rendering';
 import {
   createOutputCleanupStore,
   createRenderRepository,
@@ -20,11 +20,6 @@ const factory = createCachedFactory(() => {
       createRenderRepository({ db: kernel.db })
     ),
   };
-  return {
-    process: (cleanupId: string) => cleanupRenderOutput(deps, cleanupId),
-    list: (input: { before: string; after?: string }) =>
-      store.list({ ...input, before: new Date(input.before), limit: 100 }),
-    startedAt: () => kernel.clock.now().toISOString(),
-  };
+  return createRenderOutputCleanup(deps);
 });
 export const getRenderOutputCleanup = () => factory.get();
