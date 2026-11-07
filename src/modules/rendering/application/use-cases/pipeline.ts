@@ -276,6 +276,31 @@ export async function persistSubmission(
   });
 }
 
+/** A matching saved submission proves the production capture-before-save invariant. */
+export async function reconcileSubmission(
+  deps: RenderingPipelineDeps,
+  input: AcceptedRenderSubmission
+) {
+  const result = await deps.renderRepository.reconcileSubmission(input);
+  if (result.isError()) {
+    deps.logger.warn({
+      event: 'rendering.result.submission_reconciliation_failed',
+      details: {
+        ...renderLogContext(input),
+        code: result.getError().code,
+        ...safeErrorDiagnostics(result.getError()),
+      },
+    });
+    return Result.Error(result.getError());
+  }
+  const outcome = result.get();
+  return Result.Ok(
+    outcome.type === 'result_submitted'
+      ? { ...outcome, receiptCaptured: true as const }
+      : outcome
+  );
+}
+
 export type PollResultOutcome =
   | { type: 'result_pending' }
   | { type: 'result_succeeded' }

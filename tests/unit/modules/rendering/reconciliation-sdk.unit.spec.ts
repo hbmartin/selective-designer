@@ -1,20 +1,29 @@
 import { Result } from '@bloodyowl/boxed';
+import {
+  createFakeObjectStorage,
+  createFakeProviderCallLog,
+} from '@tests/support/fake-kernel-ports';
+import { createFakeRenderRepository } from '@tests/support/fake-render-repository';
 import { createRequire } from 'node:module';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-const state = vi.hoisted(() => ({ reconcileSubmission: vi.fn() }));
+const state = vi.hoisted(() => ({
+  reconcileSubmission: vi.fn(),
+  facade: undefined as RenderingPipelineUseCases | undefined,
+}));
 vi.mock('@/composition/rendering-pipeline', () => ({
-  getRenderingPipelineUseCases: () => state,
+  getRenderingPipelineUseCases: () => state.facade,
 }));
 import { AppError } from '@/modules/kernel';
-import type { DbLike } from '@/modules/kernel/infrastructure/db/types';
-import type { AcceptedRenderSubmission } from '@/modules/rendering';
+import { toGeneratedId } from '@/modules/kernel/domain/ids';
 import {
-  createRenderRepository,
-  reconcileSubmissionStep,
-} from '@/modules/rendering/testing';
+  type AcceptedRenderSubmission,
+  createRenderingPipelineUseCases,
+  type RenderingPipelineUseCases,
+} from '@/modules/rendering';
+import { reconcileSubmissionStep } from '@/modules/rendering/testing';
 
 // Deliberate pinned-SDK contract: exercise its real executor/serialization, not a retry imitation.
 // Internal entry points stay confined to this test; an SDK upgrade must revalidate the contract.
@@ -33,6 +42,30 @@ describe('submission reconciliation against the pinned SDK executor', () => {
     vi.resetAllMocks();
     vi.useFakeTimers();
     vi.setSystemTime(new Date('2026-11-07T12:00:00Z'));
+    const unused = async () =>
+      Result.Error(
+        new AppError({
+          code: 'UNEXPECTED_PORT_CALL',
+          category: 'system',
+          status: 500,
+        })
+      );
+    state.facade = createRenderingPipelineUseCases({
+      renderRepository: {
+        ...createFakeRenderRepository(() => new Date()).repository,
+        reconcileSubmission: state.reconcileSubmission,
+      },
+      renderInputs: { sourceImage: unused, item: unused, region: unused },
+      maskCompositor: { composeEditMask: unused, maskForModel: unused },
+      imageModels: { adapterFor: () => ({ submit: unused, poll: unused }) },
+      resultImages: { findRegistered: unused, register: unused },
+      resultOutputReferences: { check: unused },
+      objectStorage: createFakeObjectStorage().storage,
+      providerAccounting: createFakeProviderCallLog().accounting,
+      idGenerator: { createId: () => toGeneratedId('sdk-fixture') },
+      clock: { now: () => new Date() },
+      logger: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
+    });
     registerStepFunction(stepName, reconcileSubmissionStep);
   });
   afterEach(() => vi.useRealTimers());
@@ -89,7 +122,6 @@ describe('submission reconciliation against the pinned SDK executor', () => {
         Result.Ok({
           type: 'result_submitted',
           providerRequestId: 'paid',
-          receiptCaptured: true,
         })
       );
     expect(await execute(1, events)).toEqual({
@@ -134,35 +166,17 @@ describe('submission reconciliation against the pinned SDK executor', () => {
     expect(await execute(1, events)).toEqual({ type: 'failed' });
     expect(events.map((event) => event.eventType)).toEqual(['step_failed']);
   });
-  it('does not retry the repository’s invalid-row error through the actual SDK executor', async () => {
+  it('does not retry a permanent invalid-row port error through the application factory and actual SDK executor', async () => {
     const events: { eventType: string }[] = [];
-    const repository = createRenderRepository({
-      db: {
-        select: () => ({
-          from: () => ({
-            where: async () => [
-              {
-                matchesSaved: false,
-                attempt: 1,
-                workflowRunId: 'wrun_reconciliation_contract',
-                status: 'pending',
-                providerRequestId: null,
-                attemptStartedAt: new Date(Number.NaN),
-              },
-            ],
-          }),
-        }),
-      } as unknown as DbLike,
-    });
-    state.reconcileSubmission.mockImplementation(
-      async (input: AcceptedRenderSubmission) => {
-        const result = await repository.reconcileSubmission(input);
-        expect(result.isError() && result.getError()).toMatchObject({
+    state.reconcileSubmission.mockResolvedValue(
+      Result.Error(
+        new AppError({
           code: 'RENDER_ROW_INVALID',
+          category: 'system',
+          status: 500,
           retryable: false,
-        });
-        return result;
-      }
+        })
+      )
     );
     expect(await execute(1, events)).toEqual({ type: 'failed' });
     expect(state.reconcileSubmission).toHaveBeenCalledOnce();

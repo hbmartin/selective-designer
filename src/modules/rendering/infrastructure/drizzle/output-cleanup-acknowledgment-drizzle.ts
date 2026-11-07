@@ -1,6 +1,6 @@
 import { Result } from '@bloodyowl/boxed';
 import { and, asc, eq, getTableColumns, ne, sql } from 'drizzle-orm';
-import { alias } from 'drizzle-orm/pg-core';
+import { alias, type AnyPgColumn } from 'drizzle-orm/pg-core';
 
 import { runRepositoryTransaction } from '@/modules/kernel/infrastructure/db/repository-transaction';
 import type {
@@ -34,17 +34,29 @@ export async function lockCleanupRecoveryRequest(
   );
 }
 
+const acknowledgmentSelection = (
+  table: {
+    fingerprint: AnyPgColumn;
+    outcome: AnyPgColumn;
+    createdAt: AnyPgColumn;
+    requestId: AnyPgColumn;
+  },
+  fingerprint: string | AnyPgColumn
+) => ({
+  where: and(
+    eq(table.fingerprint, fingerprint),
+    eq(table.outcome, 'cleanup_acknowledged')
+  ),
+  orderBy: [asc(table.createdAt), asc(table.requestId)],
+});
+
 const canonicalAcknowledgment = async (db: DbLike, fingerprint: string) => {
+  const selection = acknowledgmentSelection(recovery, fingerprint);
   const [event] = await db
     .select()
     .from(recovery)
-    .where(
-      and(
-        eq(recovery.fingerprint, fingerprint),
-        eq(recovery.outcome, 'cleanup_acknowledged')
-      )
-    )
-    .orderBy(asc(recovery.createdAt), asc(recovery.requestId))
+    .where(selection.where)
+    .orderBy(...selection.orderBy)
     .limit(1);
   return event;
 };
@@ -63,6 +75,7 @@ export async function findCleanupRecoveryRequest(
       : event;
   const canonical = alias(recovery, 'canonical_acknowledgment');
   const earliest = alias(recovery, 'earliest_acknowledgment');
+  const selection = acknowledgmentSelection(earliest, canonical.fingerprint);
   const [found] = await db
     .select({
       targetId: canonical.requestId,
@@ -77,15 +90,9 @@ export async function findCleanupRecoveryRequest(
         eq(canonical.outcome, 'cleanup_acknowledged')
       )
     )
-    .leftJoin(
-      earliest,
-      and(
-        eq(earliest.fingerprint, canonical.fingerprint),
-        eq(earliest.outcome, 'cleanup_acknowledged')
-      )
-    )
+    .leftJoin(earliest, selection.where)
     .where(eq(aliases.requestId, requestId))
-    .orderBy(asc(earliest.createdAt), asc(earliest.requestId))
+    .orderBy(...selection.orderBy)
     .limit(1);
   if (!found) return undefined;
   if (!found.targetId || !found.acknowledgment)

@@ -1,5 +1,18 @@
 import { Result } from '@bloodyowl/boxed';
-import { and, desc, eq, getTableColumns, gt, lt, or, sql } from 'drizzle-orm';
+import {
+  and,
+  desc,
+  eq,
+  exists,
+  gt,
+  lt,
+  ne,
+  notExists,
+  or,
+  type SQL,
+  sql,
+} from 'drizzle-orm';
+import { alias, QueryBuilder } from 'drizzle-orm/pg-core';
 
 import { runRepositoryTransaction } from '@/modules/kernel/infrastructure/db/repository-transaction';
 import type { Database } from '@/modules/kernel/infrastructure/db/types';
@@ -28,8 +41,20 @@ import type {
 } from '../../application/ports/output-cleanup';
 import { safeBlockedObjectKey } from '../../domain/render-output-target';
 
-export const blockedOutstanding = sql<boolean>`not exists(select 1 from ${recovery} where ${recovery.fingerprint} = ${blocked.fingerprint})`;
-const handedOff = sql<boolean>`exists(select 1 from ${recovery} where ${recovery.fingerprint} = ${blocked.fingerprint} and ${recovery.outcome} <> 'cleanup_acknowledged')`;
+const interventionEvent = alias(recovery, 'cleanup_intervention_event');
+const matchingIntervention = (condition?: SQL) =>
+  new QueryBuilder()
+    .select({ one: sql`1` })
+    .from(interventionEvent)
+    .where(
+      and(eq(interventionEvent.fingerprint, blocked.fingerprint), condition)
+    );
+
+// Build a real subquery: raw SQL column chunks lose qualification in single-table projections.
+export const blockedOutstanding = notExists(matchingIntervention());
+export const handedOff = exists(
+  matchingIntervention(ne(interventionEvent.outcome, 'cleanup_acknowledged'))
+);
 const intervention = sql<
   'outstanding' | 'acknowledged' | 'handed_off'
 >`case when ${blockedOutstanding} then 'outstanding' when ${handedOff} then 'handed_off' else 'acknowledged' end`;
@@ -104,7 +129,7 @@ export function createCleanupRepairStore(
     async inspect(fingerprint) {
       try {
         const [row] = await db
-          .select({ ...getTableColumns(blocked), intervention })
+          .select()
           .from(blocked)
           .where(eq(blocked.fingerprint, fingerprint));
         if (!row) return Result.Ok({ type: 'blocked_not_found' });
@@ -122,11 +147,43 @@ export function createCleanupRepairStore(
           .from(recovery)
           .where(eq(recovery.fingerprint, fingerprint))
           .orderBy(desc(recovery.createdAt));
+        const events = recoveries.map((event): CleanupRecoveryEvent => {
+          if (event.outcome === 'cleanup_acknowledged') {
+            if (
+              event.reasonCode !== 'locator_unavailable_retained' &&
+              event.reasonCode !== 'operator_retained'
+            )
+              throw cleanupError('Recovery reason invalid');
+            return {
+              requestId: event.requestId,
+              createdAt: event.createdAt,
+              outcome: event.outcome,
+              reasonCode: event.reasonCode,
+            };
+          }
+          if (event.resultId === null || event.attempt === null)
+            throw cleanupError('Recovery audit invalid');
+          return {
+            requestId: event.requestId,
+            createdAt: event.createdAt,
+            outcome: event.outcome,
+            resultId: event.resultId,
+            attempt: event.attempt,
+            previousOutcome: event.previousOutcome,
+            previousCompletedAt: event.previousCompletedAt,
+          };
+        });
+        const retainedState = events.length ? 'acknowledged' : 'outstanding';
+        const interventionState = events.some(
+          (event) => event.outcome !== 'cleanup_acknowledged'
+        )
+          ? 'handed_off'
+          : retainedState;
         // Revalidate persisted locators before privileged disclosure, including corrupted rows.
         return Result.Ok({
           type: 'blocked_cleanup_found',
           record: {
-            intervention: row.intervention,
+            intervention: interventionState,
             fingerprint: row.fingerprint,
             resultId: row.resultId,
             attempt: row.attempt,
@@ -134,32 +191,7 @@ export function createCleanupRepairStore(
             reasonCode: row.reasonCode,
           },
           locator: safeBlockedObjectKey(row.safeObjectKey),
-          recoveries: recoveries.map((event): CleanupRecoveryEvent => {
-            if (event.outcome === 'cleanup_acknowledged') {
-              if (
-                event.reasonCode !== 'locator_unavailable_retained' &&
-                event.reasonCode !== 'operator_retained'
-              )
-                throw cleanupError('Recovery reason invalid');
-              return {
-                requestId: event.requestId,
-                createdAt: event.createdAt,
-                outcome: event.outcome,
-                reasonCode: event.reasonCode,
-              };
-            }
-            if (event.resultId === null || event.attempt === null)
-              throw cleanupError('Recovery audit invalid');
-            return {
-              requestId: event.requestId,
-              createdAt: event.createdAt,
-              outcome: event.outcome,
-              resultId: event.resultId,
-              attempt: event.attempt,
-              previousOutcome: event.previousOutcome,
-              previousCompletedAt: event.previousCompletedAt,
-            };
-          }),
+          recoveries: events,
         });
       } catch (cause) {
         return Result.Error(cleanupError(cause));

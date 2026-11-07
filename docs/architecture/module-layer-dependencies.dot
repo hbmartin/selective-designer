@@ -218,7 +218,6 @@ digraph ModuleLayerDependencies {
   "rendering/presentation" -> "auth/public" [style="solid"];
   "rendering/presentation" -> "rendering/domain" [style="solid"];
   "rendering/presentation" -> "rendering/public" [style="solid"];
-  "rendering/public" -> "kernel/domain" [style="solid"];
   "rendering/public" -> "rendering/application" [style="solid"];
   "rendering/public" -> "rendering/domain" [style="dotted"];
   "rendering/public" -> "rendering/infrastructure" [style="solid"];
