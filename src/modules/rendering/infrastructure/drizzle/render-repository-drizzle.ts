@@ -38,7 +38,7 @@ import {
 } from './schema';
 import type { AcceptedRenderSubmission } from '../../application/ports/ports';
 import { SubmissionWriteError } from '../../application/ports/submission-persistence-error';
-import { RENDER_RETRY_AFTER_MS } from '../../domain/render-retry-policy';
+import { renderAttemptDeadline } from '../../domain/render-retry-policy';
 
 const savedSubmissionWhere = (input: AcceptedRenderSubmission) =>
   and(
@@ -534,12 +534,12 @@ export const createRenderRepository = ({
           row.providerRequestId !== null
         )
           return Result.Ok({ type: 'result_attempt_superseded' });
-        const deadline = row.attemptStartedAt.getTime() + RENDER_RETRY_AFTER_MS;
-        if (!Number.isFinite(deadline))
+        const deadline = renderAttemptDeadline(row.attemptStartedAt);
+        if (deadline.type === 'render_deadline_invalid')
           return Result.Error(rowError(input.resultId));
         return Result.Ok({
           type: 'submission_recovery_window',
-          attemptDeadlineAt: new Date(deadline).toISOString(),
+          attemptDeadlineAt: deadline.deadlineAt,
         });
       } catch (error) {
         return Result.Error(dbError(error));

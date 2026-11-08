@@ -42,7 +42,7 @@ import {
   safeRenderIdentity,
   validateRenderOutputTarget,
 } from '../../domain/render-output-target';
-import { RENDER_RETRY_AFTER_MS } from '../../domain/render-retry-policy';
+import { renderAttemptDeadline } from '../../domain/render-retry-policy';
 
 const OUTPUT_MAX_BYTES = 40 * 1024 * 1024;
 const OUTPUT_TYPES = ['image/png', 'image/jpeg', 'image/webp'] as const;
@@ -157,8 +157,8 @@ export async function submitResult(
   }
   if (result.status !== 'pending')
     return Result.Ok({ type: 'result_not_runnable' });
-  const deadlineMs = result.attemptStartedAt.getTime() + RENDER_RETRY_AFTER_MS;
-  if (!Number.isFinite(deadlineMs))
+  const deadline = renderAttemptDeadline(result.attemptStartedAt);
+  if (deadline.type === 'render_deadline_invalid')
     return Result.Error(
       new AppError({
         code: 'RENDER_SUBMISSION_DEADLINE_INVALID',
@@ -167,7 +167,7 @@ export async function submitResult(
         retryable: false,
       })
     );
-  const attemptDeadlineAt = new Date(deadlineMs).toISOString();
+  const attemptDeadlineAt = deadline.deadlineAt;
   const request = await buildRequest(deps, render, result);
   if (request.isError()) return Result.Error(request.getError());
   const invocationId = deps.idGenerator.createId();
@@ -221,7 +221,7 @@ export async function submitResult(
   });
 }
 
-export type SubmissionPersistenceOutcome =
+type SubmissionPersistenceOutcome =
   | {
       type: 'result_submitted';
       providerRequestId: string;
@@ -229,7 +229,7 @@ export type SubmissionPersistenceOutcome =
     }
   | { type: 'result_attempt_superseded'; receiptCaptured: true };
 
-export type SubmissionReconciliationOutcome =
+type SubmissionReconciliationOutcome =
   | {
       type: 'result_submitted';
       providerRequestId: string;
@@ -701,7 +701,20 @@ export async function markResultFailed(
       : input.reason,
     now: deps.clock.now(),
   });
-  if (saved.isError()) return Result.Error(saved.getError());
+  if (saved.isError()) {
+    deps.logger.warn({
+      event: 'rendering.result.failure_write_failed',
+      details: {
+        ...renderLogContext(input),
+        reason: input.reason,
+        submissionPersistenceFailure:
+          input.submissionPersistenceFailure === true,
+        code: saved.getError().code,
+        ...safeErrorDiagnostics(saved.getError()),
+      },
+    });
+    return Result.Error(saved.getError());
+  }
   if (saved.get().type === 'result_marked_failed')
     deps.logger.warn({
       event: 'rendering.result.failed',

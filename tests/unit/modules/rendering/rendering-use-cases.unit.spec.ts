@@ -4,7 +4,7 @@ import {
   createFakeProviderCallLog,
 } from '@tests/support/fake-kernel-ports';
 import { createFakeRenderRepository } from '@tests/support/fake-render-repository';
-import { okValue } from '@tests/support/result';
+import { errorValue, okValue } from '@tests/support/result';
 import { decode, encode } from 'fast-png';
 import { describe, expect, it, vi } from 'vitest';
 
@@ -574,6 +574,81 @@ describe('render pipeline', () => {
     return { ctx, renderId: renderId as RenderId, resultFor };
   };
 
+  it.each([new Date(NaN), new Date(8_640_000_000_000_000 - 60_000)])(
+    'rejects an unrepresentable deadline before provider access: %s',
+    async (startedAt) => {
+      const { ctx, resultFor } = await submitted();
+      const result = resultFor('krea-3');
+      result.attemptStartedAt = startedAt;
+      const capture = vi.spyOn(ctx.calls.accounting, 'capture');
+      const submission = await ctx.rawPipeline.submit(execution(result));
+      expect(errorValue(submission)).toMatchObject({
+        code: 'RENDER_SUBMISSION_DEADLINE_INVALID',
+        retryable: false,
+      });
+      expect(ctx.models.size).toBe(0);
+      expect(capture).not.toHaveBeenCalled();
+    }
+  );
+  it.each([
+    [new Date('2026-11-02T12:00:00Z'), '2026-11-02T12:30:00.000Z'],
+    [
+      new Date(8_640_000_000_000_000 - 30 * 60_000),
+      '+275760-09-13T00:00:00.000Z',
+    ],
+  ])(
+    'accepts a representable deadline from %s',
+    async (startedAt, deadlineAt) => {
+      const { ctx, resultFor } = await submitted();
+      const result = resultFor('krea-3');
+      result.attemptStartedAt = startedAt;
+      expect(
+        okValue(await ctx.rawPipeline.submit(execution(result)))
+      ).toMatchObject({
+        type: 'result_accepted',
+        submission: { attemptDeadlineAt: deadlineAt },
+      });
+      expect(ctx.models.get('krea-3')?.requests).toHaveLength(1);
+    }
+  );
+  it('logs secondary failure-write diagnostics without replacing the original reason', async () => {
+    const { ctx, resultFor } = await submitted();
+    const original = new AppError({
+      code: 'RENDER_REPOSITORY_ERROR',
+      category: 'system',
+      status: 500,
+      cause: Object.assign(new Error('private database address'), {
+        code: 'ECONNRESET',
+      }),
+    });
+    vi.spyOn(ctx.renders.repository, 'failResultAttempt').mockResolvedValue(
+      Result.Error(original)
+    );
+    const warning = vi.spyOn(logger, 'warn');
+    try {
+      const failed = await ctx.rawPipeline.markFailed({
+        ...execution(resultFor('krea-3')),
+        providerRequestId: 'private-provider-locator',
+        submissionPersistenceFailure: true,
+        reason: 'PROVIDER_RECEIPT_IDENTITY_MISMATCH',
+      });
+      expect(errorValue(failed)).toBe(original);
+      expect(warning).toHaveBeenCalledExactlyOnceWith({
+        event: 'rendering.result.failure_write_failed',
+        details: {
+          ...execution(resultFor('krea-3')),
+          reason: 'PROVIDER_RECEIPT_IDENTITY_MISMATCH',
+          submissionPersistenceFailure: true,
+          code: 'RENDER_REPOSITORY_ERROR',
+          errorNames: ['AppError', 'Error'],
+          errorCodes: ['RENDER_REPOSITORY_ERROR', 'ECONNRESET'],
+        },
+      });
+      expect(JSON.stringify(warning.mock.calls)).not.toContain('private-');
+    } finally {
+      warning.mockRestore();
+    }
+  });
   it('claims duplicate dispatches once and rejects concurrent manual retry claims', async () => {
     const { ctx, resultFor } = await submitted();
     const result = resultFor('krea-3');
@@ -1871,7 +1946,7 @@ describe('accepted submission handoff', () => {
     const save = vi.spyOn(ctx.renders.repository, 'saveSubmission');
     const result = await ctx.rawPipeline.persistSubmission(ctx.accepted);
     expect(result.isError()).toBe(true);
-    const error = result.getError();
+    const error = errorValue(result);
     expect(error).toBeInstanceOf(SubmissionPersistenceError);
     expect(error).toMatchObject({
       receiptCaptured: false,
@@ -1898,7 +1973,7 @@ describe('accepted submission handoff', () => {
       );
       const result = await ctx.rawPipeline.persistSubmission(ctx.accepted);
       expect(result.isError()).toBe(true);
-      expect(result.getError()).toMatchObject({
+      expect(errorValue(result)).toMatchObject({
         receiptCaptured: true,
         submissionWrite: certainty,
         cause: original,

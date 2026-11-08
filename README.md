@@ -442,3 +442,14 @@ Requeue and acknowledgment print a generated request ID before writing when none
 Submission reconciliation uses one database snapshot and compares the full saved submission. A match confirms receipt capture under the capture-before-save contract, including after a lost step reply. Read-only reconciliation uses three total SDK attempts with five-second delays for transient failures; it may confirm an existing save after the cutoff, but cannot extend the original deadline for submission writes. Interrupted recovery preserves confirmed accounting delivery and records safe unresolved diagnostics without another provider submission.
 
 Polling uses the pinned SDK’s durable suspension and completion behavior directly; unexpected workflow exceptions use the existing failure handler. Submission-persistence recovery still reconciles uncertain writes after an interrupted wait. Capture confirmation comes from application outcomes, including captured work that loses its submission fence, and confirmed accounting dispatch remains independent of publication. Manual Retry remains a fresh, potentially paid attempt, with the existing 30-minute deadline for pending/submitted work. Deterministically invalid render rows fail without transient retries across repository readers; database outages retain normal retries.
+
+A blocked submission’s failure retries preserve the original reason, workflow owner, attempt and provider-request fence, including permission to fail that owned pending submission. A secondary database failure is logged separately; it cannot change the failure mode or imply supersession. Computed recovery deadlines must also fit JavaScript’s date range before formatting.
+
+For local native-driver recovery verification, provision a direct disposable loopback PostgreSQL database whose name begins with `selective_designer_recovery_test_`, then run:
+
+```sh
+RECOVERY_TEST_DATABASE_URL=postgres://postgres@127.0.0.1:5432/selective_designer_recovery_test_local \
+  pnpm test:integration tests/integration/modules/rendering/render-repository-drizzle.integration.test.ts
+```
+
+This suite migrates and truncates that database. Do not point it at shared data or a localhost tunnel to a remote database. Driver-specific cases, including unreadable timestamps and computed deadline overflow, remain skipped in CI and when this variable is absent. The SDK sleep contract checks the public export’s normal suspension/completion lifecycle; it does not guarantee every possible behavior of future SDK versions.

@@ -153,8 +153,7 @@ async function recoverSubmission(input: AcceptedRenderSubmission) {
       };
     }
     receiptCaptured ||= result.receiptCaptured;
-    if (result.type !== 'submission_persistence_error')
-      return { ...result, receiptCaptured };
+    if (result.type !== 'submission_persistence_error') return result;
     lastCode = result.code;
     uncertainWrite ||= result.submissionWrite === 'unknown';
     if (!result.retryable && !uncertainWrite)
@@ -249,16 +248,23 @@ async function runResult(input: Execution): Promise<string> {
   let providerRequestId: string | undefined;
   let receiptId: string | undefined;
   let acceptanceUnresolved = false;
+  let failureContext:
+    | {
+        reason: string;
+        providerRequestId?: string;
+        submissionPersistenceFailure?: true;
+      }
+    | undefined;
   const fail = async (reason: string, submissionPersistenceFailure?: true) => {
+    failureContext ??= {
+      reason,
+      ...(providerRequestId ? { providerRequestId } : {}),
+      ...(submissionPersistenceFailure ? { submissionPersistenceFailure } : {}),
+    };
+    const { reason: originalReason, ...expected } = failureContext;
     const failed = await markFailedStep(
-      {
-        ...input,
-        ...(providerRequestId ? { providerRequestId } : {}),
-        ...(submissionPersistenceFailure
-          ? { submissionPersistenceFailure }
-          : {}),
-      },
-      reason
+      { ...input, ...expected },
+      originalReason
     );
     return failed.type === 'result_marked_failed'
       ? 'result_failed'
@@ -274,12 +280,13 @@ async function runResult(input: Execution): Promise<string> {
     if (accepted.type === 'result_accepted') {
       providerRequestId = accepted.submission.providerRequestId;
       acceptanceUnresolved = true;
-      submitted = await recoverSubmission(accepted.submission);
+      const recovered = await recoverSubmission(accepted.submission);
       acceptanceUnresolved = false;
-      if ('receiptCaptured' in submitted && submitted.receiptCaptured)
+      if (recovered.receiptCaptured)
         receiptId = accepted.submission.accountingIdentity.receipt.id;
-      if (submitted.type === 'submission_persistence_blocked')
-        return await fail(submitted.code, true);
+      if (recovered.type === 'submission_persistence_blocked')
+        return await fail(recovered.code, true);
+      submitted = recovered;
     } else submitted = accepted;
     if (
       submitted.type !== 'result_submitted' &&

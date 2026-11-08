@@ -11,6 +11,12 @@ describe('canonical acknowledgment selection', () => {
     const canonical = alias(recovery, 'canonical');
     const earliest = alias(recovery, 'earliest');
     const base = acknowledgmentSelection(recovery, 'fingerprint');
+    const baseQuery = new QueryBuilder()
+      .select()
+      .from(recovery)
+      .where(base.where)
+      .orderBy(...base.orderBy)
+      .toSQL();
     const selected = acknowledgmentSelection(earliest, canonical.fingerprint);
     const query = new QueryBuilder()
       .select()
@@ -19,7 +25,13 @@ describe('canonical acknowledgment selection', () => {
       .orderBy(...selected.orderBy)
       .toSQL();
 
-    expect(base.where).toBeDefined();
+    expect(baseQuery.sql).toContain(
+      'where ("render_output_cleanup_recovery"."fingerprint" = $1 and "render_output_cleanup_recovery"."outcome" = $2)'
+    );
+    expect(baseQuery.sql).toContain(
+      'order by "render_output_cleanup_recovery"."createdAt" asc, "render_output_cleanup_recovery"."requestId" asc'
+    );
+    expect(baseQuery.params).toEqual(['fingerprint', 'cleanup_acknowledged']);
     expect(query.sql).toContain(
       '"earliest"."fingerprint" = "canonical"."fingerprint"'
     );

@@ -2,7 +2,7 @@ import { makeUserRow } from '@tests/server/db-fixtures';
 import { createRecoveryTestDatabase } from '@tests/server/recovery-database';
 import { makeProviderReceipt } from '@tests/support/provider-receipt';
 import { updateRenderResultFixture } from '@tests/support/render-result-fixture';
-import { okValue } from '@tests/support/result';
+import { errorValue, okValue } from '@tests/support/result';
 import { sql } from 'drizzle-orm';
 import {
   afterAll,
@@ -1092,23 +1092,43 @@ describe('RenderRepositoryDrizzle', () => {
       }),
     },
   });
-  it.skipIf(!process.env.RECOVERY_TEST_DATABASE_URL)(
-    'rejects an unreadable persisted recovery timestamp without transient retries',
-    async () => {
+  it.skipIf(!process.env.RECOVERY_TEST_DATABASE_URL).each([
+    ['unreadable', '275760-09-14 00:00:00'],
+    ['computed deadline overflow', '275760-09-12 23:59:00'],
+  ])(
+    'rejects %s recovery timestamps without transient retries',
+    async (_description, timestamp) => {
       const { input, startedAt } = await newAttempt();
       okValue(await repository.claimExecution(input));
-      // PostgreSQL accepts this finite date; the native driver's JS Date cannot represent it.
       await database.db.execute(
-        sql`update render_result set "attemptStartedAt" = '275760-09-14 00:00:00'::timestamp where id = ${input.resultId}`
+        sql`update render_result set "attemptStartedAt" = ${timestamp}::timestamp where id = ${input.resultId}`
       );
       const result = await repository.reconcileSubmission(
         journaled(input, startedAt)
       );
-      expect(result.getError()).toMatchObject({
+      expect(errorValue(result)).toMatchObject({
         code: 'RENDER_ROW_INVALID',
         category: 'system',
         status: 500,
         retryable: false,
+      });
+    }
+  );
+  it.skipIf(!process.env.RECOVERY_TEST_DATABASE_URL)(
+    'preserves the largest representable computed recovery deadline',
+    async () => {
+      const { input, startedAt } = await newAttempt();
+      okValue(await repository.claimExecution(input));
+      await database.db.execute(
+        sql`update render_result set "attemptStartedAt" = '275760-09-12 23:30:00'::timestamp where id = ${input.resultId}`
+      );
+      expect(
+        okValue(
+          await repository.reconcileSubmission(journaled(input, startedAt))
+        )
+      ).toEqual({
+        type: 'submission_recovery_window',
+        attemptDeadlineAt: '+275760-09-13T00:00:00.000Z',
       });
     }
   );

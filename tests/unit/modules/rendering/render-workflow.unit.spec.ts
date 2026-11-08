@@ -247,6 +247,63 @@ describe('render workflow', () => {
       reason: 'PROVIDER_RECEIPT_IDENTITY_MISMATCH',
     });
   });
+  it('reuses the original blocked-submission failure context after a failure step exhausts', async () => {
+    pipeline.submit.mockResolvedValue(
+      Result.Ok({
+        type: 'result_accepted',
+        submission: {
+          ...execution,
+          providerRequestId: 'accepted-request',
+          attemptDeadlineAt: '2026-11-06T19:30:00Z',
+          accountingIdentity: { receipt: { id: 'accepted-call' } },
+        },
+      })
+    );
+    pipeline.persistSubmission.mockResolvedValue(
+      Result.Error(
+        new SubmissionPersistenceError(
+          new AppError({
+            code: 'PROVIDER_RECEIPT_IDENTITY_MISMATCH',
+            category: 'system',
+            status: 500,
+            retryable: false,
+          }),
+          false
+        )
+      )
+    );
+    pipeline.markFailed
+      .mockRejectedValueOnce(
+        new Error(
+          'Step "markFailedStep" failed after retries: RENDER_REPOSITORY_ERROR: unavailable'
+        )
+      )
+      .mockResolvedValueOnce(Result.Ok({ type: 'result_marked_failed' }));
+    expect(await renderResultWorkflow(attempt)).toEqual({
+      result: 'result_failed',
+    });
+    expect(pipeline.markFailed.mock.calls).toEqual([
+      [
+        {
+          ...execution,
+          providerRequestId: 'accepted-request',
+          submissionPersistenceFailure: true,
+          reason: 'PROVIDER_RECEIPT_IDENTITY_MISMATCH',
+        },
+      ],
+      [
+        {
+          ...execution,
+          providerRequestId: 'accepted-request',
+          submissionPersistenceFailure: true,
+          reason: 'PROVIDER_RECEIPT_IDENTITY_MISMATCH',
+        },
+      ],
+    ]);
+    expect(pipeline.submit).toHaveBeenCalledOnce();
+    expect(pipeline.poll).not.toHaveBeenCalled();
+    expect(pipeline.dispatchAccounting).not.toHaveBeenCalled();
+  });
   it('clamps its last wait to the deadline and never marks transient exhaustion failed', async () => {
     pipeline.submit.mockResolvedValue(
       Result.Ok({
@@ -328,6 +385,70 @@ describe('render workflow', () => {
     expect(pipeline.poll).not.toHaveBeenCalled();
     expect(pipeline.markFailed).not.toHaveBeenCalled();
     expect(pipeline.submit).toHaveBeenCalledOnce();
+  });
+  it('polls an already-submitted request without inventing capture evidence', async () => {
+    pipeline.submit.mockResolvedValue(
+      Result.Ok({
+        type: 'result_already_submitted',
+        providerRequestId: 'paid',
+      })
+    );
+    pipeline.poll.mockResolvedValue(Result.Ok({ type: 'result_succeeded' }));
+    expect(await renderResultWorkflow(attempt)).toEqual({
+      result: 'result_succeeded',
+    });
+    expect(pipeline.poll).toHaveBeenCalledWith({
+      ...execution,
+      providerRequestId: 'paid',
+    });
+    expect(pipeline.persistSubmission).not.toHaveBeenCalled();
+    expect(pipeline.dispatchAccounting).not.toHaveBeenCalled();
+    expect(pipeline.markFailed).not.toHaveBeenCalled();
+  });
+  it('dispatches only confirmed batch receipts after polling, even when dispatch fails', async () => {
+    const submissions = new Map<string, Outcome>([
+      [
+        'res-a',
+        {
+          type: 'result_accepted',
+          submission: {
+            ...execution,
+            providerRequestId: 'paid',
+            attemptDeadlineAt: '2026-11-06T19:30:00Z',
+            accountingIdentity: { receipt: { id: 'accepted-call' } },
+          },
+        },
+      ],
+      [
+        'res-b',
+        { type: 'result_already_submitted', providerRequestId: 'other' },
+      ],
+    ]);
+    pipeline.submit.mockImplementation(({ resultId }) =>
+      ok(submissions.get(resultId)!)
+    );
+    pipeline.persistSubmission.mockResolvedValue(
+      Result.Ok({
+        type: 'result_submitted',
+        providerRequestId: 'paid',
+        receiptCaptured: true,
+      })
+    );
+    pipeline.poll.mockResolvedValue(Result.Ok({ type: 'result_succeeded' }));
+    pipeline.dispatchAccounting.mockRejectedValue(
+      new Error('dispatch unavailable')
+    );
+    expect(
+      await renderWorkflow({
+        renderId: 'render-1',
+        attempts: [attempt, { resultId: 'res-b', attempt: 1 }],
+      })
+    ).toEqual({ results: ['result_succeeded', 'result_succeeded'] });
+    expect(pipeline.dispatchAccounting).toHaveBeenCalledExactlyOnceWith(
+      'accepted-call'
+    );
+    expect(pipeline.poll).toHaveBeenCalledBefore(pipeline.dispatchAccounting);
+    expect(pipeline.markFailed).not.toHaveBeenCalled();
   });
   it('preserves publication when post-publication dispatch exhausts', async () => {
     pipeline.submit.mockResolvedValue(
