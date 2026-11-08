@@ -1,6 +1,6 @@
 import { Result } from '@bloodyowl/boxed';
 import { and, asc, eq, getTableColumns, ne, sql } from 'drizzle-orm';
-import { alias, type AnyPgColumn } from 'drizzle-orm/pg-core';
+import { alias } from 'drizzle-orm/pg-core';
 
 import { runRepositoryTransaction } from '@/modules/kernel/infrastructure/db/repository-transaction';
 import type {
@@ -34,14 +34,14 @@ export async function lockCleanupRecoveryRequest(
   );
 }
 
-const acknowledgmentSelection = (
-  table: {
-    fingerprint: AnyPgColumn;
-    outcome: AnyPgColumn;
-    createdAt: AnyPgColumn;
-    requestId: AnyPgColumn;
-  },
-  fingerprint: string | AnyPgColumn
+type AcknowledgmentColumns = Pick<
+  ReturnType<typeof alias<typeof recovery, string>>,
+  'fingerprint' | 'outcome' | 'createdAt' | 'requestId'
+>;
+
+export const acknowledgmentSelection = (
+  table: AcknowledgmentColumns,
+  fingerprint: string | AcknowledgmentColumns['fingerprint']
 ) => ({
   where: and(
     eq(table.fingerprint, fingerprint),

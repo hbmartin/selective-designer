@@ -221,16 +221,28 @@ export async function submitResult(
   });
 }
 
+export type SubmissionPersistenceOutcome =
+  | {
+      type: 'result_submitted';
+      providerRequestId: string;
+      receiptCaptured: true;
+    }
+  | { type: 'result_attempt_superseded'; receiptCaptured: true };
+
+export type SubmissionReconciliationOutcome =
+  | {
+      type: 'result_submitted';
+      providerRequestId: string;
+      receiptCaptured: true;
+    }
+  | { type: 'submission_recovery_window'; attemptDeadlineAt: string }
+  | { type: 'result_attempt_superseded' };
+
 /** Retried separately from the paid provider step, including after a lost write reply. */
 export async function persistSubmission(
   deps: RenderingPipelineDeps,
   input: AcceptedRenderSubmission
-): Promise<
-  RenderingResult<
-    | { type: 'result_submitted'; providerRequestId: string }
-    | { type: 'result_attempt_superseded' }
-  >
-> {
+): Promise<RenderingResult<SubmissionPersistenceOutcome>> {
   const captured = await deps.providerAccounting.capture(
     input.accountingIdentity.receipt
   );
@@ -269,10 +281,14 @@ export async function persistSubmission(
     );
   }
   if (saved.get().type === 'result_attempt_superseded')
-    return Result.Ok({ type: 'result_attempt_superseded' });
+    return Result.Ok({
+      type: 'result_attempt_superseded',
+      receiptCaptured: true,
+    });
   return Result.Ok({
     type: 'result_submitted',
     providerRequestId: input.providerRequestId,
+    receiptCaptured: true,
   });
 }
 
@@ -280,7 +296,7 @@ export async function persistSubmission(
 export async function reconcileSubmission(
   deps: RenderingPipelineDeps,
   input: AcceptedRenderSubmission
-) {
+): Promise<RenderingResult<SubmissionReconciliationOutcome>> {
   const result = await deps.renderRepository.reconcileSubmission(input);
   if (result.isError()) {
     deps.logger.warn({

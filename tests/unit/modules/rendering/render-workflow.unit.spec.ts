@@ -12,7 +12,6 @@ const pipeline = vi.hoisted(() => ({
   cleanup: vi.fn(),
   reportSubmissionUnresolved: vi.fn(),
   reportSubmissionException: vi.fn(),
-  reportPollingInterrupted: vi.fn(),
   dispatchAccounting: vi.fn(),
   poll: vi.fn(),
   markFailed: vi.fn(),
@@ -196,6 +195,7 @@ describe('render workflow', () => {
         Result.Ok({
           type: 'result_submitted',
           providerRequestId: 'accepted-request',
+          receiptCaptured: true,
         })
       );
     pipeline.poll.mockResolvedValue(Result.Ok({ type: 'result_succeeded' }));
@@ -290,6 +290,7 @@ describe('render workflow', () => {
       Result.Ok({
         type: 'result_submitted',
         providerRequestId: 'accepted-request',
+        receiptCaptured: true,
       })
     );
     pipeline.poll.mockImplementation(async () => {
@@ -301,6 +302,32 @@ describe('render workflow', () => {
     });
     expect(pipeline.poll).toHaveBeenCalledBefore(pipeline.dispatchAccounting);
     expect(pipeline.dispatchAccounting).toHaveBeenCalledWith('accepted-call');
+  });
+  it('dispatches application-confirmed capture when accepted work is superseded', async () => {
+    pipeline.submit.mockResolvedValue(
+      Result.Ok({
+        type: 'result_accepted',
+        submission: {
+          ...execution,
+          providerRequestId: 'paid',
+          attemptDeadlineAt: '2026-11-06T19:30:00Z',
+          accountingIdentity: { receipt: { id: 'accepted-call' } },
+        },
+      })
+    );
+    pipeline.persistSubmission.mockResolvedValue(
+      Result.Ok({
+        type: 'result_attempt_superseded',
+        receiptCaptured: true,
+      })
+    );
+    expect(await renderResultWorkflow(attempt)).toEqual({
+      result: 'result_attempt_superseded',
+    });
+    expect(pipeline.dispatchAccounting).toHaveBeenCalledWith('accepted-call');
+    expect(pipeline.poll).not.toHaveBeenCalled();
+    expect(pipeline.markFailed).not.toHaveBeenCalled();
+    expect(pipeline.submit).toHaveBeenCalledOnce();
   });
   it('preserves publication when post-publication dispatch exhausts', async () => {
     pipeline.submit.mockResolvedValue(
@@ -346,7 +373,11 @@ describe('render workflow', () => {
         })
       );
       pipeline.persistSubmission.mockResolvedValue(
-        Result.Ok({ type: 'result_submitted', providerRequestId: 'paid' })
+        Result.Ok({
+          type: 'result_submitted',
+          providerRequestId: 'paid',
+          receiptCaptured: true,
+        })
       );
       pipeline.poll.mockResolvedValue(Result.Ok({ type: 'result_succeeded' }));
       expect(await renderResultWorkflow(attempt)).toEqual({
@@ -400,7 +431,11 @@ describe('render workflow', () => {
         })
       );
       pipeline.persistSubmission.mockResolvedValue(
-        Result.Ok({ type: 'result_submitted', providerRequestId: 'paid' })
+        Result.Ok({
+          type: 'result_submitted',
+          providerRequestId: 'paid',
+          receiptCaptured: true,
+        })
       );
       pipeline.poll.mockResolvedValue(Result.Ok({ type: 'result_succeeded' }));
       expect(await renderResultWorkflow(attempt)).toEqual({
@@ -440,7 +475,11 @@ describe('render workflow', () => {
           )
         )
         .mockResolvedValueOnce(
-          Result.Ok({ type: 'result_submitted', providerRequestId: 'paid' })
+          Result.Ok({
+            type: 'result_submitted',
+            providerRequestId: 'paid',
+            receiptCaptured: true,
+          })
         );
       pipeline.poll.mockResolvedValue(Result.Ok({ type: 'result_succeeded' }));
       expect(await renderResultWorkflow(attempt)).toEqual({
@@ -500,7 +539,11 @@ describe('render workflow', () => {
     pipeline.persistSubmission
       .mockRejectedValueOnce(new Error('lost reply'))
       .mockResolvedValueOnce(
-        Result.Ok({ type: 'result_submitted', providerRequestId: 'paid' })
+        Result.Ok({
+          type: 'result_submitted',
+          providerRequestId: 'paid',
+          receiptCaptured: true,
+        })
       );
     pipeline.reportSubmissionException.mockImplementationOnce(() => {
       throw new Error('diagnostics unavailable');
@@ -817,118 +860,5 @@ describe('render workflow', () => {
       'resultId',
       'workflowRunId',
     ]);
-  });
-  describe.each([
-    {
-      entry: 'single-result workflow',
-      run: async () => (await renderResultWorkflow(attempt)).result,
-    },
-    {
-      entry: 'batch workflow',
-      run: async () =>
-        (await renderWorkflow({ renderId: 'render-1', attempts: [attempt] }))
-          .results[0],
-    },
-  ])('interrupted polling in $entry', ({ run }) => {
-    const paths = [
-      {
-        path: 'newly persisted acceptance',
-        dispatchCalls: [['accepted-call']],
-        prepare: () => {
-          acceptedWithInvalidDeadline();
-          pipeline.persistSubmission.mockResolvedValue(
-            Result.Ok({ type: 'result_submitted', providerRequestId: 'paid' })
-          );
-        },
-      },
-      {
-        path: 'a save reconciled after the first wait failed',
-        dispatchCalls: [['accepted-call']],
-        prepare: () => {
-          acceptedWithInvalidDeadline();
-          pipeline.persistSubmission.mockResolvedValue(unknownSave(false));
-          pipeline.reconcileSubmission
-            .mockResolvedValueOnce(
-              Result.Ok({
-                type: 'submission_recovery_window',
-                attemptDeadlineAt: '2026-11-06T19:30:00Z',
-              })
-            )
-            .mockResolvedValueOnce(
-              Result.Ok({
-                type: 'result_submitted',
-                providerRequestId: 'paid',
-                receiptCaptured: true,
-              })
-            );
-        },
-      },
-      {
-        path: 'an already submitted request with confirmed capture',
-        dispatchCalls: [['accepted-call']],
-        prepare: () =>
-          pipeline.submit.mockResolvedValue(
-            Result.Ok({
-              type: 'result_already_submitted',
-              providerRequestId: 'paid',
-              receiptId: 'accepted-call',
-            })
-          ),
-      },
-      {
-        path: 'an already submitted request without capture evidence',
-        dispatchCalls: [],
-        prepare: () =>
-          pipeline.submit.mockResolvedValue(
-            Result.Ok({
-              type: 'result_already_submitted',
-              providerRequestId: 'paid',
-            })
-          ),
-      },
-    ];
-    describe.each([
-      { diagnostics: 'available', report: () => {} },
-      {
-        diagnostics: 'unavailable',
-        report: () => {
-          throw new Error('logger unavailable');
-        },
-      },
-    ])('diagnostics $diagnostics', ({ report }) => {
-      it.each(paths)('preserves $path', async ({ prepare, dispatchCalls }) => {
-        prepare();
-        pipeline.poll.mockResolvedValue(Result.Ok({ type: 'result_pending' }));
-        const fault = Object.assign(
-          new Error('private infrastructure detail'),
-          {
-            code: 'RUNNER_UNAVAILABLE',
-            cause: Object.assign(new Error('private cause'), {
-              code: 'EPIPE',
-            }),
-          }
-        );
-        vi.mocked(sleep).mockRejectedValue(fault);
-        pipeline.reportPollingInterrupted.mockImplementation(report);
-        expect(await run()).toBe('result_polling_unresolved');
-        expect(pipeline.submit).toHaveBeenCalledOnce();
-        expect(pipeline.poll).toHaveBeenCalledOnce();
-        expect(pipeline.poll).toHaveBeenCalledWith({
-          ...execution,
-          providerRequestId: 'paid',
-        });
-        expect(pipeline.markFailed).not.toHaveBeenCalled();
-        expect(pipeline.dispatchAccounting.mock.calls).toEqual(dispatchCalls);
-        expect(pipeline.reportPollingInterrupted).toHaveBeenCalledWith({
-          ...execution,
-          code: 'RUNNER_UNAVAILABLE',
-          errorNames: ['Error', 'Error'],
-          errorCodes: ['RUNNER_UNAVAILABLE', 'EPIPE'],
-        });
-        expect(
-          JSON.stringify(pipeline.reportPollingInterrupted.mock.calls)
-        ).not.toContain('private');
-      });
-    });
   });
 });

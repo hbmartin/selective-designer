@@ -944,7 +944,7 @@ describe('durable render output cleanup', () => {
     ).toHaveLength(2);
   });
   it('correlates intervention state independently for acknowledged, handed-off and outstanding fingerprints', async () => {
-    const identities = ['a', 'b', 'c'].map((id) => ({
+    const identities = ['a', 'b', 'c', 'd', 'e'].map((id) => ({
       fingerprint: id.repeat(64),
       resultId: `result-${id}`,
       attempt: 1,
@@ -967,6 +967,30 @@ describe('durable render output cleanup', () => {
         attempt: 1,
       })
     );
+    okValue(
+      await store.acknowledge({
+        requestId: 'keep-d',
+        fingerprint: identities[3]!.fingerprint,
+      })
+    );
+    okValue(
+      await store.requeue({
+        requestId: 'repair-d',
+        fingerprint: identities[3]!.fingerprint,
+        resultId: okValue(toRenderResultId('result-d')),
+        attempt: 1,
+      })
+    );
+    // Historical duplicate acknowledgments remain evidence of retention, never repair handoff.
+    await database.db.insert(renderOutputCleanupRecovery).values(
+      ['keep-e-first', 'keep-e-second'].map((requestId, index) => ({
+        requestId,
+        fingerprint: identities[4]!.fingerprint,
+        outcome: 'cleanup_acknowledged' as const,
+        reasonCode: 'operator_retained',
+        createdAt: new Date(Date.UTC(2026, 10, 7, 0, 0, index)),
+      }))
+    );
     const statements: string[] = [];
     const query = database.db.$client.query.bind(database.db.$client);
     vi.spyOn(database.db.$client, 'query').mockImplementation(
@@ -987,6 +1011,8 @@ describe('durable render output cleanup', () => {
       { fingerprint: identities[0]!.fingerprint, intervention: 'acknowledged' },
       { fingerprint: identities[1]!.fingerprint, intervention: 'handed_off' },
       { fingerprint: identities[2]!.fingerprint, intervention: 'outstanding' },
+      { fingerprint: identities[3]!.fingerprint, intervention: 'handed_off' },
+      { fingerprint: identities[4]!.fingerprint, intervention: 'acknowledged' },
     ]);
     for (const record of listed.records) {
       expect(okValue(await store.inspect(record.fingerprint))).toMatchObject({
@@ -1008,16 +1034,17 @@ describe('durable render output cleanup', () => {
         statement.includes('from "render_output_cleanup_recovery"') &&
         !statement.includes('exists')
     );
-    expect(historyReads).toHaveLength(3);
+    expect(historyReads).toHaveLength(5);
     const evidenceReads = statements.filter(
       (statement) =>
         statement.includes('from "render_output_cleanup_blocked"') &&
         !statement.includes('exists')
     );
-    expect(evidenceReads).toHaveLength(3);
+    expect(evidenceReads).toHaveLength(5);
     expect(okValue(await store.summary())).toMatchObject({
-      blockedTotal: 3,
+      blockedTotal: 5,
       blockedOutstanding: 1,
+      outstandingReasons: [{ code: 'render_output_target_invalid', count: 1 }],
     });
     expect(
       okValue(
