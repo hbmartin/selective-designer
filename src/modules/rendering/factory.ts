@@ -1,12 +1,9 @@
-import { Result } from '@bloodyowl/boxed';
-
-import { safeErrorDiagnostics } from '@/modules/kernel/domain/errors/safe-error-diagnostics';
-
 import {
   copyDraftPlacements,
   markResultFailed,
   persistSubmission,
   pollResult,
+  reconcileSubmission,
   submitResult,
 } from './application/use-cases/pipeline';
 import {
@@ -61,31 +58,8 @@ export function createRenderingPipelineUseCases(deps: RenderingPipelineDeps) {
     submit: (input: Input<typeof submitResult>) => submitResult(deps, input),
     persistSubmission: (input: Input<typeof persistSubmission>) =>
       persistSubmission(deps, input),
-    reconcileSubmission: async (
-      input: Parameters<typeof deps.renderRepository.reconcileSubmission>[0]
-    ) => {
-      const result = await deps.renderRepository.reconcileSubmission(input);
-      if (result.isError()) {
-        deps.logger.warn({
-          event: 'rendering.result.submission_reconciliation_failed',
-          details: {
-            resultId: input.resultId,
-            attempt: input.attempt,
-            workflowRunId: input.workflowRunId,
-            code: result.getError().code,
-            ...safeErrorDiagnostics(result.getError()),
-          },
-        });
-        return Result.Error(result.getError());
-      }
-      const outcome = result.get();
-      // The sole production submission write follows durable receipt capture.
-      return Result.Ok(
-        outcome.type === 'result_submitted'
-          ? { ...outcome, receiptCaptured: true as const }
-          : outcome
-      );
-    },
+    reconcileSubmission: (input: Input<typeof reconcileSubmission>) =>
+      reconcileSubmission(deps, input),
     poll: (input: Input<typeof pollResult>) => pollResult(deps, input),
     reportSubmissionException: (input: {
       resultId: string;
@@ -110,6 +84,19 @@ export function createRenderingPipelineUseCases(deps: RenderingPipelineDeps) {
     }) => {
       deps.logger.warn({
         event: 'rendering.result.submission_unresolved',
+        details: input,
+      });
+    },
+    reportPollingInterrupted: (input: {
+      resultId: string;
+      attempt: number;
+      workflowRunId: string;
+      code: string;
+      errorNames: string[];
+      errorCodes: string[];
+    }) => {
+      deps.logger.warn({
+        event: 'rendering.result.polling_interrupted',
         details: input,
       });
     },

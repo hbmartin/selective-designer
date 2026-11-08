@@ -8,6 +8,10 @@ export { cleanupAttemptEligibility } from './domain/render-output-target';
 export { RENDER_RETRY_AFTER_MS } from './domain/render-retry-policy';
 export { findCleanupRecoveryRequest } from './infrastructure/drizzle/output-cleanup-acknowledgment-drizzle';
 export { createOutputCleanupStore } from './infrastructure/drizzle/output-cleanup-drizzle';
+export {
+  blockedOutstanding,
+  handedOff,
+} from './infrastructure/drizzle/output-cleanup-repair-drizzle';
 export { createRenderRepository } from './infrastructure/drizzle/render-repository-drizzle';
 export { renderOutputCleanupBlocked } from './infrastructure/drizzle/schema';
 export { renderOutputCleanup } from './infrastructure/drizzle/schema';

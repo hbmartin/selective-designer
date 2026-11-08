@@ -1225,15 +1225,23 @@ describe('RenderRepositoryDrizzle', () => {
       }
     }
   );
-  it('marks invalid persisted render status as non-retryable', async () => {
-    const { input } = await newAttempt();
-    await database.db.execute(
-      sql`update render_result set status = 'corrupt' where id = ${input.resultId}`
-    );
-    const result = await repository.findResult(input.resultId);
-    expect(result.isError() && result.getError()).toMatchObject({
-      code: 'RENDER_ROW_INVALID',
-      retryable: false,
-    });
-  });
+  it.each(['status', 'modelId'])(
+    'marks invalid persisted %s as non-retryable for result and parent reads',
+    async (column) => {
+      const { input } = await newAttempt();
+      await database.db.execute(
+        sql`update render_result set ${sql.identifier(column)} = 'corrupt' where id = ${input.resultId}`
+      );
+      const result = await repository.findResult(input.resultId);
+      expect(result.isError() && result.getError()).toMatchObject({
+        code: 'RENDER_ROW_INVALID',
+        retryable: false,
+      });
+      const render = await repository.findRender(renderId('recovery'));
+      expect(render.isError() && render.getError()).toMatchObject({
+        code: 'RENDER_ROW_INVALID',
+        retryable: false,
+      });
+    }
+  );
 });

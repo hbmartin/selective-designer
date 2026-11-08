@@ -129,6 +129,13 @@ async function recoverSubmission(input: AcceptedRenderSubmission) {
       deadline = Date.parse(restored.attemptDeadlineAt);
     return { type: 'submission_recovery_continues' as const };
   };
+  const finishRecovery = async () => {
+    if (uncertainWrite) {
+      const restored = await reconcile(false);
+      if (restored.type !== 'submission_recovery_continues') return restored;
+    }
+    return unresolved(lastCode);
+  };
   while (true) {
     let result;
     try {
@@ -173,19 +180,9 @@ async function recoverSubmission(input: AcceptedRenderSubmission) {
       await sleep(Math.min(persistenceDelayMs(retry++), remaining));
     } catch (error) {
       await reportException(error);
-      if (uncertainWrite) {
-        const restored = await reconcile(false);
-        if (restored.type !== 'submission_recovery_continues') return restored;
-      }
-      return unresolved(lastCode);
+      return finishRecovery();
     }
-    if (Date.now() >= deadline) {
-      if (uncertainWrite) {
-        const restored = await reconcile(false);
-        if (restored.type !== 'submission_recovery_continues') return restored;
-      }
-      return unresolved(lastCode);
-    }
+    if (Date.now() >= deadline) return finishRecovery();
   }
 }
 export async function reconcileSubmissionStep(input: AcceptedRenderSubmission) {
@@ -210,6 +207,19 @@ async function persistenceExceptionStep(
   });
 }
 persistenceExceptionStep.maxRetries = 0;
+async function pollingInterruptedStep(
+  input: Execution,
+  code: string,
+  diagnostics: ReturnType<typeof safeErrorDiagnostics>
+) {
+  'use step';
+  (await pipeline()).reportPollingInterrupted({
+    ...input,
+    code,
+    ...diagnostics,
+  });
+}
+pollingInterruptedStep.maxRetries = 0;
 async function dispatchAccountingStep(receiptId: string) {
   'use step';
   return (await pipeline()).dispatchAccounting(
@@ -293,7 +303,20 @@ async function runResult(input: Execution): Promise<string> {
       const result = await pollStep({ ...input, providerRequestId });
       if (result.type !== 'result_pending') return result.type;
       // oxlint-disable-next-line no-await-in-loop -- durable backoff.
-      await sleep(pollDelayMs(poll));
+      try {
+        await sleep(pollDelayMs(poll));
+      } catch (error) {
+        try {
+          await pollingInterruptedStep(
+            executionOf(input),
+            failureCode(error, 'RENDER_POLLING_WAIT_INTERRUPTED'),
+            safeErrorDiagnostics(error)
+          );
+        } catch {
+          /* Diagnostics cannot fail an accepted request after a wait interruption. */
+        }
+        return 'result_polling_unresolved';
+      }
     }
     return await fail('timed_out');
   } catch (error) {

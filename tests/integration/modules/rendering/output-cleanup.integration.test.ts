@@ -996,13 +996,25 @@ describe('durable render output cleanup', () => {
     const projections = statements.filter((statement) =>
       statement.includes("then 'handed_off'")
     );
-    expect(projections).toHaveLength(4);
+    expect(projections).toHaveLength(1);
     for (const statement of projections) {
       expect(statement).toContain(
-        '"render_output_cleanup_recovery"."fingerprint" = "render_output_cleanup_blocked"."fingerprint"'
+        '"cleanup_intervention_event"."fingerprint" = "render_output_cleanup_blocked"."fingerprint"'
       );
       expect(statement).not.toContain('"fingerprint" = "fingerprint"');
     }
+    const historyReads = statements.filter(
+      (statement) =>
+        statement.includes('from "render_output_cleanup_recovery"') &&
+        !statement.includes('exists')
+    );
+    expect(historyReads).toHaveLength(3);
+    const evidenceReads = statements.filter(
+      (statement) =>
+        statement.includes('from "render_output_cleanup_blocked"') &&
+        !statement.includes('exists')
+    );
+    expect(evidenceReads).toHaveLength(3);
     expect(okValue(await store.summary())).toMatchObject({
       blockedTotal: 3,
       blockedOutstanding: 1,
