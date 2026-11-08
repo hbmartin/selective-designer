@@ -2,7 +2,7 @@ import { makeUserRow } from '@tests/server/db-fixtures';
 import { createRecoveryTestDatabase } from '@tests/server/recovery-database';
 import { makeProviderReceipt } from '@tests/support/provider-receipt';
 import { updateRenderResultFixture } from '@tests/support/render-result-fixture';
-import { okValue } from '@tests/support/result';
+import { errorValue, okValue } from '@tests/support/result';
 import { sql } from 'drizzle-orm';
 import {
   afterAll,
@@ -16,6 +16,7 @@ import {
 
 import { toDesignName } from '@/modules/design';
 import { createDesignRepository } from '@/modules/design/testing';
+import type { AppError } from '@/modules/kernel';
 import { errorCauses } from '@/modules/kernel/domain/errors/error-causes';
 import {
   toDesignId,
@@ -74,7 +75,10 @@ describe('RenderRepositoryDrizzle', () => {
 
   beforeAll(async () => {
     database = await createRecoveryTestDatabase();
-    repository = createRenderRepository({ db: database.db });
+    repository = createRenderRepository({
+      db: database.db,
+      clock: { now: () => new Date() },
+    });
   });
 
   beforeEach(async () => {
@@ -192,6 +196,7 @@ describe('RenderRepositoryDrizzle', () => {
     });
 
     const configured = createRenderRepository({
+      clock: { now: () => new Date() },
       db: database.db,
       modelOrder: ['gpt-image-2', 'krea-3'],
     });
@@ -923,6 +928,106 @@ describe('RenderRepositoryDrizzle', () => {
       ).type
     ).toBe('result_marked_failed');
   });
+  it.each(['pending', 'submitted'] as const)(
+    'replays a %s failure without rewriting the first completion',
+    async (status) => {
+      const { input, startedAt } = await newAttempt(status);
+      okValue(await repository.claimExecution(input));
+      const checkpoint = checkpointFor(startedAt);
+      if (status === 'submitted')
+        okValue(await repository.saveOutput({ ...input, checkpoint }));
+      const context = {
+        ...input,
+        reason: 'first failure',
+        now: startedAt,
+        ...(status === 'pending'
+          ? { submissionPersistenceFailure: true as const }
+          : {}),
+      };
+      expect(okValue(await repository.failResultAttempt(context)).type).toBe(
+        'result_marked_failed'
+      );
+      const first = okValue(
+        await repository.publicationContext(input.resultId)
+      );
+      expect(
+        okValue(
+          await repository.failResultAttempt({
+            ...context,
+            now: new Date(startedAt.getTime() + 5000),
+          })
+        ).type
+      ).toBe('result_marked_failed');
+      expect(
+        okValue(await repository.publicationContext(input.resultId))
+      ).toEqual(first);
+      for (const wrong of [
+        { reason: 'different failure' },
+        { workflowRunId: 'other' },
+        { attempt: 2 },
+        { providerRequestId: 'other', submissionPersistenceFailure: undefined },
+      ]) {
+        expect(
+          okValue(await repository.failResultAttempt({ ...context, ...wrong }))
+            .type
+        ).toBe('result_attempt_superseded');
+      }
+    }
+  );
+  it.skipIf(!process.env.RECOVERY_TEST_DATABASE_URL).each([false, true])(
+    'reconciles a committed failure reply with unavailable read=%s',
+    async (unavailable) => {
+      const { input, startedAt } = await newAttempt('submitted');
+      const context = { ...input, reason: 'timed_out', now: startedAt };
+      const query = database.db.$client.query.bind(database.db.$client);
+      const lost = Object.assign(new Error('private lost write reply'), {
+        code: 'EPIPE',
+      });
+      let wrote = false;
+      const spy = vi
+        .spyOn(database.db.$client, 'query')
+        .mockImplementation(async (text, values) => {
+          const statement =
+            typeof text === 'string' ? text : (text as { text: string }).text;
+          if (
+            unavailable &&
+            wrote &&
+            statement.startsWith('select') &&
+            statement.includes('"render_result"')
+          )
+            throw new Error('read unavailable');
+          const result = await query(text, values);
+          if (!wrote && statement.startsWith('update "render_result"')) {
+            wrote = true;
+            throw lost;
+          }
+          return result;
+        });
+      try {
+        const saved = await repository.failResultAttempt(context);
+        if (unavailable)
+          expect([...errorCauses(errorValue(saved))]).toContain(lost);
+        else expect(okValue(saved).type).toBe('result_marked_failed');
+      } finally {
+        spy.mockRestore();
+      }
+      expect(
+        okValue(
+          await repository.failResultAttempt({
+            ...context,
+            now: new Date(startedAt.getTime() + 5000),
+          })
+        ).type
+      ).toBe('result_marked_failed');
+      expect(
+        okValue(await repository.publicationContext(input.resultId))
+      ).toMatchObject({
+        context: {
+          result: { completedAt: startedAt, errorMessage: 'timed_out' },
+        },
+      });
+    }
+  );
   it('requires the expected request before failing submitted work', async () => {
     const { input, startedAt } = await newAttempt('submitted');
     expect(
@@ -1092,19 +1197,29 @@ describe('RenderRepositoryDrizzle', () => {
       }),
     },
   });
-  it.skipIf(!process.env.RECOVERY_TEST_DATABASE_URL)(
-    'rejects an unreadable persisted recovery timestamp without transient retries',
-    async () => {
+  it.skipIf(!process.env.RECOVERY_TEST_DATABASE_URL).each([
+    ['unreadable', '275760-09-14 00:00:00'],
+    ['computed deadline overflow', '275760-09-12 23:59:00'],
+  ])(
+    'rejects %s recovery timestamps without transient retries',
+    async (_description, timestamp) => {
       const { input, startedAt } = await newAttempt();
       okValue(await repository.claimExecution(input));
-      // PostgreSQL accepts this finite date; the native driver's JS Date cannot represent it.
       await database.db.execute(
-        sql`update render_result set "attemptStartedAt" = '275760-09-14 00:00:00'::timestamp where id = ${input.resultId}`
+        sql`update render_result set "attemptStartedAt" = ${timestamp}::timestamp where id = ${input.resultId}`
       );
+      for (const read of [
+        await repository.findResult(input.resultId),
+        await repository.publicationContext(input.resultId),
+      ])
+        expect(errorValue<unknown, AppError>(read)).toMatchObject({
+          code: 'RENDER_ROW_INVALID',
+          retryable: false,
+        });
       const result = await repository.reconcileSubmission(
         journaled(input, startedAt)
       );
-      expect(result.getError()).toMatchObject({
+      expect(errorValue<unknown, AppError>(result)).toMatchObject({
         code: 'RENDER_ROW_INVALID',
         category: 'system',
         status: 500,
@@ -1112,6 +1227,61 @@ describe('RenderRepositoryDrizzle', () => {
       });
     }
   );
+  it('rejects implausibly future active rows without rejecting finite terminal history', async () => {
+    const { input } = await newAttempt();
+    okValue(await repository.claimExecution(input));
+    await database.db.execute(
+      sql`update render_result set "attemptStartedAt" = '2099-01-01 00:00:00'::timestamp where id = ${input.resultId}`
+    );
+    for (const result of [
+      await repository.findResult(input.resultId),
+      await repository.findRender(renderId('recovery')),
+      await repository.listRenders(designId),
+      await repository.publicationContext(input.resultId),
+    ]) {
+      expect(errorValue<unknown, AppError>(result)).toMatchObject({
+        code: 'RENDER_ROW_INVALID',
+        retryable: false,
+      });
+    }
+    await updateRenderResultFixture(database.db, {
+      resultId: input.resultId,
+      changes: { status: 'succeeded' },
+    });
+    expect(okValue(await repository.findResult(input.resultId)).type).toBe(
+      'result_found'
+    );
+  });
+  it('uses the injected clock at the exact five-minute future tolerance', async () => {
+    const { input, startedAt } = await newAttempt();
+    okValue(await repository.claimExecution(input));
+    const current = createRenderRepository({
+      db: database.db,
+      clock: { now: () => startedAt },
+    });
+    await database.db.execute(
+      sql`update render_result set "attemptStartedAt" = '2026-11-05 00:05:00'::timestamp where id = ${input.resultId}`
+    );
+    expect(okValue(await current.findResult(input.resultId)).type).toBe(
+      'result_found'
+    );
+    expect(
+      okValue(await current.reconcileSubmission(journaled(input, startedAt)))
+    ).toMatchObject({
+      type: 'submission_recovery_window',
+      attemptDeadlineAt: '2026-11-05T00:35:00.000Z',
+    });
+    await database.db.execute(
+      sql`update render_result set "attemptStartedAt" = '2026-11-05 00:05:00.001'::timestamp where id = ${input.resultId}`
+    );
+    expect(errorValue(await current.findResult(input.resultId))).toMatchObject({
+      code: 'RENDER_ROW_INVALID',
+      retryable: false,
+    });
+    expect(
+      errorValue(await current.reconcileSubmission(journaled(input, startedAt)))
+    ).toMatchObject({ code: 'RENDER_ROW_INVALID', retryable: false });
+  });
   it('restores only the matching owned attempt original cutoff and stops replaced or deleted attempts', async () => {
     const { input, startedAt } = await newAttempt();
     okValue(await repository.claimExecution(input));

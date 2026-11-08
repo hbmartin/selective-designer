@@ -10,7 +10,10 @@ import type {
   RenderRepository,
 } from '@/modules/rendering';
 import { isRenderRetryable } from '@/modules/rendering';
-import { RENDER_RETRY_AFTER_MS } from '@/modules/rendering/testing';
+import {
+  isPlausibleRenderStart,
+  renderAttemptDeadline,
+} from '@/modules/rendering/testing';
 
 /** In-memory {@link RenderRepository} with the same revision semantics. */
 export const createFakeRenderRepository = (
@@ -64,11 +67,25 @@ export const createFakeRenderRepository = (
         found.result.providerRequestId !== null
       )
         return Result.Ok({ type: 'result_attempt_superseded' });
+      const deadline = renderAttemptDeadline(found.result.attemptStartedAt);
+      if (
+        deadline.type === 'render_deadline_invalid' ||
+        !isPlausibleRenderStart(
+          found.result.attemptStartedAt.getTime(),
+          now().getTime()
+        )
+      )
+        return Result.Error(
+          new AppError({
+            code: 'RENDER_ROW_INVALID',
+            category: 'system',
+            status: 500,
+            retryable: false,
+          })
+        );
       return Result.Ok({
         type: 'submission_recovery_window',
-        attemptDeadlineAt: new Date(
-          found.result.attemptStartedAt.getTime() + RENDER_RETRY_AFTER_MS
-        ).toISOString(),
+        attemptDeadlineAt: deadline.deadlineAt,
       });
     },
     async findDraft(imageId) {
@@ -296,19 +313,32 @@ export const createFakeRenderRepository = (
       const found = findResult(input.resultId);
       if (
         !found ||
-        !['pending', 'submitted'].includes(found.result.status) ||
         found.result.attempt !== input.attempt ||
         owners.get(input.resultId) !== input.workflowRunId ||
         (input.providerRequestId === undefined &&
-          (found.result.status !== 'pending' ||
+          ((found.result.status !== 'pending' &&
+            found.result.status !== 'failed') ||
             found.result.providerRequestId !== null)) ||
         (input.providerRequestId !== undefined &&
           found.result.providerRequestId !== input.providerRequestId &&
           !(
             input.submissionPersistenceFailure &&
-            found.result.status === 'pending' &&
+            (found.result.status === 'pending' ||
+              found.result.status === 'failed') &&
             found.result.providerRequestId === null
           ))
+      )
+        return Result.Ok({ type: 'result_attempt_superseded' });
+      if (found.result.status === 'failed')
+        return Result.Ok({
+          type:
+            found.result.errorMessage === input.reason.slice(0, 500)
+              ? 'result_marked_failed'
+              : 'result_attempt_superseded',
+        });
+      if (
+        found.result.status !== 'pending' &&
+        found.result.status !== 'submitted'
       )
         return Result.Ok({ type: 'result_attempt_superseded' });
       const checkpoint = checkpoints.get(input.resultId);

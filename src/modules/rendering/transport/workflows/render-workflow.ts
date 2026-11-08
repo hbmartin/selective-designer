@@ -1,5 +1,6 @@
 import { FatalError, getWorkflowMetadata, sleep } from 'workflow';
 
+import { isAppError } from '@/modules/kernel/domain/errors/app-error';
 import { failureCode } from '@/modules/kernel/domain/errors/failure-code';
 import { safeErrorDiagnostics } from '@/modules/kernel/domain/errors/safe-error-diagnostics';
 import {
@@ -14,6 +15,10 @@ import {
 
 import type { AcceptedRenderSubmission } from '../../application/ports/ports';
 import { SubmissionPersistenceError } from '../../application/ports/submission-persistence-error';
+import {
+  isPlausibleRenderStart,
+  RENDER_RETRY_AFTER_MS,
+} from '../../domain/render-retry-policy';
 
 export const MAX_POLLS = 150;
 export const pollDelayMs = (poll: number) => Math.min(10, 2 + poll) * 1000;
@@ -36,6 +41,9 @@ const resultIdOrFail = (value: string) => {
 const loadModule = lazyModule(() => import('@/composition/rendering-pipeline'));
 const loadCleanupModule = lazyModule(
   () => import('@/composition/render-output-cleanup')
+);
+const loadFailureDiagnostics = lazyModule(
+  () => import('@/composition/render-failure-diagnostics')
 );
 const pipeline = async () =>
   (await loadModule()).getRenderingPipelineUseCases();
@@ -95,7 +103,13 @@ async function recoverSubmission(input: AcceptedRenderSubmission) {
   let retry = 0;
   let receiptCaptured = false;
   let lastCode = 'RENDER_SUBMISSION_PERSISTENCE_UNRESOLVED';
-  let deadline = Date.parse(input.attemptDeadlineAt);
+  const plausibleDeadline = (value: string) => {
+    const parsed = Date.parse(value);
+    return isPlausibleRenderStart(parsed - RENDER_RETRY_AFTER_MS, Date.now())
+      ? parsed
+      : NaN;
+  };
+  let deadline = plausibleDeadline(input.attemptDeadlineAt);
   let uncertainWrite = false;
   const unresolved = async (code: string) => {
     try {
@@ -126,7 +140,7 @@ async function recoverSubmission(input: AcceptedRenderSubmission) {
     if (restored.type === 'result_attempt_superseded')
       return { ...restored, receiptCaptured };
     if (restoreDeadline && restored.type === 'submission_recovery_window')
-      deadline = Date.parse(restored.attemptDeadlineAt);
+      deadline = plausibleDeadline(restored.attemptDeadlineAt);
     return { type: 'submission_recovery_continues' as const };
   };
   const finishRecovery = async () => {
@@ -153,8 +167,7 @@ async function recoverSubmission(input: AcceptedRenderSubmission) {
       };
     }
     receiptCaptured ||= result.receiptCaptured;
-    if (result.type !== 'submission_persistence_error')
-      return { ...result, receiptCaptured };
+    if (result.type !== 'submission_persistence_error') return result;
     lastCode = result.code;
     uncertainWrite ||= result.submissionWrite === 'unknown';
     if (!result.retryable && !uncertainWrite)
@@ -229,19 +242,118 @@ async function pollStep(input: Execution & { providerRequestId: string }) {
     ).poll({ ...input, resultId: resultIdOrFail(input.resultId) })
   );
 }
-async function markFailedStep(
-  input: Execution & {
+type FailureContext = Readonly<
+  Execution & {
+    reason: string;
     providerRequestId?: string;
     submissionPersistenceFailure?: true;
-  },
-  reason: string
+  }
+>;
+const failurePersistenceError = (error: unknown) => ({
+  type: 'failure_persistence_error' as const,
+  code: failureCode(error, 'RENDER_FAILURE_PERSISTENCE_ERROR'),
+  retryable: isAppError(error)
+    ? isRetryableAppError(error)
+    : !(error instanceof FatalError),
+  ...safeErrorDiagnostics(error),
+});
+export async function markFailedStep(input: FailureContext) {
+  'use step';
+  try {
+    const result = await (
+      await pipeline()
+    ).markFailed({
+      ...input,
+      resultId: resultIdOrFail(input.resultId),
+    });
+    return result.isOk()
+      ? result.get()
+      : failurePersistenceError(result.getError());
+  } catch (error) {
+    return failurePersistenceError(error);
+  }
+}
+markFailedStep.maxRetries = 0;
+
+async function failureDiagnosticStep(
+  input: Execution,
+  reason: string,
+  receiptCaptured: boolean,
+  error: ReturnType<typeof failurePersistenceError>,
+  unresolved: boolean
 ) {
   'use step';
-  return unwrapStepResult(
-    await (
-      await pipeline()
-    ).markFailed({ ...input, resultId: resultIdOrFail(input.resultId), reason })
-  );
+  const { getRenderFailureLogger } = await loadFailureDiagnostics();
+  getRenderFailureLogger().warn({
+    event: unresolved
+      ? 'rendering.result.failure_persistence_unresolved'
+      : 'rendering.result.failure_persistence_exception',
+    details: {
+      ...executionOf(input),
+      reason,
+      receiptCapture: receiptCaptured ? 'confirmed' : 'unconfirmed',
+      code: error.code,
+      errorNames: error.errorNames,
+      errorCodes: error.errorCodes,
+    },
+  });
+}
+failureDiagnosticStep.maxRetries = 0;
+export const FAILURE_RECOVERY_MS = 2 * 60_000;
+async function recoverFailure(
+  input: FailureContext,
+  receiptCaptured: boolean
+): Promise<string> {
+  const deadline = Date.now() + FAILURE_RECOVERY_MS;
+  let retry = 0;
+  let lastError: ReturnType<typeof failurePersistenceError> = {
+    type: 'failure_persistence_error',
+    code: 'RENDER_FAILURE_PERSISTENCE_ERROR',
+    retryable: true,
+    errorNames: [],
+    errorCodes: [],
+  };
+  const report = async (unresolved: boolean) => {
+    try {
+      await failureDiagnosticStep(
+        executionOf(input),
+        input.reason,
+        receiptCaptured,
+        lastError,
+        unresolved
+      );
+    } catch {
+      // Diagnostics cannot change persistence certainty or accounting dispatch.
+    }
+  };
+  while (Date.now() < deadline) {
+    let saved;
+    try {
+      // oxlint-disable-next-line no-await-in-loop -- workflow owns the bounded retry budget.
+      saved = await markFailedStep(input);
+    } catch (error) {
+      saved = failurePersistenceError(error);
+    }
+    if (saved.type !== 'failure_persistence_error')
+      return saved.type === 'result_marked_failed'
+        ? 'result_failed'
+        : saved.type;
+    lastError = saved;
+    // oxlint-disable-next-line no-await-in-loop -- record secondary diagnostics before backoff.
+    await report(false);
+    if (!saved.retryable) break;
+    const remaining = deadline - Date.now();
+    if (remaining <= 0) break;
+    try {
+      // oxlint-disable-next-line no-await-in-loop -- no retry can begin at or after the original budget.
+      await sleep(Math.min(persistenceDelayMs(retry++), remaining));
+    } catch (error) {
+      lastError = failurePersistenceError(error);
+      break;
+    }
+  }
+  await report(true);
+  return 'result_failure_persistence_unresolved';
 }
 
 /** An execution owns one immutable attempt, never whichever attempt is current later. */
@@ -249,22 +361,16 @@ async function runResult(input: Execution): Promise<string> {
   let providerRequestId: string | undefined;
   let receiptId: string | undefined;
   let acceptanceUnresolved = false;
-  const fail = async (reason: string, submissionPersistenceFailure?: true) => {
-    const failed = await markFailedStep(
-      {
-        ...input,
-        ...(providerRequestId ? { providerRequestId } : {}),
-        ...(submissionPersistenceFailure
-          ? { submissionPersistenceFailure }
-          : {}),
-      },
-      reason
-    );
-    return failed.type === 'result_marked_failed'
-      ? 'result_failed'
-      : failed.type;
-  };
-  try {
+  const failure = (
+    reason: string,
+    submissionPersistenceFailure?: true
+  ): FailureContext => ({
+    ...input,
+    reason,
+    ...(providerRequestId ? { providerRequestId } : {}),
+    ...(submissionPersistenceFailure ? { submissionPersistenceFailure } : {}),
+  });
+  const execute = async (): Promise<string | FailureContext> => {
     const accepted = await submitStep(input);
     if (accepted.type === 'result_already_submitted')
       receiptId = accepted.receiptId;
@@ -274,12 +380,13 @@ async function runResult(input: Execution): Promise<string> {
     if (accepted.type === 'result_accepted') {
       providerRequestId = accepted.submission.providerRequestId;
       acceptanceUnresolved = true;
-      submitted = await recoverSubmission(accepted.submission);
+      const recovered = await recoverSubmission(accepted.submission);
       acceptanceUnresolved = false;
-      if ('receiptCaptured' in submitted && submitted.receiptCaptured)
+      if (recovered.receiptCaptured)
         receiptId = accepted.submission.accountingIdentity.receipt.id;
-      if (submitted.type === 'submission_persistence_blocked')
-        return await fail(submitted.code, true);
+      if (recovered.type === 'submission_persistence_blocked')
+        return failure(recovered.code, true);
+      submitted = recovered;
     } else submitted = accepted;
     if (
       submitted.type !== 'result_submitted' &&
@@ -291,13 +398,22 @@ async function runResult(input: Execution): Promise<string> {
       // oxlint-disable-next-line no-await-in-loop -- each answer determines the next poll.
       const result = await pollStep({ ...input, providerRequestId });
       if (result.type !== 'result_pending') return result.type;
-      // oxlint-disable-next-line no-await-in-loop -- durable backoff.
+      // oxlint-disable-next-line no-await-in-loop -- durable polling backoff.
       await sleep(pollDelayMs(poll));
     }
-    return await fail('timed_out');
-  } catch (error) {
-    if (acceptanceUnresolved) return 'result_submission_unresolved';
-    return await fail(failureCode(error, 'render_step_failed'));
+    return failure('timed_out');
+  };
+  try {
+    let outcome;
+    try {
+      outcome = await execute();
+    } catch (error) {
+      if (acceptanceUnresolved) return 'result_submission_unresolved';
+      outcome = failure(failureCode(error, 'render_step_failed'));
+    }
+    return typeof outcome === 'string'
+      ? outcome
+      : await recoverFailure(outcome, receiptId !== undefined);
   } finally {
     if (receiptId) {
       try {

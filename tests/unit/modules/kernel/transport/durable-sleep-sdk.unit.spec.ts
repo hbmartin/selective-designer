@@ -2,6 +2,7 @@ import { createRequire } from 'node:module';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { sleep } from 'workflow';
 
 // Pinned SDK contract: the real sleep implementation owns suspension and completion.
 // This harness supplies event delivery, not a replacement sleep or rejection policy.
@@ -11,6 +12,7 @@ const sdkRoot = path.dirname(sdkRequire.resolve('@workflow/core/runtime'));
 const { createSleep } = await import(
   pathToFileURL(path.join(sdkRoot, 'workflow/sleep.js')).href
 );
+const sleepBinding = Symbol.for('WORKFLOW_SLEEP');
 
 type WaitEvent = {
   eventType: 'wait_created' | 'wait_completed';
@@ -20,7 +22,13 @@ type WaitEvent = {
 };
 
 describe('durable sleep against the pinned SDK', () => {
-  afterEach(() => vi.useRealTimers());
+  afterEach(() => {
+    try {
+      vi.unstubAllGlobals();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 
   it('suspends with an unresolved wait and resolves on its matching completion', async () => {
     vi.useFakeTimers();
@@ -44,7 +52,8 @@ describe('durable sleep against the pinned SDK', () => {
       onWorkflowError: vi.fn(),
     };
     const settled = vi.fn();
-    const waiting: Promise<void> = createSleep(ctx)(2000);
+    vi.stubGlobal(sleepBinding, createSleep(ctx));
+    const waiting = sleep(2000);
     const observed = waiting.then(
       () => settled('resolved'),
       () => settled('rejected')

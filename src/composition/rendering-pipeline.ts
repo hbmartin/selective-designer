@@ -287,7 +287,7 @@ const build = (overrides?: RenderingPipelineOverrides) => {
   const kernel = overrides?.kernel ?? getPipelineKernel();
   const renderRepository =
     overrides?.persistence?.renderRepository ??
-    createRenderRepository({ db: kernel.db });
+    createRenderRepository({ clock: kernel.clock, db: kernel.db });
   const deps: RenderingPipelineDeps = {
     renderRepository,
     resultOutputReferences:

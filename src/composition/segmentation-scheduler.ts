@@ -91,6 +91,7 @@ export const createAutoDetectionScheduler = (
     conceptSource: createConceptSource(kernel),
     findCarrySource: async (imageId) => {
       const found = await createRenderRepository({
+        clock: kernel.clock,
         db: kernel.db,
       }).findRenderByOutputImage(imageId);
       if (found.isError()) return Result.Error(found.getError());

@@ -357,7 +357,9 @@ describe('atomic image and detection writes', () => {
   const renderSetup = async () => {
     const ctx = setup();
     okValue(await writeImageWithDetection(ctx.kernel, ctx.input));
-    const renders = { ...createRenderRepository({ db: database.db }) };
+    const renders = {
+      ...createRenderRepository({ db: database.db, clock: ctx.kernel.clock }),
+    };
     const resultId = okValue(toRenderResultId('render-result'));
     const sourceId = image().id;
     okValue(
@@ -678,10 +680,12 @@ describe('atomic image and detection writes', () => {
         now: new Date(),
       })
     );
+    const retryAt = new Date();
+    vi.spyOn(ctx.kernel.clock, 'now').mockReturnValue(retryAt);
     const claims = await Promise.all(
       [1, 2].map(() =>
         ctx.renders.retryAttempt({
-          startedAt: new Date(),
+          startedAt: retryAt,
           expiredBeforeMs: 0,
           resultId: ctx.identity.resultId,
           expectedAttempt: 1,

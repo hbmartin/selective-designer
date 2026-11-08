@@ -559,7 +559,10 @@ describe('durable render output cleanup', () => {
       })
     );
     okValue(
-      await createRenderRepository({ db: database.db }).createRender({
+      await createRenderRepository({
+        db: database.db,
+        clock: { now: () => new Date() },
+      }).createRender({
         id: okValue(toRenderId('cleanup-render')),
         designId,
         renderSourceImageId: imageId,

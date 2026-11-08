@@ -226,10 +226,11 @@ export const renderImageIdentity = (input: RenderAttemptIdentity) => {
 
 /** Lookup also works after process loss; the result link committed with the image. */
 export async function findRegisteredRenderImage(
-  kernel: { db: DbLike },
+  kernel: Pick<PipelineKernel, 'clock'> & { db: DbLike },
   input: RenderAttemptIdentity
 ): Promise<ApplicationResult<Registered>> {
   const found = await createRenderRepository({
+    clock: kernel.clock,
     db: kernel.db,
   }).publicationContext(input.resultId);
   if (found.isError()) return Result.Error(found.getError());
@@ -302,6 +303,7 @@ export function writeRenderImageWithDetection(
       writeId: identity.writeId,
       verify: async (tx) => {
         const saved = await createRenderRepository({
+          clock: kernel.clock,
           db: tx,
         }).publicationContext(input.resultId);
         if (saved.isError()) throw saved.getError();
@@ -315,7 +317,7 @@ export function writeRenderImageWithDetection(
         );
       },
       work: async (tx) => {
-        const renders = createRenderRepository({ db: tx });
+        const renders = createRenderRepository({ db: tx, clock: kernel.clock });
         const locked = await renders.publicationContext(
           input.resultId,
           'update'
@@ -331,7 +333,10 @@ export function writeRenderImageWithDetection(
         )
           return Result.Ok({ type: 'result_attempt_superseded' });
         if (row.result.status === 'succeeded') {
-          const existing = await findRegisteredRenderImage({ db: tx }, input);
+          const existing = await findRegisteredRenderImage(
+            { db: tx, clock: kernel.clock },
+            input
+          );
           if (existing.isError()) return Result.Error(existing.getError());
           const saved = existing.get();
           if (saved.type === 'result_image_not_registered')

@@ -11,6 +11,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const state = vi.hoisted(() => ({
   reconcileSubmission: vi.fn(),
+  failResultAttempt: vi.fn(),
   facade: undefined as RenderingPipelineUseCases | undefined,
 }));
 vi.mock('@/composition/rendering-pipeline', () => ({
@@ -19,11 +20,13 @@ vi.mock('@/composition/rendering-pipeline', () => ({
 import { AppError } from '@/modules/kernel';
 import { toGeneratedId } from '@/modules/kernel/domain/ids';
 import {
-  type AcceptedRenderSubmission,
   createRenderingPipelineUseCases,
   type RenderingPipelineUseCases,
 } from '@/modules/rendering';
-import { reconcileSubmissionStep } from '@/modules/rendering/testing';
+import {
+  markFailedStep,
+  reconcileSubmissionStep,
+} from '@/modules/rendering/testing';
 
 // Deliberate pinned-SDK contract: exercise its real executor/serialization, not a retry imitation.
 // Internal entry points stay confined to this test; an SDK upgrade must revalidate the contract.
@@ -36,8 +39,9 @@ const { executeStep } = await sdk('runtime/step-executor.js');
 const { registerStepFunction } = await sdk('private.js');
 const { dehydrateStepArguments } = await sdk('serialization.js');
 const stepName = 'step//reconciliation-contract//reconcileSubmissionStep';
+const failureStepName = 'step//failure-contract//markFailedStep';
 
-describe('submission reconciliation against the pinned SDK executor', () => {
+describe('submission reconciliation and failure writes against the pinned SDK executor', () => {
   beforeEach(() => {
     vi.resetAllMocks();
     vi.useFakeTimers();
@@ -54,6 +58,7 @@ describe('submission reconciliation against the pinned SDK executor', () => {
       renderRepository: {
         ...createFakeRenderRepository(() => new Date()).repository,
         reconcileSubmission: state.reconcileSubmission,
+        failResultAttempt: state.failResultAttempt,
       },
       renderInputs: { sourceImage: unused, item: unused, region: unused },
       maskCompositor: { composeEditMask: unused, maskForModel: unused },
@@ -67,16 +72,23 @@ describe('submission reconciliation against the pinned SDK executor', () => {
       logger: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
     });
     registerStepFunction(stepName, reconcileSubmissionStep);
+    registerStepFunction(failureStepName, markFailedStep);
   });
   afterEach(() => vi.useRealTimers());
 
-  const execute = async (attempt: number, events: { eventType: string }[]) => {
+  const execute = async (
+    attempt: number,
+    events: { eventType: string }[],
+    selectedStep = stepName
+  ) => {
     const workflowRunId = 'wrun_reconciliation_contract';
     const input = {
       resultId: 'result-1',
       attempt: 1,
       workflowRunId,
-    } as AcceptedRenderSubmission;
+      reason: 'timed_out',
+      providerRequestId: 'paid',
+    };
     const serialized = await dehydrateStepArguments(
       { args: [input] },
       workflowRunId,
@@ -95,7 +107,7 @@ describe('submission reconciliation against the pinned SDK executor', () => {
       workflowName: 'reconciliation-contract',
       workflowStartedAt: Date.now(),
       stepId: 'step_reconciliation_contract',
-      stepName,
+      stepName: selectedStep,
       authoritativeAttempt: attempt,
       preclaimedStart: {
         owned: true,
@@ -113,6 +125,16 @@ describe('submission reconciliation against the pinned SDK executor', () => {
       new AppError({ code: 'DB_UNAVAILABLE', category: 'system', status: 503 })
     );
 
+  it('journals one failure-write execution without hidden SDK retries', async () => {
+    const events: { eventType: string }[] = [];
+    state.failResultAttempt.mockResolvedValue(unavailable());
+    expect(markFailedStep.maxRetries).toBe(0);
+    expect(await execute(1, events, failureStepName)).toMatchObject({
+      type: 'completed',
+    });
+    expect(state.failResultAttempt).toHaveBeenCalledOnce();
+    expect(events.map((event) => event.eventType)).toEqual(['step_completed']);
+  });
   it('retries real transient failures twice at five seconds and then completes the saved request', async () => {
     const events: { eventType: string }[] = [];
     state.reconcileSubmission
