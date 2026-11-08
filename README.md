@@ -394,6 +394,8 @@ Operators can redrive pending accounting with `pnpm accounting:reconcile`. The c
 
 Apply the additive accounting migration before serving the new app. The new ordinary indexes on image object keys and render checkpoint keys take a write lock while PostgreSQL builds them; coordinate rollout with writers, as for migration 0012. Existing migrations are immutable. Online index builds, historical accounting repair and orphan sweeps remain outside this release.
 
+Migration **0021_steady_valeria_richards.sql** adds a partial index on undelivered receipt IDs for the existing ID-cursor reconciliation pages. It leaves migration 0015 and the cursor contract unchanged. This ordinary index build temporarily blocks receipt writes; coordinate its application with accounting capture and delivery workers. The existing time-based pending index remains available for cutoff filtering and summary reads.
+
 Only an owning workflow may fail a render. If execution never claims ownership, the result stays pending and its owner can start a fresh, potentially paid attempt after 30 minutes. Replaced output deletion is best effort after confirmed loss and global reference checks.
 
 

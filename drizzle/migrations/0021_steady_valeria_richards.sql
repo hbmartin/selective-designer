@@ -1,0 +1,1 @@
+CREATE INDEX "provider_call_receipt_pending_id_idx" ON "provider_call_receipt" USING btree ("id") WHERE "provider_call_receipt"."deliveredAt" is null;
