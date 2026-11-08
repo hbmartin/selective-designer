@@ -17,7 +17,7 @@ const factory = createCachedFactory(() => {
     store,
     resultOutputReferences: createResultOutputReferences(
       createDesignRepository({ db: kernel.db }),
-      createRenderRepository({ db: kernel.db })
+      createRenderRepository({ clock: kernel.clock, db: kernel.db })
     ),
   };
   return createRenderOutputCleanup(deps);

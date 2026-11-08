@@ -453,3 +453,7 @@ RECOVERY_TEST_DATABASE_URL=postgres://postgres@127.0.0.1:5432/selective_designer
 ```
 
 This suite migrates and truncates that database. Do not point it at shared data or a localhost tunnel to a remote database. Driver-specific cases, including unreadable timestamps and computed deadline overflow, remain skipped in CI and when this variable is absent. The SDK sleep contract checks the public export’s normal suspension/completion lifecycle; it does not guarantee every possible behavior of future SDK versions.
+
+Failure recording uses replay-safe, fenced writes and workflow-owned backoff for up to two minutes. If it cannot confirm persistence, the workflow reports an internal unresolved outcome instead of claiming the render was marked failed. Its saved state and 30-minute owner Retry deadline remain unchanged; confirmed accounting still dispatches. A manual Retry remains a fresh, potentially paid attempt.
+
+Invalid attempt timestamps return permanent validation errors and require operator data repair. Pending/submitted starts may be at most five minutes ahead of the injected server clock, inclusive; historical terminal records retain structural validation without a future-time limit. A suspicious future recovery deadline is checked against the original persisted start rather than extending the cutoff. No automatic timestamp repair or new repair UI is provided.

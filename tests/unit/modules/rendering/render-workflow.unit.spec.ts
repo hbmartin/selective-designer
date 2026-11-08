@@ -6,6 +6,7 @@ import { SubmissionPersistenceError } from '@/modules/rendering/testing';
 
 type Outcome = { type: string; [key: string]: unknown };
 const pipeline = vi.hoisted(() => ({
+  initialize: vi.fn(),
   submit: vi.fn(),
   persistSubmission: vi.fn(),
   reconcileSubmission: vi.fn(),
@@ -15,6 +16,7 @@ const pipeline = vi.hoisted(() => ({
   dispatchAccounting: vi.fn(),
   poll: vi.fn(),
   markFailed: vi.fn(),
+  failureWarning: vi.fn(),
 }));
 vi.mock('workflow', () => ({
   FatalError: class FatalError extends Error {},
@@ -26,7 +28,13 @@ vi.mock('@/composition/render-output-cleanup', () => ({
   getRenderOutputCleanup: () => ({ process: pipeline.cleanup }),
 }));
 vi.mock('@/composition/rendering-pipeline', () => ({
-  getRenderingPipelineUseCases: () => pipeline,
+  getRenderingPipelineUseCases: () => {
+    pipeline.initialize();
+    return pipeline;
+  },
+}));
+vi.mock('@/composition/render-failure-diagnostics', () => ({
+  getRenderFailureLogger: () => ({ warn: pipeline.failureWarning }),
 }));
 const { sleep } = await import('workflow');
 const { renderResultWorkflow, renderWorkflow, MAX_POLLS, pollDelayMs } =
@@ -303,6 +311,249 @@ describe('render workflow', () => {
     expect(pipeline.submit).toHaveBeenCalledOnce();
     expect(pipeline.poll).not.toHaveBeenCalled();
     expect(pipeline.dispatchAccounting).not.toHaveBeenCalled();
+  });
+  const entries = ['single', 'batch'] as const;
+  const runEntry = async (entry: (typeof entries)[number]) => {
+    if (entry === 'single') return (await renderResultWorkflow(attempt)).result;
+    return (await renderWorkflow({ renderId: 'render-1', attempts: [attempt] }))
+      .results[0];
+  };
+  it.each(
+    entries.flatMap((entry) =>
+      [false, true].map((captured) => ({ entry, captured }))
+    )
+  )(
+    'keeps $entry failure writes unresolved with capture=$captured after the two-minute budget',
+    async ({ entry, captured }) => {
+      pipeline.submit.mockResolvedValue(
+        Result.Ok({
+          type: 'result_already_submitted',
+          providerRequestId: 'request-1',
+          ...(captured ? { receiptId: 'confirmed' } : {}),
+        })
+      );
+      pipeline.poll.mockResolvedValue(Result.Ok({ type: 'result_pending' }));
+      pipeline.markFailed.mockResolvedValue(
+        Result.Error(
+          new AppError({ code: 'DB_DOWN', category: 'system', status: 503 })
+        )
+      );
+      pipeline.failureWarning.mockImplementation(() => {
+        throw new Error('diagnostics unavailable');
+      });
+      expect(await runEntry(entry)).toBe(
+        'result_failure_persistence_unresolved'
+      );
+      expect(pipeline.markFailed).toHaveBeenCalledTimes(5);
+      expect(vi.mocked(sleep).mock.calls.slice(-5)).toEqual([
+        [5000],
+        [10000],
+        [20000],
+        [40000],
+        [45000],
+      ]);
+      for (const [context] of pipeline.markFailed.mock.calls)
+        expect(context).toEqual({
+          ...execution,
+          providerRequestId: 'request-1',
+          reason: 'timed_out',
+        });
+      expect(pipeline.submit).toHaveBeenCalledOnce();
+      expect(pipeline.dispatchAccounting.mock.calls).toEqual(
+        captured ? [['confirmed']] : []
+      );
+    }
+  );
+  it.each(
+    entries.flatMap((entry) =>
+      [false, true].map((captured) => ({ entry, captured }))
+    )
+  )(
+    'preserves blocked failure capture=$captured through $entry recovery',
+    async ({ entry, captured }) => {
+      pipeline.submit.mockResolvedValue(
+        Result.Ok({
+          type: 'result_accepted',
+          submission: {
+            ...execution,
+            providerRequestId: 'accepted-request',
+            attemptDeadlineAt: '2026-11-06T19:30:00Z',
+            accountingIdentity: { receipt: { id: 'accepted-call' } },
+          },
+        })
+      );
+      pipeline.persistSubmission.mockResolvedValue(
+        Result.Error(
+          new SubmissionPersistenceError(
+            new AppError({
+              code: 'PROVIDER_RECEIPT_IDENTITY_MISMATCH',
+              category: 'system',
+              status: 500,
+              retryable: false,
+            }),
+            captured,
+            'rejected'
+          )
+        )
+      );
+      pipeline.markFailed
+        .mockRejectedValueOnce(
+          Object.assign(new Error('private locator secret'), {
+            code: 'ECONNRESET',
+          })
+        )
+        .mockResolvedValue(Result.Ok({ type: 'result_marked_failed' }));
+      expect(await runEntry(entry)).toBe('result_failed');
+      expect(sleep).toHaveBeenCalledExactlyOnceWith(5000);
+      expect(pipeline.markFailed.mock.calls).toEqual(
+        Array.from({ length: 2 }, () => [
+          {
+            ...execution,
+            providerRequestId: 'accepted-request',
+            submissionPersistenceFailure: true,
+            reason: 'PROVIDER_RECEIPT_IDENTITY_MISMATCH',
+          },
+        ])
+      );
+      expect(pipeline.failureWarning).toHaveBeenCalledWith({
+        event: 'rendering.result.failure_persistence_exception',
+        details: {
+          ...execution,
+          reason: 'PROVIDER_RECEIPT_IDENTITY_MISMATCH',
+          receiptCapture: captured ? 'confirmed' : 'unconfirmed',
+          code: 'ECONNRESET',
+          errorNames: ['Error'],
+          errorCodes: ['ECONNRESET'],
+        },
+      });
+      expect(JSON.stringify(pipeline.failureWarning.mock.calls)).not.toContain(
+        'private'
+      );
+      expect(pipeline.dispatchAccounting.mock.calls).toEqual(
+        captured ? [['accepted-call']] : []
+      );
+    }
+  );
+  it.each(entries)(
+    'recovers a timed-out %s failure write after an outage',
+    async (entry) => {
+      pipeline.poll.mockResolvedValue(Result.Ok({ type: 'result_pending' }));
+      pipeline.markFailed
+        .mockRejectedValueOnce(new Error('write reply lost'))
+        .mockResolvedValue(Result.Ok({ type: 'result_marked_failed' }));
+      expect(await runEntry(entry)).toBe('result_failed');
+      expect(pipeline.markFailed.mock.calls).toEqual(
+        Array.from({ length: 2 }, () => [
+          { ...execution, providerRequestId: 'request-1', reason: 'timed_out' },
+        ])
+      );
+    }
+  );
+  it('does not retry permanent failure-write errors and still dispatches confirmed accounting', async () => {
+    pipeline.submit.mockResolvedValue(
+      Result.Ok({
+        type: 'result_already_submitted',
+        providerRequestId: 'request-1',
+        receiptId: 'confirmed',
+      })
+    );
+    pipeline.poll.mockRejectedValue(new Error('provider unavailable'));
+    pipeline.markFailed.mockResolvedValue(
+      Result.Error(
+        new AppError({
+          code: 'RENDER_ROW_INVALID',
+          category: 'system',
+          status: 500,
+          retryable: false,
+        })
+      )
+    );
+    pipeline.failureWarning.mockImplementation(() => {
+      throw new Error('logger failed');
+    });
+    expect(await renderResultWorkflow(attempt)).toEqual({
+      result: 'result_failure_persistence_unresolved',
+    });
+    expect(pipeline.markFailed).toHaveBeenCalledOnce();
+    expect(sleep).not.toHaveBeenCalled();
+    expect(pipeline.dispatchAccounting).toHaveBeenCalledExactlyOnceWith(
+      'confirmed'
+    );
+  });
+  it('logs failures even when rendering composition cannot initialize', async () => {
+    pipeline.initialize.mockImplementation(() => {
+      throw Object.assign(new Error('private database configuration'), {
+        code: 'CONFIG_FAILED',
+      });
+    });
+    expect(await renderResultWorkflow(attempt)).toEqual({
+      result: 'result_failure_persistence_unresolved',
+    });
+    expect(pipeline.markFailed).not.toHaveBeenCalled();
+    expect(pipeline.failureWarning).toHaveBeenCalledWith(
+      expect.objectContaining({
+        event: 'rendering.result.failure_persistence_unresolved',
+        details: expect.objectContaining({
+          ...execution,
+          code: 'CONFIG_FAILED',
+          reason: 'CONFIG_FAILED',
+          receiptCapture: 'unconfirmed',
+        }),
+      })
+    );
+    expect(JSON.stringify(pipeline.failureWarning.mock.calls)).not.toContain(
+      'private'
+    );
+  });
+  it('reports invalid failure execution identifiers without retrying permanent validation', async () => {
+    expect(await renderResultWorkflow({ resultId: '   ', attempt: 1 })).toEqual(
+      { result: 'result_failure_persistence_unresolved' }
+    );
+    expect(pipeline.markFailed).not.toHaveBeenCalled();
+    expect(sleep).not.toHaveBeenCalled();
+    expect(pipeline.failureWarning).toHaveBeenCalledWith(
+      expect.objectContaining({
+        event: 'rendering.result.failure_persistence_unresolved',
+      })
+    );
+  });
+  it('restores the persisted cutoff instead of trusting a far-future journal deadline', async () => {
+    pipeline.submit.mockResolvedValue(
+      Result.Ok({
+        type: 'result_accepted',
+        submission: {
+          ...execution,
+          providerRequestId: 'paid',
+          attemptDeadlineAt: '2099-01-01T00:00:00Z',
+          accountingIdentity: { receipt: { id: 'accepted-call' } },
+        },
+      })
+    );
+    pipeline.persistSubmission
+      .mockResolvedValueOnce(
+        Result.Error(
+          new SubmissionPersistenceError(
+            new AppError({ code: 'DB_DOWN', category: 'system', status: 503 }),
+            true,
+            'unknown'
+          )
+        )
+      )
+      .mockResolvedValue(
+        Result.Ok({
+          type: 'result_submitted',
+          providerRequestId: 'paid',
+          receiptCaptured: true,
+        })
+      );
+    pipeline.poll.mockResolvedValue(Result.Ok({ type: 'result_succeeded' }));
+    expect(await renderResultWorkflow(attempt)).toEqual({
+      result: 'result_succeeded',
+    });
+    expect(pipeline.reconcileSubmission).toHaveBeenCalledOnce();
+    expect(pipeline.submit).toHaveBeenCalledOnce();
+    expect(sleep).toHaveBeenCalledExactlyOnceWith(5000);
+    expect(pipeline.dispatchAccounting).toHaveBeenCalledWith('accepted-call');
   });
   it('clamps its last wait to the deadline and never marks transient exhaustion failed', async () => {
     pipeline.submit.mockResolvedValue(

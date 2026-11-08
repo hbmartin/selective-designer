@@ -69,7 +69,11 @@ const build = (overrides?: RenderingOverrides) => {
     overrides?.enabledModelIds ?? getAiProvidersConfig().enabledModelIds;
   const renderRepository =
     overrides?.renderRepository ??
-    createRenderRepository({ db: kernel.db, modelOrder: enabledModelIds });
+    createRenderRepository({
+      clock: kernel.clock,
+      db: kernel.db,
+      modelOrder: enabledModelIds,
+    });
   return createRenderingUseCases({
     renderRepository,
     resultOutputReferences: createResultOutputReferences(

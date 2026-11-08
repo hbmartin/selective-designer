@@ -2,6 +2,7 @@ import { type Result as BoxedResult, Result } from '@bloodyowl/boxed';
 import { and, asc, desc, eq, inArray, isNull, lte, or, sql } from 'drizzle-orm';
 
 import type { ProviderCostSource } from '@/modules/kernel';
+import type { Clock } from '@/modules/kernel/application/ports/clock';
 import { AppError } from '@/modules/kernel/domain/errors/app-error';
 import {
   toBatchId,
@@ -38,7 +39,10 @@ import {
 } from './schema';
 import type { AcceptedRenderSubmission } from '../../application/ports/ports';
 import { SubmissionWriteError } from '../../application/ports/submission-persistence-error';
-import { renderAttemptDeadline } from '../../domain/render-retry-policy';
+import {
+  isPlausibleRenderStart,
+  renderAttemptDeadline,
+} from '../../domain/render-retry-policy';
 
 const savedSubmissionWhere = (input: AcceptedRenderSubmission) =>
   and(
@@ -92,7 +96,8 @@ const toDraft = (row: RenderDraftRow): BoxedResult<Draft, AppError> => {
 };
 
 const toResult = (
-  row: RenderResultRow
+  row: RenderResultRow,
+  now: Date
 ): BoxedResult<RenderResult, AppError> => {
   const id = toRenderResultId(row.id);
   const renderId = toRenderId(row.renderId);
@@ -104,7 +109,13 @@ const toResult = (
     renderId.isError() ||
     (outputImageId !== undefined && outputImageId.isError()) ||
     !isModelId(row.modelId) ||
-    !isRenderResultStatus(row.status)
+    !isRenderResultStatus(row.status) ||
+    !(row.attemptStartedAt instanceof Date) ||
+    !Number.isFinite(row.attemptStartedAt.getTime()) ||
+    ((row.status === 'pending' || row.status === 'submitted') &&
+      (renderAttemptDeadline(row.attemptStartedAt).type ===
+        'render_deadline_invalid' ||
+        !isPlausibleRenderStart(row.attemptStartedAt.getTime(), now.getTime())))
   ) {
     return Result.Error(rowError(row.id));
   }
@@ -133,7 +144,8 @@ const toResult = (
 
 const toRender = (
   row: RenderRow,
-  resultRows: RenderResultRow[]
+  resultRows: RenderResultRow[],
+  now: Date
 ): BoxedResult<Render, AppError> => {
   const id = toRenderId(row.id);
   const designId = toDesignId(row.designId);
@@ -153,7 +165,7 @@ const toRender = (
   }
   const results: RenderResult[] = [];
   for (const resultRow of resultRows) {
-    const parsed = toResult(resultRow);
+    const parsed = toResult(resultRow, now);
     if (parsed.isError()) return Result.Error(parsed.getError());
     results.push(parsed.get());
   }
@@ -174,9 +186,11 @@ const byCreation = [asc(resultTable.createdAt), asc(resultTable.id)];
 
 export const createRenderRepository = ({
   db,
+  clock,
   modelOrder = modelIds,
 }: {
   db: DbLike;
+  clock: Clock;
   modelOrder?: readonly string[];
 }): RenderRepository => {
   // Disabled models can still have historical results. Keep them in catalog order.
@@ -203,7 +217,8 @@ export const createRenderRepository = ({
         row,
         resultRows
           .filter((r) => r.renderId === row.id)
-          .toSorted((a, b) => modelRank(a.modelId) - modelRank(b.modelId))
+          .toSorted((a, b) => modelRank(a.modelId) - modelRank(b.modelId)),
+        clock.now()
       );
       if (parsed.isError())
         return Result.Error<Render[], AppError>(parsed.getError());
@@ -535,7 +550,13 @@ export const createRenderRepository = ({
         )
           return Result.Ok({ type: 'result_attempt_superseded' });
         const deadline = renderAttemptDeadline(row.attemptStartedAt);
-        if (deadline.type === 'render_deadline_invalid')
+        if (
+          deadline.type === 'render_deadline_invalid' ||
+          !isPlausibleRenderStart(
+            row.attemptStartedAt.getTime(),
+            clock.now().getTime()
+          )
+        )
           return Result.Error(rowError(input.resultId));
         return Result.Ok({
           type: 'submission_recovery_window',
@@ -549,7 +570,9 @@ export const createRenderRepository = ({
       try {
         if (isRootDatabase(db)) {
           return await runRepositoryTransaction(db, (tx) =>
-            createRenderRepository({ db: tx, modelOrder }).saveOutput(input)
+            createRenderRepository({ db: tx, clock, modelOrder }).saveOutput(
+              input
+            )
           );
         }
         const captured = await createProviderReceiptStore({ db }).capture(
@@ -604,7 +627,9 @@ export const createRenderRepository = ({
       try {
         if (isRootDatabase(db)) {
           return await runRepositoryTransaction(db, (tx) =>
-            createRenderRepository({ db: tx, modelOrder }).retryAttempt(input)
+            createRenderRepository({ db: tx, clock, modelOrder }).retryAttempt(
+              input
+            )
           );
         }
         const [previous] = await db
@@ -671,6 +696,30 @@ export const createRenderRepository = ({
       }
     },
     async failResultAttempt(input) {
+      const matchesFailed = async () => {
+        const [saved] = await db
+          .select({ id: resultTable.id })
+          .from(resultTable)
+          .where(
+            and(
+              eq(resultTable.id, input.resultId),
+              eq(resultTable.attempt, input.attempt),
+              eq(resultTable.workflowRunId, input.workflowRunId),
+              eq(resultTable.status, 'failed'),
+              eq(resultTable.errorMessage, input.reason.slice(0, 500)),
+              input.providerRequestId === undefined
+                ? isNull(resultTable.providerRequestId)
+                : input.submissionPersistenceFailure
+                  ? or(
+                      isNull(resultTable.providerRequestId),
+                      eq(resultTable.providerRequestId, input.providerRequestId)
+                    )
+                  : eq(resultTable.providerRequestId, input.providerRequestId)
+            )
+          )
+          .limit(1);
+        return saved !== undefined;
+      };
       try {
         const rows = await db
           .update(resultTable)
@@ -711,12 +760,21 @@ export const createRenderRepository = ({
           )
           .returning({ id: resultTable.id });
         return Result.Ok({
-          type: rows.length
-            ? 'result_marked_failed'
-            : 'result_attempt_superseded',
+          type:
+            rows.length || (await matchesFailed())
+              ? 'result_marked_failed'
+              : 'result_attempt_superseded',
         });
       } catch (error) {
-        return Result.Error(dbError(error));
+        const original = dbError(error);
+        try {
+          if (await matchesFailed())
+            return Result.Ok({ type: 'result_marked_failed' });
+        } catch {
+          // Retain the original write diagnostic when replay confirmation is unavailable.
+          return Result.Error(original);
+        }
+        return Result.Error(original);
       }
     },
     async publicationContext(resultId, lock) {
@@ -738,7 +796,7 @@ export const createRenderRepository = ({
           ? query.for('update', { of: resultTable })
           : query);
         if (!row) return Result.Ok({ type: 'result_not_found' });
-        const result = toResult(row.result);
+        const result = toResult(row.result, clock.now());
         const designId = toDesignId(row.designId);
         const sourceId = toImageId(row.sourceId);
         if (result.isError() || designId.isError() || sourceId.isError())

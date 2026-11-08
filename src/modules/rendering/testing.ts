@@ -5,7 +5,12 @@ export {
 export { cleanupRenderOutput } from './application/use-cases/output-cleanup';
 export { discardLostOutput } from './application/use-cases/pipeline';
 export { cleanupAttemptEligibility } from './domain/render-output-target';
-export { RENDER_RETRY_AFTER_MS } from './domain/render-retry-policy';
+export {
+  isPlausibleRenderStart,
+  RENDER_CLOCK_SKEW_MS,
+  RENDER_RETRY_AFTER_MS,
+  renderAttemptDeadline,
+} from './domain/render-retry-policy';
 export {
   acknowledgmentSelection,
   findCleanupRecoveryRequest,
@@ -31,9 +36,11 @@ export {
   updateEdit,
 } from './presentation/editor/draft-store';
 export {
+  FAILURE_RECOVERY_MS,
+  markFailedStep,
   MAX_POLLS,
   pollDelayMs,
+  reconcileSubmissionStep,
   renderResultWorkflow,
   renderWorkflow,
 } from './transport/workflows/render-workflow';
-export { reconcileSubmissionStep } from './transport/workflows/render-workflow';

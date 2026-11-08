@@ -42,7 +42,10 @@ import {
   safeRenderIdentity,
   validateRenderOutputTarget,
 } from '../../domain/render-output-target';
-import { renderAttemptDeadline } from '../../domain/render-retry-policy';
+import {
+  isPlausibleRenderStart,
+  renderAttemptDeadline,
+} from '../../domain/render-retry-policy';
 
 const OUTPUT_MAX_BYTES = 40 * 1024 * 1024;
 const OUTPUT_TYPES = ['image/png', 'image/jpeg', 'image/webp'] as const;
@@ -158,7 +161,13 @@ export async function submitResult(
   if (result.status !== 'pending')
     return Result.Ok({ type: 'result_not_runnable' });
   const deadline = renderAttemptDeadline(result.attemptStartedAt);
-  if (deadline.type === 'render_deadline_invalid')
+  if (
+    deadline.type === 'render_deadline_invalid' ||
+    !isPlausibleRenderStart(
+      result.attemptStartedAt.getTime(),
+      deps.clock.now().getTime()
+    )
+  )
     return Result.Error(
       new AppError({
         code: 'RENDER_SUBMISSION_DEADLINE_INVALID',

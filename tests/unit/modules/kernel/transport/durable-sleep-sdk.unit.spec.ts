@@ -13,10 +13,6 @@ const { createSleep } = await import(
   pathToFileURL(path.join(sdkRoot, 'workflow/sleep.js')).href
 );
 const sleepBinding = Symbol.for('WORKFLOW_SLEEP');
-const originalSleepBinding = Object.getOwnPropertyDescriptor(
-  globalThis,
-  sleepBinding
-);
 
 type WaitEvent = {
   eventType: 'wait_created' | 'wait_completed';
@@ -28,9 +24,7 @@ type WaitEvent = {
 describe('durable sleep against the pinned SDK', () => {
   afterEach(() => {
     try {
-      if (originalSleepBinding)
-        Object.defineProperty(globalThis, sleepBinding, originalSleepBinding);
-      else Reflect.deleteProperty(globalThis, sleepBinding);
+      vi.unstubAllGlobals();
     } finally {
       vi.useRealTimers();
     }
@@ -58,10 +52,7 @@ describe('durable sleep against the pinned SDK', () => {
       onWorkflowError: vi.fn(),
     };
     const settled = vi.fn();
-    Object.defineProperty(globalThis, sleepBinding, {
-      configurable: true,
-      value: createSleep(ctx),
-    });
+    vi.stubGlobal(sleepBinding, createSleep(ctx));
     const waiting = sleep(2000);
     const observed = waiting.then(
       () => settled('resolved'),

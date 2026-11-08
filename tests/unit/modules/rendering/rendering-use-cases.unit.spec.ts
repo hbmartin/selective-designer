@@ -574,8 +574,22 @@ describe('render pipeline', () => {
     return { ctx, renderId: renderId as RenderId, resultFor };
   };
 
-  it.each([new Date(NaN), new Date(8_640_000_000_000_000 - 60_000)])(
-    'rejects an unrepresentable deadline before provider access: %s',
+  const acceptPendingResult = async (
+    ctx: ReturnType<typeof setup>,
+    result: RenderResult
+  ) => {
+    const accepted = okValue(await ctx.rawPipeline.submit(execution(result)));
+    if (accepted.type !== 'result_accepted')
+      throw new Error('missing acceptance');
+    return accepted.submission;
+  };
+  it.each([
+    new Date(NaN),
+    new Date(8_640_000_000_000_000 - 60_000),
+    new Date(now.getTime() + 300_001),
+    new Date('2099-01-01T00:00:00Z'),
+  ])(
+    'rejects an invalid or implausible deadline before provider access: %s',
     async (startedAt) => {
       const { ctx, resultFor } = await submitted();
       const result = resultFor('krea-3');
@@ -592,10 +606,7 @@ describe('render pipeline', () => {
   );
   it.each([
     [new Date('2026-11-02T12:00:00Z'), '2026-11-02T12:30:00.000Z'],
-    [
-      new Date(8_640_000_000_000_000 - 30 * 60_000),
-      '+275760-09-13T00:00:00.000Z',
-    ],
+    [new Date(now.getTime() + 300_000), '2026-11-02T12:35:00.000Z'],
   ])(
     'accepts a representable deadline from %s',
     async (startedAt, deadlineAt) => {
@@ -611,6 +622,55 @@ describe('render pipeline', () => {
       expect(ctx.models.get('krea-3')?.requests).toHaveLength(1);
     }
   );
+  it.each([
+    new Date(NaN),
+    new Date(8_640_000_000_000_000 - 60_000),
+    new Date(now.getTime() + 300_001),
+  ])(
+    'returns the production invalid-row outcome from fake reconciliation: %s',
+    async (startedAt) => {
+      const { ctx, resultFor } = await submitted();
+      const result = resultFor('krea-3');
+      const accepted = await acceptPendingResult(ctx, result);
+      result.attemptStartedAt = startedAt;
+      expect(
+        errorValue(await ctx.rawPipeline.reconcileSubmission(accepted))
+      ).toMatchObject({ code: 'RENDER_ROW_INVALID', retryable: false });
+      expect(ctx.models.get('krea-3')?.requests).toHaveLength(1);
+    }
+  );
+  it('replays fake failure writes without changing completion or accepting another reason', async () => {
+    const { ctx, resultFor } = await submitted();
+    const result = resultFor('krea-3');
+    const accepted = await acceptPendingResult(ctx, result);
+    const failure = {
+      ...execution(result),
+      providerRequestId: accepted.providerRequestId,
+      submissionPersistenceFailure: true as const,
+      reason: 'first failure',
+      now,
+    };
+    expect(
+      okValue(await ctx.renders.repository.failResultAttempt(failure)).type
+    ).toBe('result_marked_failed');
+    expect(
+      okValue(
+        await ctx.renders.repository.failResultAttempt({
+          ...failure,
+          now: new Date(now.getTime() + 5000),
+        })
+      ).type
+    ).toBe('result_marked_failed');
+    expect(result.completedAt).toEqual(now);
+    expect(
+      okValue(
+        await ctx.renders.repository.failResultAttempt({
+          ...failure,
+          reason: 'another failure',
+        })
+      ).type
+    ).toBe('result_attempt_superseded');
+  });
   it('logs secondary failure-write diagnostics without replacing the original reason', async () => {
     const { ctx, resultFor } = await submitted();
     const original = new AppError({
