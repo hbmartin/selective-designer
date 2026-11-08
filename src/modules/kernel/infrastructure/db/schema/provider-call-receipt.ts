@@ -41,6 +41,9 @@ export const providerCallReceipt = pgTable(
       t.createdAt,
       t.id
     ),
+    index('provider_call_receipt_pending_id_idx')
+      .on(t.id)
+      .where(sql`${t.deliveredAt} is null`),
     uniqueIndex('provider_call_receipt_request_idx').on(
       t.provider,
       t.endpoint,

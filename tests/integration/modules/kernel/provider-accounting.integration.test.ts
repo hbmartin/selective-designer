@@ -198,6 +198,103 @@ describe('durable provider accounting', () => {
     expect(next.ids).toHaveLength(1);
     expect(page.ids).not.toEqual(next.ids);
   });
+  const seedReceiptPages = (total: number) =>
+    database.db.execute(sql`
+      insert into provider_call_receipt
+        (id, "createdAt", purpose, provider, endpoint, status, "costSource", details, "startedAt", "deliveredAt")
+      select 'receipt-page-' || lpad(n::text, 6, '0'),
+        case when n % 7 = 0 then timestamp '2026-11-07 00:00:00'
+          else timestamp '2026-11-05 00:00:00' + (((${total} - n) % 17) * interval '1 millisecond') end,
+        'render', 'fal', 'paging-test', 'succeeded', 'unavailable', '{}'::jsonb,
+        timestamp '2026-11-05 00:00:00',
+        case when n % 10 = 0 then null else timestamp '2026-11-06 00:00:00' end
+      from generate_series(1, ${total}::integer) as series(n)
+    `);
+  it('pages by ID past delivered and post-cutoff rows without changing earlier pages', async () => {
+    await seedReceiptPages(3500);
+    const expected = Array.from({ length: 3500 }, (_, i) => i + 1)
+      .filter((n) => n % 10 === 0 && n % 7 !== 0)
+      .map((n) => `receipt-page-${String(n).padStart(6, '0')}`);
+    let after: string | undefined;
+    for (let offset = 0; offset < expected.length; offset += 100) {
+      // oxlint-disable-next-line no-await-in-loop -- verify the production keyset cursor with earlier rows still pending.
+      const page = okValue(
+        await pendingProviderReceipts(database.db, {
+          before: now,
+          after,
+          limit: 100,
+        })
+      );
+      expect(page.ids).toEqual(expected.slice(offset, offset + 100));
+      after = page.ids.at(-1);
+    }
+    expect(
+      okValue(
+        await pendingProviderReceipts(database.db, {
+          before: now,
+          after,
+          limit: 100,
+        })
+      ).ids
+    ).toEqual([]);
+    expect(
+      okValue(
+        await pendingProviderReceipts(database.db, { before: now, limit: 100 })
+      ).ids
+    ).toEqual(expected.slice(0, 100));
+  });
+  it('migrates the pending ID index with the undelivered predicate', async () => {
+    const result = await database.db.$client.query<{ indexdef: string }>(
+      "select indexdef from pg_indexes where schemaname = 'public' and indexname = 'provider_call_receipt_pending_id_idx'"
+    );
+    expect(result.rows).toHaveLength(1);
+    expect(result.rows[0]!.indexdef).toMatch(
+      /USING btree \(id\) WHERE \("deliveredAt" IS NULL\)/u
+    );
+  });
+  it.skipIf(!process.env.RECOVERY_TEST_DATABASE_URL)(
+    'uses the partial ID index for first and later native PostgreSQL pages',
+    async () => {
+      await seedReceiptPages(50_000);
+      await database.db.execute(sql`analyze provider_call_receipt`);
+      for (const after of [undefined, 'receipt-page-025000']) {
+        const query = vi.spyOn(database.db.$client, 'query');
+        let statement: string;
+        let parameters: unknown[];
+        try {
+          // oxlint-disable-next-line no-await-in-loop -- capture the actual production query for each cursor position.
+          const page = okValue(
+            await pendingProviderReceipts(database.db, {
+              before: now,
+              after,
+              limit: 100,
+            })
+          );
+          expect(page.ids).toHaveLength(100);
+          expect(query).toHaveBeenCalledOnce();
+          const [input, values] = query.mock.calls[0]!;
+          statement =
+            typeof input === 'string'
+              ? input
+              : (input as { text: string }).text;
+          parameters = values as unknown[];
+        } finally {
+          query.mockRestore();
+        }
+        // oxlint-disable-next-line no-await-in-loop -- explain the same SQL and bound values without disabling planner choices.
+        const explained = await database.db.$client.query<{
+          'QUERY PLAN': { Plan: { 'Actual Rows': number } }[];
+        }>(`EXPLAIN (ANALYZE, BUFFERS, FORMAT JSON) ${statement}`, parameters);
+        const plan = explained.rows[0]!['QUERY PLAN'][0]!;
+        expect(JSON.stringify(plan)).toContain(
+          'provider_call_receipt_pending_id_idx'
+        );
+        expect(JSON.stringify(plan)).not.toContain('"Node Type":"Sort"');
+        expect(plan.Plan['Actual Rows']).toBe(100);
+        console.info('Pending receipt page plan', { after, plan });
+      }
+    }
+  );
   it('includes newly captured receipts at a UTC cutoff', async () => {
     okValue(
       await createProviderReceiptStore({ db: database.db }).capture(
