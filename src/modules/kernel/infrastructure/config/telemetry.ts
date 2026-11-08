@@ -81,11 +81,6 @@ export function getTelemetryConfig(): TelemetryConfig {
 
   const env = parseEnv(telemetryEnvSchema);
   const isProduction = isProdRuntimeEnvironment(env);
-  if (isProduction && !env.OTEL_COLLECTOR_URL) {
-    throw new ConfigurationError(
-      'OTEL_COLLECTOR_URL is required in production telemetry configuration.'
-    );
-  }
   if (
     isProduction &&
     env.OTEL_COLLECTOR_URL &&

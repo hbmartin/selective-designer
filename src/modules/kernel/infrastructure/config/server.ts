@@ -5,7 +5,6 @@ import {
 } from './ai-providers';
 import { getAuthConfig } from './auth';
 import { getDatabaseConfig } from './database';
-import { getEmailConfig } from './email';
 import { shouldSkipEnvValidation } from './env-schema';
 import { getHttpConfig } from './http';
 import { getLoggerConfig } from './logger';
@@ -17,7 +16,6 @@ function validateInfrastructureConfig() {
   getAccountingConfig();
   getAuthConfig();
   getDatabaseConfig();
-  getEmailConfig();
   getHttpConfig();
   getLoggerConfig();
   getRedisConfig();
