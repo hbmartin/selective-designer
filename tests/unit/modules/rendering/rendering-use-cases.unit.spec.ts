@@ -43,6 +43,8 @@ import {
 import {
   createPngMaskCompositor,
   discardLostOutput,
+  SubmissionPersistenceError,
+  SubmissionWriteError,
 } from '@/modules/rendering/testing';
 
 const execution = (result: RenderResult) => ({
@@ -731,6 +733,7 @@ describe('render pipeline', () => {
     expect(okValue(await ctx.pipeline.submit(execution(result)))).toEqual({
       type: 'result_submitted',
       providerRequestId: 'req-1',
+      receiptCaptured: true,
     });
     expect(okValue(await ctx.pipeline.submit(execution(result)))).toEqual({
       type: 'result_already_submitted',
@@ -1785,7 +1788,13 @@ describe('accepted submission handoff', () => {
   };
   it('interprets matching repository evidence as capture confirmation without reading or recapturing the receipt', async () => {
     const ctx = await acceptedSetup();
-    okValue(await ctx.rawPipeline.persistSubmission(ctx.accepted));
+    expect(
+      okValue(await ctx.rawPipeline.persistSubmission(ctx.accepted))
+    ).toEqual({
+      type: 'result_submitted',
+      providerRequestId: ctx.accepted.providerRequestId,
+      receiptCaptured: true,
+    });
     const capture = vi.spyOn(ctx.calls.accounting, 'capture');
     expect(
       okValue(await ctx.renders.repository.reconcileSubmission(ctx.accepted))
@@ -1849,6 +1858,56 @@ describe('accepted submission handoff', () => {
     ).toBe('result_submitted');
     expect(ctx.models.get('krea-3')!.requests).toHaveLength(1);
   });
+  it('does not attempt submission persistence or confirm capture when receipt capture fails', async () => {
+    const ctx = await acceptedSetup();
+    const original = new AppError({
+      code: 'RECEIPT_UNAVAILABLE',
+      category: 'system',
+      status: 503,
+    });
+    vi.spyOn(ctx.calls.accounting, 'capture').mockResolvedValue(
+      Result.Error(original)
+    );
+    const save = vi.spyOn(ctx.renders.repository, 'saveSubmission');
+    const result = await ctx.rawPipeline.persistSubmission(ctx.accepted);
+    expect(result.isError()).toBe(true);
+    const error = result.getError();
+    expect(error).toBeInstanceOf(SubmissionPersistenceError);
+    expect(error).toMatchObject({
+      receiptCaptured: false,
+      submissionWrite: 'not_attempted',
+      cause: original,
+    });
+    expect(save).not.toHaveBeenCalled();
+    expect(ctx.models.get('krea-3')!.requests).toHaveLength(1);
+  });
+  it.each(['rejected', 'unknown'] as const)(
+    'preserves capture confirmation and %s write certainty after persistence fails',
+    async (certainty) => {
+      const ctx = await acceptedSetup();
+      const original = new SubmissionWriteError(
+        new AppError({
+          code: 'SUBMISSION_WRITE_FAILED',
+          category: 'system',
+          status: 500,
+        }),
+        certainty
+      );
+      vi.spyOn(ctx.renders.repository, 'saveSubmission').mockResolvedValue(
+        Result.Error(original)
+      );
+      const result = await ctx.rawPipeline.persistSubmission(ctx.accepted);
+      expect(result.isError()).toBe(true);
+      expect(result.getError()).toMatchObject({
+        receiptCaptured: true,
+        submissionWrite: certainty,
+        cause: original,
+      });
+      expect(ctx.calls.receipts.size).toBe(1);
+      expect(ctx.result.status).toBe('pending');
+      expect(ctx.models.get('krea-3')!.requests).toHaveLength(1);
+    }
+  );
   it.each([
     'submission_recovery_failed',
     'PROVIDER_RECEIPT_IDENTITY_MISMATCH',
@@ -1895,8 +1954,8 @@ describe('accepted submission handoff', () => {
       if (loss === 'replacement') ctx.result.attempt += 1;
       else ctx.renders.renders.splice(0);
       expect(
-        okValue(await ctx.rawPipeline.persistSubmission(ctx.accepted)).type
-      ).toBe('result_attempt_superseded');
+        okValue(await ctx.rawPipeline.persistSubmission(ctx.accepted))
+      ).toEqual({ type: 'result_attempt_superseded', receiptCaptured: true });
       expect([...ctx.calls.receipts.values()]).toMatchObject([
         {
           status: 'submitted',

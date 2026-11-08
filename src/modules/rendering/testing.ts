@@ -6,7 +6,10 @@ export { cleanupRenderOutput } from './application/use-cases/output-cleanup';
 export { discardLostOutput } from './application/use-cases/pipeline';
 export { cleanupAttemptEligibility } from './domain/render-output-target';
 export { RENDER_RETRY_AFTER_MS } from './domain/render-retry-policy';
-export { findCleanupRecoveryRequest } from './infrastructure/drizzle/output-cleanup-acknowledgment-drizzle';
+export {
+  acknowledgmentSelection,
+  findCleanupRecoveryRequest,
+} from './infrastructure/drizzle/output-cleanup-acknowledgment-drizzle';
 export { createOutputCleanupStore } from './infrastructure/drizzle/output-cleanup-drizzle';
 export {
   blockedOutstanding,

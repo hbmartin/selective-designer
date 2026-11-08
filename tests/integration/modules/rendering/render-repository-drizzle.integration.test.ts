@@ -1092,6 +1092,26 @@ describe('RenderRepositoryDrizzle', () => {
       }),
     },
   });
+  it.skipIf(!process.env.RECOVERY_TEST_DATABASE_URL)(
+    'rejects an unreadable persisted recovery timestamp without transient retries',
+    async () => {
+      const { input, startedAt } = await newAttempt();
+      okValue(await repository.claimExecution(input));
+      // PostgreSQL accepts this finite date; the native driver's JS Date cannot represent it.
+      await database.db.execute(
+        sql`update render_result set "attemptStartedAt" = '275760-09-14 00:00:00'::timestamp where id = ${input.resultId}`
+      );
+      const result = await repository.reconcileSubmission(
+        journaled(input, startedAt)
+      );
+      expect(result.getError()).toMatchObject({
+        code: 'RENDER_ROW_INVALID',
+        category: 'system',
+        status: 500,
+        retryable: false,
+      });
+    }
+  );
   it('restores only the matching owned attempt original cutoff and stops replaced or deleted attempts', async () => {
     const { input, startedAt } = await newAttempt();
     okValue(await repository.claimExecution(input));

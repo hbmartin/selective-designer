@@ -51,7 +51,7 @@ async function submitStep(input: Execution) {
 async function persistSubmissionStep(input: AcceptedRenderSubmission) {
   'use step';
   const result = await (await pipeline()).persistSubmission(input);
-  if (result.isOk()) return { ...result.get(), receiptCaptured: true };
+  if (result.isOk()) return result.get();
   const error = result.getError();
   return {
     type: 'submission_persistence_error' as const,
@@ -142,6 +142,7 @@ async function recoverSubmission(input: AcceptedRenderSubmission) {
       // oxlint-disable-next-line no-await-in-loop -- always attempt the journaled acceptance once.
       result = await persistSubmissionStep(input);
     } catch (error) {
+      // oxlint-disable-next-line no-await-in-loop -- retain diagnostics before retrying the same acceptance.
       await reportException(error);
       result = {
         type: 'submission_persistence_error' as const,
@@ -175,10 +176,11 @@ async function recoverSubmission(input: AcceptedRenderSubmission) {
     }
     const remaining = deadline - Date.now();
     if (remaining <= 0) return unresolved(lastCode);
-    // oxlint-disable-next-line no-await-in-loop -- durable backoff never extends the original deadline.
     try {
+      // oxlint-disable-next-line no-await-in-loop -- durable backoff never extends the original deadline.
       await sleep(Math.min(persistenceDelayMs(retry++), remaining));
     } catch (error) {
+      // oxlint-disable-next-line no-await-in-loop -- diagnostics precede reconciliation of this interrupted recovery.
       await reportException(error);
       return finishRecovery();
     }
@@ -207,19 +209,6 @@ async function persistenceExceptionStep(
   });
 }
 persistenceExceptionStep.maxRetries = 0;
-async function pollingInterruptedStep(
-  input: Execution,
-  code: string,
-  diagnostics: ReturnType<typeof safeErrorDiagnostics>
-) {
-  'use step';
-  (await pipeline()).reportPollingInterrupted({
-    ...input,
-    code,
-    ...diagnostics,
-  });
-}
-pollingInterruptedStep.maxRetries = 0;
 async function dispatchAccountingStep(receiptId: string) {
   'use step';
   return (await pipeline()).dispatchAccounting(
@@ -303,20 +292,7 @@ async function runResult(input: Execution): Promise<string> {
       const result = await pollStep({ ...input, providerRequestId });
       if (result.type !== 'result_pending') return result.type;
       // oxlint-disable-next-line no-await-in-loop -- durable backoff.
-      try {
-        await sleep(pollDelayMs(poll));
-      } catch (error) {
-        try {
-          await pollingInterruptedStep(
-            executionOf(input),
-            failureCode(error, 'RENDER_POLLING_WAIT_INTERRUPTED'),
-            safeErrorDiagnostics(error)
-          );
-        } catch {
-          /* Diagnostics cannot fail an accepted request after a wait interruption. */
-        }
-        return 'result_polling_unresolved';
-      }
+      await sleep(pollDelayMs(poll));
     }
     return await fail('timed_out');
   } catch (error) {

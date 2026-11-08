@@ -87,19 +87,6 @@ export function createRenderingPipelineUseCases(deps: RenderingPipelineDeps) {
         details: input,
       });
     },
-    reportPollingInterrupted: (input: {
-      resultId: string;
-      attempt: number;
-      workflowRunId: string;
-      code: string;
-      errorNames: string[];
-      errorCodes: string[];
-    }) => {
-      deps.logger.warn({
-        event: 'rendering.result.polling_interrupted',
-        details: input,
-      });
-    },
     markFailed: (input: Input<typeof markResultFailed>) =>
       markResultFailed(deps, input),
     copyDraftPlacements: (input: Input<typeof copyDraftPlacements>) =>
