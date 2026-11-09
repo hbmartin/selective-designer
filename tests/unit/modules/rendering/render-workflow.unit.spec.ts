@@ -17,6 +17,7 @@ const pipeline = vi.hoisted(() => ({
   poll: vi.fn(),
   markFailed: vi.fn(),
   failureWarning: vi.fn(),
+  failureError: vi.fn(),
 }));
 vi.mock('workflow', () => ({
   FatalError: class FatalError extends Error {},
@@ -34,7 +35,10 @@ vi.mock('@/composition/rendering-pipeline', () => ({
   },
 }));
 vi.mock('@/composition/render-failure-diagnostics', () => ({
-  getRenderFailureLogger: () => ({ warn: pipeline.failureWarning }),
+  getRenderFailureLogger: () => ({
+    warn: pipeline.failureWarning,
+    error: pipeline.failureError,
+  }),
 }));
 const { sleep } = await import('workflow');
 const { renderResultWorkflow, renderWorkflow, MAX_POLLS, pollDelayMs } =
@@ -341,6 +345,9 @@ describe('render workflow', () => {
       pipeline.failureWarning.mockImplementation(() => {
         throw new Error('diagnostics unavailable');
       });
+      pipeline.failureError.mockImplementation(() => {
+        throw new Error('diagnostics unavailable');
+      });
       expect(await runEntry(entry)).toBe(
         'result_failure_persistence_unresolved'
       );
@@ -471,6 +478,9 @@ describe('render workflow', () => {
     pipeline.failureWarning.mockImplementation(() => {
       throw new Error('logger failed');
     });
+    pipeline.failureError.mockImplementation(() => {
+      throw new Error('logger failed');
+    });
     expect(await renderResultWorkflow(attempt)).toEqual({
       result: 'result_failure_persistence_unresolved',
     });
@@ -490,7 +500,7 @@ describe('render workflow', () => {
       result: 'result_failure_persistence_unresolved',
     });
     expect(pipeline.markFailed).not.toHaveBeenCalled();
-    expect(pipeline.failureWarning).toHaveBeenCalledWith(
+    expect(pipeline.failureError).toHaveBeenCalledWith(
       expect.objectContaining({
         event: 'rendering.result.failure_persistence_unresolved',
         details: expect.objectContaining({
@@ -501,7 +511,7 @@ describe('render workflow', () => {
         }),
       })
     );
-    expect(JSON.stringify(pipeline.failureWarning.mock.calls)).not.toContain(
+    expect(JSON.stringify(pipeline.failureError.mock.calls)).not.toContain(
       'private'
     );
   });
@@ -511,7 +521,7 @@ describe('render workflow', () => {
     );
     expect(pipeline.markFailed).not.toHaveBeenCalled();
     expect(sleep).not.toHaveBeenCalled();
-    expect(pipeline.failureWarning).toHaveBeenCalledWith(
+    expect(pipeline.failureError).toHaveBeenCalledWith(
       expect.objectContaining({
         event: 'rendering.result.failure_persistence_unresolved',
       })

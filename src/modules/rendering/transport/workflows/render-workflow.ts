@@ -284,7 +284,7 @@ async function failureDiagnosticStep(
 ) {
   'use step';
   const { getRenderFailureLogger } = await loadFailureDiagnostics();
-  getRenderFailureLogger().warn({
+  getRenderFailureLogger()[unresolved ? 'error' : 'warn']({
     event: unresolved
       ? 'rendering.result.failure_persistence_unresolved'
       : 'rendering.result.failure_persistence_exception',
