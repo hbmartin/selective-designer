@@ -127,7 +127,11 @@ pnpm codeql:analyze  # Analyze that DB and write test-results/codeql/start-ui-we
 
 #### Resend delivery
 
-Emails are sent with [Resend](https://resend.com). Configure `RESEND_API_KEY`
+Email delivery is optional. Startup and password sign-in do not require any
+`RESEND_*` or `EMAIL_*` variables. Email configuration is validated only when
+an email feature is used.
+
+To send emails with [Resend](https://resend.com), configure `RESEND_API_KEY`
 with a Resend API key and set `EMAIL_FROM` to a sender from a verified domain.
 Set `RESEND_WEBHOOK_SECRET` to the Resend/Svix signing secret for
 `/api/webhooks/resend` delivery status callbacks.
@@ -210,7 +214,8 @@ Use `admin` to provision an operator account. For recovery, run `pnpm auth:passw
 Before deploying anywhere:
 
 * Use Node.js 24 or newer to match the current `package.json` engine.
-* Set production values for the required variables in `.env.example`, especially `DATABASE_URL`, `AUTH_SECRET`, `VITE_BASE_URL`, S3 storage, email configuration, `FAL_KEY`, `BFL_API_KEY`, and any public `VITE_*` values.
+* Set production values for the required variables in `.env.example`, especially `DATABASE_URL`, `AUTH_SECRET`, `CRON_SECRET`, `VITE_BASE_URL`, S3 storage, `FAL_KEY`, `BFL_API_KEY`, and any public `VITE_*` values. Email configuration and an external OpenTelemetry collector are optional.
+* Connect Upstash for shared sessions and rate limits. Both `UPSTASH_REDIS_REST_URL` / `UPSTASH_REDIS_REST_TOKEN` and Vercel's `KV_REST_API_URL` / `KV_REST_API_TOKEN` naming conventions are supported. An explicit Upstash pair takes precedence; partial pairs fail validation.
 * Point `VITE_BASE_URL` at the deployed HTTPS URL. For preview domains, also configure `AUTH_ALLOWED_HOSTS` as needed.
 * Production builds require both model keys. The GitHub Actions compilation job uses placeholders that Vercel rejects.
 * Run your versioned migration command against the production database before serving production traffic. Do not use `pnpm db:push` for production deployments because it bypasses migration history.

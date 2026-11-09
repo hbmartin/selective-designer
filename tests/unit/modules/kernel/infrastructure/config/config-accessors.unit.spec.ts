@@ -11,6 +11,8 @@ describe('server config accessors', () => {
     vi.resetModules();
     vi.unstubAllEnvs();
     vi.stubEnv('SKIP_ENV_VALIDATION', undefined);
+    vi.stubEnv('KV_REST_API_URL', undefined);
+    vi.stubEnv('KV_REST_API_TOKEN', undefined);
   });
 
   it('caches parsed database config', async () => {
@@ -314,6 +316,74 @@ describe('server config accessors', () => {
     expect(() => getRedisConfig()).toThrow('UPSTASH_REDIS_REST_TOKEN');
   });
 
+  it('uses the Redis credentials installed by the Vercel integration', async () => {
+    const token = makeTestSecret('vercel-redis');
+    vi.stubEnv('UPSTASH_REDIS_REST_URL', undefined);
+    vi.stubEnv('UPSTASH_REDIS_REST_TOKEN', undefined);
+    vi.stubEnv('KV_REST_API_URL', 'https://redis.example.com');
+    vi.stubEnv('KV_REST_API_TOKEN', token);
+    const { getRedisConfig } =
+      await import('@/modules/kernel/infrastructure/config/redis');
+
+    expect(getRedisConfig()).toEqual({
+      restUrl: 'https://redis.example.com',
+      restToken: token,
+    });
+  });
+
+  it.each(['KV_REST_API_URL', 'KV_REST_API_TOKEN'] as const)(
+    'rejects Vercel Redis configuration missing %s',
+    async (missingField) => {
+      vi.stubEnv('UPSTASH_REDIS_REST_URL', undefined);
+      vi.stubEnv('UPSTASH_REDIS_REST_TOKEN', undefined);
+      vi.stubEnv('KV_REST_API_URL', 'https://redis.example.com');
+      vi.stubEnv('KV_REST_API_TOKEN', makeTestSecret('vercel-redis'));
+      vi.stubEnv(missingField, undefined);
+      const { getRedisConfig } =
+        await import('@/modules/kernel/infrastructure/config/redis');
+
+      expect(() => getRedisConfig()).toThrow(missingField);
+    }
+  );
+
+  it('prefers an explicit Upstash pair over Vercel Redis credentials', async () => {
+    const token = makeTestSecret('upstash-override');
+    vi.stubEnv('UPSTASH_REDIS_REST_URL', 'https://override.example.com');
+    vi.stubEnv('UPSTASH_REDIS_REST_TOKEN', token);
+    vi.stubEnv('KV_REST_API_URL', 'https://redis.example.com');
+    vi.stubEnv('KV_REST_API_TOKEN', makeTestSecret('vercel-redis'));
+    const { getRedisConfig } =
+      await import('@/modules/kernel/infrastructure/config/redis');
+
+    expect(getRedisConfig()).toEqual({
+      restUrl: 'https://override.example.com',
+      restToken: token,
+    });
+  });
+
+  it('does not mix a partial Upstash override with Vercel credentials', async () => {
+    vi.stubEnv('UPSTASH_REDIS_REST_URL', 'https://override.example.com');
+    vi.stubEnv('UPSTASH_REDIS_REST_TOKEN', undefined);
+    vi.stubEnv('KV_REST_API_URL', 'https://redis.example.com');
+    vi.stubEnv('KV_REST_API_TOKEN', makeTestSecret('vercel-redis'));
+    const { getRedisConfig } =
+      await import('@/modules/kernel/infrastructure/config/redis');
+
+    expect(() => getRedisConfig()).toThrow('UPSTASH_REDIS_REST_TOKEN');
+  });
+
+  it('rejects cleartext production Vercel Redis URLs', async () => {
+    vi.stubEnv('NODE_ENV', 'production');
+    vi.stubEnv('UPSTASH_REDIS_REST_URL', undefined);
+    vi.stubEnv('UPSTASH_REDIS_REST_TOKEN', undefined);
+    vi.stubEnv('KV_REST_API_URL', 'http://redis.example.com');
+    vi.stubEnv('KV_REST_API_TOKEN', makeTestSecret('vercel-redis'));
+    const { getRedisConfig } =
+      await import('@/modules/kernel/infrastructure/config/redis');
+
+    expect(() => getRedisConfig()).toThrow('KV_REST_API_URL');
+  });
+
   it('throws ConfigurationError when Redis token is present without URL', async () => {
     vi.stubEnv('UPSTASH_REDIS_REST_URL', undefined);
     vi.stubEnv('UPSTASH_REDIS_REST_TOKEN', makeTestSecret('redis'));
@@ -399,16 +469,17 @@ describe('server config accessors', () => {
     expect(getLoggerConfig().consoleMirror).toBe(true);
   });
 
-  it('requires an OpenTelemetry Collector URL in production', async () => {
+  it('keeps external telemetry and local SQLite off by default in production', async () => {
     vi.stubEnv('NODE_ENV', 'production');
     vi.stubEnv('OTEL_COLLECTOR_URL', undefined);
+    vi.stubEnv('OTEL_LOCAL_SQLITE_ENABLED', undefined);
     const { getTelemetryConfig } =
       await import('@/modules/kernel/infrastructure/config/telemetry');
-    const { ConfigurationError } =
-      await import('@/modules/kernel/domain/errors/configuration-error');
 
-    expect(() => getTelemetryConfig()).toThrow(ConfigurationError);
-    expect(() => getTelemetryConfig()).toThrow('OTEL_COLLECTOR_URL');
+    expect(getTelemetryConfig()).toMatchObject({
+      collectorUrl: undefined,
+      localSqliteEnabled: false,
+    });
   });
 
   it('accepts production telemetry config when the Collector URL is present', async () => {
