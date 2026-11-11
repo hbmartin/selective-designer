@@ -89,24 +89,19 @@ describe('telemetry transport handlers', () => {
     const { handleOtlpProxyRequest } =
       await import('@/composition/telemetry/transport');
 
-    const response = await handleOtlpProxyRequest(
-      request(
-        '/api/telemetry/otel/v1/traces',
-        'application/x-protobuf',
-        new Uint8Array([1, 2, 3])
-      ),
-      'traces'
+    configMock.requireAuth = true;
+    const proxyRequest = request(
+      '/api/telemetry/otel/v1/traces',
+      'application/x-protobuf',
+      new Uint8Array([1, 2, 3])
     );
+    const response = await handleOtlpProxyRequest(proxyRequest, 'traces');
 
     expect(response.status).toBe(204);
+    expect(proxyRequest.bodyUsed).toBe(false);
+    expect(authUseCasesMock.getCurrentSession).not.toHaveBeenCalled();
     expect(fetch).not.toHaveBeenCalled();
-    expect(localSummaryMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        kind: 'otlp_proxy',
-        signal: 'traces',
-        statusCode: 204,
-      })
-    );
+    expect(localSummaryMock).not.toHaveBeenCalled();
   });
 
   it('forwards OTLP protobuf payloads to the Collector with bearer auth', async () => {
@@ -151,6 +146,7 @@ describe('telemetry transport handlers', () => {
   });
 
   it('rejects streamed telemetry bodies as soon as the configured byte limit is exceeded', async () => {
+    configMock.collectorUrl = 'https://collector.example/v1';
     configMock.proxyMaxBytes = 3;
     let canceled = false;
     const body = new ReadableStream<Uint8Array>({
@@ -189,6 +185,7 @@ describe('telemetry transport handlers', () => {
   });
 
   it('returns invalid request body when the telemetry request body is already locked', async () => {
+    configMock.collectorUrl = 'https://collector.example/v1';
     const lockedRequest = request(
       '/api/telemetry/otel/v1/traces',
       'application/x-protobuf',

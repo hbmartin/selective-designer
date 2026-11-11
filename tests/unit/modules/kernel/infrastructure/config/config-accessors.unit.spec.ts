@@ -361,6 +361,37 @@ describe('server config accessors', () => {
     });
   });
 
+  it.each(['not-a-url', '  '])(
+    'ignores unused KV settings when an explicit pair is selected (%s)',
+    async (unusedUrl) => {
+      const token = makeTestSecret('upstash-override');
+      vi.stubEnv('UPSTASH_REDIS_REST_URL', 'https://override.example.com');
+      vi.stubEnv('UPSTASH_REDIS_REST_TOKEN', token);
+      vi.stubEnv('KV_REST_API_URL', unusedUrl);
+      vi.stubEnv('KV_REST_API_TOKEN', ' ');
+      const { getRedisConfig } =
+        await import('@/modules/kernel/infrastructure/config/redis');
+      expect(getRedisConfig()).toEqual({
+        restUrl: 'https://override.example.com',
+        restToken: token,
+      });
+    }
+  );
+
+  it('uses KV when explicit Upstash settings are blank', async () => {
+    const token = makeTestSecret('kv');
+    vi.stubEnv('UPSTASH_REDIS_REST_URL', ' ');
+    vi.stubEnv('UPSTASH_REDIS_REST_TOKEN', '');
+    vi.stubEnv('KV_REST_API_URL', 'https://redis.example.com');
+    vi.stubEnv('KV_REST_API_TOKEN', token);
+    const { getRedisConfig } =
+      await import('@/modules/kernel/infrastructure/config/redis');
+    expect(getRedisConfig()).toEqual({
+      restUrl: 'https://redis.example.com',
+      restToken: token,
+    });
+  });
+
   it('does not mix a partial Upstash override with Vercel credentials', async () => {
     vi.stubEnv('UPSTASH_REDIS_REST_URL', 'https://override.example.com');
     vi.stubEnv('UPSTASH_REDIS_REST_TOKEN', undefined);
@@ -479,6 +510,30 @@ describe('server config accessors', () => {
     expect(getTelemetryConfig()).toMatchObject({
       collectorUrl: undefined,
       localSqliteEnabled: false,
+    });
+  });
+
+  it('requires a collector URL when a nonblank bearer token is configured', async () => {
+    vi.stubEnv('NODE_ENV', 'production');
+    vi.stubEnv('OTEL_COLLECTOR_URL', ' ');
+    vi.stubEnv('OTEL_COLLECTOR_BEARER_TOKEN', makeTestSecret('otel'));
+    const { getTelemetryConfig } =
+      await import('@/modules/kernel/infrastructure/config/telemetry');
+    expect(() => getTelemetryConfig()).toThrow('OTEL_COLLECTOR_URL');
+  });
+
+  it('treats blank optional telemetry strings as absent', async () => {
+    vi.stubEnv('OTEL_COLLECTOR_URL', '');
+    vi.stubEnv('OTEL_COLLECTOR_BEARER_TOKEN', ' ');
+    vi.stubEnv('SENTRY_DSN', '');
+    vi.stubEnv('VITE_SENTRY_DSN', ' ');
+    const { getTelemetryConfig } =
+      await import('@/modules/kernel/infrastructure/config/telemetry');
+    expect(getTelemetryConfig()).toMatchObject({
+      collectorUrl: undefined,
+      collectorBearerToken: undefined,
+      dsn: undefined,
+      browserDsn: undefined,
     });
   });
 
@@ -604,20 +659,20 @@ describe('server config accessors', () => {
     vi.stubEnv('RESEND_API_KEY', makeTestSecret('resend-api-key'));
     vi.stubEnv('EMAIL_FROM', 'Selective Designer <noreply@example.com>');
     vi.stubEnv('RESEND_WEBHOOK_MAX_BYTES', undefined);
-    const { getEmailConfig } =
+    const { getResendWebhookConfig } =
       await import('@/modules/kernel/infrastructure/config/email');
 
-    expect(getEmailConfig().resendWebhookMaxBytes).toBe(1_000_000);
+    expect(getResendWebhookConfig().maxBodyBytes).toBe(1_000_000);
   });
 
   it('parses an explicit Resend webhook body limit', async () => {
     vi.stubEnv('RESEND_API_KEY', makeTestSecret('resend-api-key'));
     vi.stubEnv('EMAIL_FROM', 'Selective Designer <noreply@example.com>');
     vi.stubEnv('RESEND_WEBHOOK_MAX_BYTES', '4096');
-    const { getEmailConfig } =
+    const { getResendWebhookConfig } =
       await import('@/modules/kernel/infrastructure/config/email');
 
-    expect(getEmailConfig().resendWebhookMaxBytes).toBe(4096);
+    expect(getResendWebhookConfig().maxBodyBytes).toBe(4096);
   });
 
   it('parses an explicit SMTP email server', async () => {
@@ -687,13 +742,13 @@ describe('server config accessors', () => {
     vi.stubEnv('RESEND_API_KEY', makeTestSecret('resend-api-key'));
     vi.stubEnv('RESEND_WEBHOOK_SECRET', 'REPLACE ME');
     vi.stubEnv('EMAIL_FROM', 'Selective Designer <noreply@example.com>');
-    const { getEmailConfig } =
+    const { getResendWebhookConfig } =
       await import('@/modules/kernel/infrastructure/config/email');
     const { ConfigurationError } =
       await import('@/modules/kernel/domain/errors/configuration-error');
 
-    expect(() => getEmailConfig()).toThrow(ConfigurationError);
-    expect(() => getEmailConfig()).toThrow('RESEND_WEBHOOK_SECRET');
+    expect(() => getResendWebhookConfig()).toThrow(ConfigurationError);
+    expect(() => getResendWebhookConfig()).toThrow('RESEND_WEBHOOK_SECRET');
   });
 
   it('rejects cleartext production node-pg database URLs', async () => {

@@ -4,7 +4,11 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { EmailOverrides } from '@/composition/email';
 import type { EmailStatusRepository } from '@/modules/email';
-import { toEmailIdempotencyKey, toEmailRecipientList } from '@/modules/kernel';
+import {
+  AppError,
+  toEmailIdempotencyKey,
+  toEmailRecipientList,
+} from '@/modules/kernel';
 import { unwrapParseResult } from '@/modules/kernel/testing';
 
 const testState = vi.hoisted(() => {
@@ -20,6 +24,7 @@ const testState = vi.hoisted(() => {
   return {
     emailConfig: makeEmailConfig(),
     makeEmailConfig,
+    failure: undefined as Error | undefined,
   };
 });
 
@@ -30,7 +35,10 @@ vi.mock('@/modules/kernel/backend', () => ({
     info: vi.fn(),
     warn: vi.fn(),
   }),
-  getEmailConfig: () => testState.emailConfig,
+  getEmailConfig: () => {
+    if (testState.failure) throw testState.failure;
+    return testState.emailConfig;
+  },
 }));
 
 const makeStatusRepository = (): EmailStatusRepository =>
@@ -55,6 +63,7 @@ const makeOverrides = (): EmailOverrides => ({
 describe('email composition', () => {
   beforeEach(async () => {
     vi.clearAllMocks();
+    testState.failure = undefined;
     Object.assign(testState.emailConfig, testState.makeEmailConfig());
     const { __resetEmailComposition } = await import('@/composition/email');
     __resetEmailComposition();
@@ -97,5 +106,26 @@ describe('email composition', () => {
         provider: 'resend',
       },
     });
+  });
+
+  it('returns a typed configuration error before attempting delivery', async () => {
+    testState.failure = new AppError({
+      code: 'CONFIGURATION_ERROR',
+      category: 'system',
+      status: 500,
+      message: 'Email transport is incomplete',
+    });
+    const { getEmailGateway } = await import('@/composition/email');
+    const overrides = makeOverrides();
+    const result = await getEmailGateway(overrides).sendEmail({
+      to: unwrapParseResult(toEmailRecipientList('user@example.com')),
+      subject: 'Test delivery',
+      template: createElement('div'),
+      idempotencyKey: unwrapParseResult(toEmailIdempotencyKey('key-1')),
+    });
+    expect(result.isError() && result.getError()).toBe(testState.failure);
+    expect(
+      overrides.emailStatusRepository?.recordSendAttempt
+    ).not.toHaveBeenCalled();
   });
 });

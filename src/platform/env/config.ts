@@ -71,13 +71,16 @@ const clientSchema = () =>
       .refine((value) => isSecureUrlForProduction(value, isProd()), {
         message: httpsInProductionMessage('VITE_S3_BUCKET_URL'),
       }),
-    VITE_SENTRY_DSN: z
-      .string()
-      .url()
-      .refine((value) => isSecureUrlForProduction(value, isProd()), {
-        message: httpsInProductionMessage('VITE_SENTRY_DSN'),
-      })
-      .optional(),
+    VITE_SENTRY_DSN: z.preprocess(
+      (value) =>
+        typeof value === 'string' && value.trim() === '' ? undefined : value,
+      z
+        .url()
+        .refine((value) => isSecureUrlForProduction(value, isProd()), {
+          message: httpsInProductionMessage('VITE_SENTRY_DSN'),
+        })
+        .optional()
+    ),
     VITE_SENTRY_ENVIRONMENT: z.string().optional(),
     VITE_SENTRY_TRACES_SAMPLE_RATE: z.coerce
       .number()

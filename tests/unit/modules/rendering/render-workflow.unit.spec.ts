@@ -34,7 +34,16 @@ vi.mock('@/composition/rendering-pipeline', () => ({
     return pipeline;
   },
 }));
+const makeDiagnosticsThrow = (message = 'diagnostics unavailable') => {
+  const unavailable = () => {
+    throw new Error(message);
+  };
+  pipeline.failureWarning.mockImplementation(unavailable);
+  pipeline.failureError.mockImplementation(unavailable);
+};
+
 vi.mock('@/composition/render-failure-diagnostics', () => ({
+  reportSubmissionUnresolved: pipeline.reportSubmissionUnresolved,
   getRenderFailureLogger: () => ({
     warn: pipeline.failureWarning,
     error: pipeline.failureError,
@@ -342,12 +351,7 @@ describe('render workflow', () => {
           new AppError({ code: 'DB_DOWN', category: 'system', status: 503 })
         )
       );
-      pipeline.failureWarning.mockImplementation(() => {
-        throw new Error('diagnostics unavailable');
-      });
-      pipeline.failureError.mockImplementation(() => {
-        throw new Error('diagnostics unavailable');
-      });
+      makeDiagnosticsThrow();
       expect(await runEntry(entry)).toBe(
         'result_failure_persistence_unresolved'
       );
@@ -475,12 +479,7 @@ describe('render workflow', () => {
         })
       )
     );
-    pipeline.failureWarning.mockImplementation(() => {
-      throw new Error('logger failed');
-    });
-    pipeline.failureError.mockImplementation(() => {
-      throw new Error('logger failed');
-    });
+    makeDiagnosticsThrow('logger failed');
     expect(await renderResultWorkflow(attempt)).toEqual({
       result: 'result_failure_persistence_unresolved',
     });
@@ -488,6 +487,43 @@ describe('render workflow', () => {
     expect(sleep).not.toHaveBeenCalled();
     expect(pipeline.dispatchAccounting).toHaveBeenCalledExactlyOnceWith(
       'confirmed'
+    );
+  });
+  it('retains the failure-write code when recovery backoff fails', async () => {
+    pipeline.poll.mockRejectedValue(new Error('provider unavailable'));
+    pipeline.markFailed.mockResolvedValue(
+      Result.Error(
+        new AppError({
+          code: 'DB_UNAVAILABLE',
+          category: 'system',
+          status: 503,
+          retryable: true,
+        })
+      )
+    );
+    vi.mocked(sleep).mockRejectedValueOnce(
+      new AppError({
+        code: 'WAIT_FAILED',
+        category: 'system',
+        status: 503,
+        message: 'private wait failure',
+      })
+    );
+    expect(await renderResultWorkflow(attempt)).toEqual({
+      result: 'result_failure_persistence_unresolved',
+    });
+    expect(pipeline.markFailed).toHaveBeenCalledOnce();
+    expect(pipeline.failureError).toHaveBeenCalledWith(
+      expect.objectContaining({
+        event: 'rendering.result.failure_persistence_unresolved',
+        details: expect.objectContaining({
+          code: 'DB_UNAVAILABLE',
+          recoveryWaitError: expect.objectContaining({ code: 'WAIT_FAILED' }),
+        }),
+      })
+    );
+    expect(JSON.stringify(pipeline.failureError.mock.calls)).not.toContain(
+      'private wait failure'
     );
   });
   it('logs failures even when rendering composition cannot initialize', async () => {

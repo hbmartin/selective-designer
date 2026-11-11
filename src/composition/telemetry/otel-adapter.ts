@@ -209,7 +209,9 @@ const completeSpanForResult = (
   span.setStatus({ code: SpanStatusCode.OK });
 };
 
-export const createOpenTelemetryAdapter = (): TelemetryAdapter => {
+export const createOpenTelemetryAdapter = (
+  logger = otelLogger
+): TelemetryAdapter => {
   let activeUser: TelemetryUser | null = null;
 
   return {
@@ -222,7 +224,7 @@ export const createOpenTelemetryAdapter = (): TelemetryAdapter => {
 
       activeSpan?.recordException(exception);
 
-      otelLogger.emit({
+      logger.emit({
         attributes: captureAttributes(captureContext, spanContext, activeUser),
         body: message,
         eventName:
@@ -248,7 +250,7 @@ export const createOpenTelemetryAdapter = (): TelemetryAdapter => {
     },
     emitLog: (record) => {
       const correlation = trace.getActiveSpan()?.spanContext();
-      otelLogger.emit({
+      logger.emit({
         attributes: {
           ...compactAttributes(record.attributes),
           ...(record.direction ? { direction: record.direction } : {}),

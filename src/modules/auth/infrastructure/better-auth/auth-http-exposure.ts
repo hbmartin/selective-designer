@@ -14,6 +14,16 @@
 export const DEFAULT_BETTER_AUTH_BASE_PATH = '/api/auth';
 export const BETTER_AUTH_CREATE_USER_PATH = '/admin/create-user';
 
+export const OPERATOR_ONLY_AUTH_PATHS = [
+  BETTER_AUTH_CREATE_USER_PATH,
+  '/change-password',
+  '/request-password-reset',
+  '/reset-password',
+  '/admin/set-user-password',
+  '/admin/impersonate-user',
+  '/admin/stop-impersonating',
+] as const;
+
 export type AuthHttpExposureFlags = {
   /** Better Auth base path. Defaults to `/api/auth`. */
   basePath?: string;
@@ -53,6 +63,9 @@ const normalizePathname = (value: string) => {
 const isUnderPrefix = (pathname: string, prefix: string) =>
   pathname === prefix || pathname.startsWith(`${prefix}/`);
 
+export const isOperatorOnlyAuthPath = (path: string) =>
+  OPERATOR_ONLY_AUTH_PATHS.some((prefix) => isUnderPrefix(path, prefix));
+
 export const isBlockedBetterAuthHttpPath = (
   pathname: string,
   flags: AuthHttpExposureFlags
@@ -62,10 +75,8 @@ export const isBlockedBetterAuthHttpPath = (
     flags.basePath ?? DEFAULT_BETTER_AUTH_BASE_PATH
   );
   if (
-    isUnderPrefix(
-      normalizedPathname,
-      `${basePath}${BETTER_AUTH_CREATE_USER_PATH}`
-    )
+    normalizedPathname.startsWith(`${basePath}/`) &&
+    isOperatorOnlyAuthPath(normalizedPathname.slice(basePath.length))
   )
     return true;
   if (

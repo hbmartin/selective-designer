@@ -461,7 +461,13 @@ export class EmailGatewaySmtp implements EmailGateway {
       return Result.Error(idempotencyKeyError());
     }
 
-    const emailConfig = getEmailConfig();
+    let emailConfig: ReturnType<typeof getEmailConfig>;
+    try {
+      emailConfig = getEmailConfig();
+    } catch (error) {
+      if (error instanceof AppError) return Result.Error(error);
+      throw error;
+    }
     if (emailConfig.deliveryDisabled) {
       logE2eSmtpDiagnostic(
         this.logger,

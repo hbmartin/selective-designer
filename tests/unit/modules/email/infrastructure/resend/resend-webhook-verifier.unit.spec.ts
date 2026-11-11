@@ -19,7 +19,9 @@ const testState = vi.hoisted(() => {
 });
 
 vi.mock('@/modules/kernel/backend', () => ({
-  getEmailConfig: () => testState.emailConfig,
+  getResendWebhookConfig: () => ({
+    secret: testState.emailConfig.resendWebhookSecret,
+  }),
 }));
 
 describe('ResendWebhookVerifier', () => {

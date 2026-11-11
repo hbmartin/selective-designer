@@ -12,6 +12,7 @@ import {
 import {
   type TelemetryAdapter,
   type TelemetryCaptureContext,
+  type TelemetryLogRecord,
   toTelemetryStringTags,
 } from '@/platform/telemetry';
 
@@ -169,6 +170,19 @@ const writeConsoleMirror = ({
     ...sanitizedLogRecord,
   });
 };
+
+export const writeConsoleLogRecord = (record: TelemetryLogRecord) =>
+  writeConsoleMirror({
+    level: record.level,
+    message: record.message ?? record.event,
+    sanitizedLogRecord: sanitizeLogFields({
+      event: record.event,
+      details: record.details,
+      attributes: record.attributes,
+      error: record.error,
+      direction: record.direction,
+    }),
+  });
 
 export function createTelemetryLogger({
   telemetry,

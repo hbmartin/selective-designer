@@ -75,18 +75,6 @@ export function createRenderingPipelineUseCases(deps: RenderingPipelineDeps) {
         details: input,
       });
     },
-    reportSubmissionUnresolved: (input: {
-      resultId: string;
-      attempt: number;
-      workflowRunId: string;
-      code: string;
-      receiptCapture: 'confirmed' | 'unconfirmed';
-    }) => {
-      deps.logger.warn({
-        event: 'rendering.result.submission_unresolved',
-        details: input,
-      });
-    },
     markFailed: (input: Input<typeof markResultFailed>) =>
       markResultFailed(deps, input),
     copyDraftPlacements: (input: Input<typeof copyDraftPlacements>) =>

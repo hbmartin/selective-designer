@@ -72,7 +72,7 @@ export class UpstashSecondaryStore implements SecondaryStore {
     const config = options.config ?? getRedisConfig();
     if (!config) {
       throw new ConfigurationError(
-        'UpstashSecondaryStore requires UPSTASH_REDIS_REST_URL and UPSTASH_REDIS_REST_TOKEN.'
+        'UpstashSecondaryStore requires an UPSTASH_REDIS_REST_* or KV_REST_API_* credential pair.'
       );
     }
     this.restUrl = config.restUrl;

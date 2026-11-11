@@ -97,6 +97,13 @@ export const getSeedAccountPassword = (source: RuntimeEnv = runtimeEnv()) =>
 
 export const zNonEmptyEnvString = () => z.string().trim().min(1);
 
+export const unsetBlankServiceValue = (value: unknown) =>
+  typeof value === 'string' && value.trim() === '' ? undefined : value;
+
+export const zOptionalServiceString = (
+  schema: z.ZodType<string> = z.string()
+) => z.preprocess(unsetBlankServiceValue, schema.optional());
+
 export const baseEnvSchema = z
   .object({
     NODE_ENV: z.string().optional(),

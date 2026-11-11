@@ -80,7 +80,8 @@ async function unresolvedSubmissionStep(
   receiptCaptured: boolean
 ) {
   'use step';
-  (await pipeline()).reportSubmissionUnresolved({
+  const { reportSubmissionUnresolved } = await loadFailureDiagnostics();
+  await reportSubmissionUnresolved({
     resultId: input.resultId,
     attempt: input.attempt,
     workflowRunId: input.workflowRunId,
@@ -88,6 +89,8 @@ async function unresolvedSubmissionStep(
     receiptCapture: receiptCaptured ? 'confirmed' : 'unconfirmed',
   });
 }
+
+unresolvedSubmissionStep.maxRetries = 0;
 
 export const persistenceDelayMs = (retry: number) =>
   Math.min(60_000, 5_000 * 2 ** Math.min(retry, 4));
@@ -275,19 +278,30 @@ export async function markFailedStep(input: FailureContext) {
 }
 markFailedStep.maxRetries = 0;
 
+type FailureDiagnostic = ReturnType<typeof failurePersistenceError> & {
+  recoveryWaitError?: ReturnType<typeof failurePersistenceError>;
+};
+
 async function failureDiagnosticStep(
   input: Execution,
   reason: string,
   receiptCaptured: boolean,
-  error: ReturnType<typeof failurePersistenceError>,
+  error: FailureDiagnostic,
   unresolved: boolean
 ) {
   'use step';
   const { getRenderFailureLogger } = await loadFailureDiagnostics();
-  getRenderFailureLogger()[unresolved ? 'error' : 'warn']({
-    event: unresolved
-      ? 'rendering.result.failure_persistence_unresolved'
-      : 'rendering.result.failure_persistence_exception',
+  const diagnostic = unresolved
+    ? {
+        level: 'error' as const,
+        event: 'rendering.result.failure_persistence_unresolved',
+      }
+    : {
+        level: 'warn' as const,
+        event: 'rendering.result.failure_persistence_exception',
+      };
+  await getRenderFailureLogger()[diagnostic.level]({
+    event: diagnostic.event,
     details: {
       ...executionOf(input),
       reason,
@@ -295,6 +309,9 @@ async function failureDiagnosticStep(
       code: error.code,
       errorNames: error.errorNames,
       errorCodes: error.errorCodes,
+      ...(error.recoveryWaitError
+        ? { recoveryWaitError: error.recoveryWaitError }
+        : {}),
     },
   });
 }
@@ -306,7 +323,7 @@ async function recoverFailure(
 ): Promise<string> {
   const deadline = Date.now() + FAILURE_RECOVERY_MS;
   let retry = 0;
-  let lastError: ReturnType<typeof failurePersistenceError> = {
+  let lastError: FailureDiagnostic = {
     type: 'failure_persistence_error',
     code: 'RENDER_FAILURE_PERSISTENCE_ERROR',
     retryable: true,
@@ -348,7 +365,10 @@ async function recoverFailure(
       // oxlint-disable-next-line no-await-in-loop -- no retry can begin at or after the original budget.
       await sleep(Math.min(persistenceDelayMs(retry++), remaining));
     } catch (error) {
-      lastError = failurePersistenceError(error);
+      lastError = {
+        ...lastError,
+        recoveryWaitError: failurePersistenceError(error),
+      };
       break;
     }
   }

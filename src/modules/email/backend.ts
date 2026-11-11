@@ -3,8 +3,8 @@ import {
   appErrorToResponse,
   createTransactionRunner,
   getDefaultDbClient,
-  getEmailConfig,
   getHttpConfig,
+  getResendWebhookConfig,
 } from '@/modules/kernel/backend';
 
 import { createEmailUseCases, type EmailTransactionContext } from './index';
@@ -12,10 +12,7 @@ import { createEmailStatusRepository } from './infrastructure/drizzle/email-stat
 import { EmailGatewayResend } from './infrastructure/resend/email-gateway-resend';
 import { ResendWebhookVerifier } from './infrastructure/resend/resend-webhook-verifier';
 import { EmailGatewaySmtp } from './infrastructure/smtp/email-gateway-smtp';
-import {
-  createResendWebhookHandlers,
-  type ResendWebhookHandlers,
-} from './transport/http/resend-webhook-handlers';
+import { createResendWebhookHandlers } from './transport/http/resend-webhook-handlers';
 
 export {
   createEmailStatusRepository,
@@ -32,10 +29,6 @@ export {
  */
 export type ResendWebhookRequestDeps = {
   logger?: Pick<Logger, 'warn'>;
-};
-
-type EmailServerRuntimeDeps = {
-  handlers: ResendWebhookHandlers;
 };
 
 /**
@@ -67,22 +60,20 @@ const createDefaultEmailUseCases = () => {
   });
 };
 
-const getDeps = (deps: ResendWebhookRequestDeps): EmailServerRuntimeDeps => ({
-  handlers: createResendWebhookHandlers({
-    getUseCases: createDefaultEmailUseCases,
-    logger: deps.logger,
-    maxBodyBytes: getEmailConfig().resendWebhookMaxBytes,
-    trustedProxyDepth: getHttpConfig().trustedProxyDepth,
-    verifier: new ResendWebhookVerifier(),
-  }),
-});
-
 export async function handleResendWebhookRequest(
   request: Request,
   deps: ResendWebhookRequestDeps = {}
 ) {
   try {
-    const { handlers } = getDeps(deps);
+    const { secret, maxBodyBytes } = getResendWebhookConfig();
+    if (!secret) return new Response(null, { status: 404 });
+    const handlers = createResendWebhookHandlers({
+      getUseCases: createDefaultEmailUseCases,
+      logger: deps.logger,
+      maxBodyBytes,
+      trustedProxyDepth: getHttpConfig().trustedProxyDepth,
+      verifier: new ResendWebhookVerifier(),
+    });
     return await handlers.receive(request);
   } catch (error) {
     return appErrorToResponse(error);

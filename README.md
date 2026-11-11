@@ -97,7 +97,8 @@ The app uses OpenTelemetry for traces, metrics, and server-emitted logs, with Se
 * Browser Sentry sends errors only, disables browser tracing, and uses the `/api/telemetry/sentry-tunnel` tunnel.
 * Frontend logs are batched to `/api/telemetry/logs`; production source should use `frontendLogger` instead of `console.*`.
 * Browser fetch instrumentation only propagates `traceparent` and `baggage` to same-origin requests and ignores `/api/telemetry/*`.
-* Server OTel exports directly to `OTEL_COLLECTOR_URL` when configured. Without that env, server export is no-op and local/test proxy summaries can be written to `.telemetry/telemetry.sqlite`.
+* Server OTel exports to `OTEL_COLLECTOR_URL` when configured. A collector bearer token requires a URL. Without a collector, the OTLP proxy discards requests without reading their bodies; set `VITE_OTEL_BROWSER_ENABLED=false` to stop browser exports as well.
+* Server and workflow logs default to `error` in production. With no log sink, sanitized records go to console. Terminal unresolved diagnostics attempt configured OTel and Sentry delivery for up to five seconds; a failed or timed-out sink produces one console fallback. Sentry groups terminal issues by event name. Set `LOGGER_CONSOLE_MIRROR=true` to also mirror successful exports.
 
 The telemetry layer derives Query and mutation operation names from static TanStack Query key segments, such as `design.getAll`. Dynamic key values are hashed before becoming attributes; raw dynamic values are only exposed in localhost/debug mode. Route loaders and `beforeLoad` guards are wrapped with route-level spans so navigation time, guard time, loader time, and Query time can be separated.
 
@@ -128,15 +129,16 @@ pnpm codeql:analyze  # Analyze that DB and write test-results/codeql/start-ui-we
 #### Resend delivery
 
 Email delivery is optional. Startup and password sign-in do not require any
-`RESEND_*` or `EMAIL_*` variables. Email configuration is validated only when
-an email feature is used.
+`RESEND_*` or `EMAIL_*` variables. Build and runtime boot validate a configured
+sender and transport. Blank optional strings count as unset.
 
 To send emails with [Resend](https://resend.com), configure `RESEND_API_KEY`
 with a Resend API key and set `EMAIL_FROM` to a sender from a verified domain.
 Set `RESEND_WEBHOOK_SECRET` to the Resend/Svix signing secret for
 `/api/webhooks/resend` delivery status callbacks.
-Use `EMAIL_DELIVERY_DISABLED=true` when a workflow should skip delivery, such
-as automated end-to-end test runs.
+Use `EMAIL_DELIVERY_DISABLED=true` to skip sends without delivery credentials.
+A configured signing secret keeps callbacks active even when sending is disabled;
+without a secret, the callback endpoint returns 404.
 
 ### OpenAPI Documentation for the API
 
@@ -199,7 +201,7 @@ To submit one paid request, configure `PROVIDER_MODE=live`, provider keys, and p
 
 ## Deploy
 
-This app is a TanStack Start app with Nitro already enabled in `vite.config.ts`. `pnpm build` creates the production `.output` directory, and `pnpm start` runs `.output/server/index.mjs`.
+This app is a TanStack Start app with Nitro already enabled in `vite.config.ts`. `pnpm build` creates the production `.output` directory, and `pnpm start` runs `.output/server/index.mjs`. Run `pnpm test:telemetry:production` after building to exercise diagnostic delivery through the generated workflow steps.
 
 Sign-in uses email and password. Public signup is disabled. An operator can change the login email in the user manager; the existing password works with the new address without an email verification or confirmation step. The local seed creates a development admin and user with the same password. Set `SEED_ACCOUNT_PASSWORD` for both the seed and browser tests if you override the local default, `local-development-only-password`. Rerunning the seed preserves existing passwords. Use the operator reset command if you change the value for an existing local account.
 
@@ -209,13 +211,15 @@ To provision an account, run the operator CLI in a terminal configured for the i
 pnpm auth:password create person@example.com "Person" user
 ```
 
-Use `admin` to provision an operator account. For recovery, run `pnpm auth:password reset person@example.com` with the new password on standard input. Use a unique password of 12–128 characters. The reset revokes sessions through the configured Better Auth store. Configure shared Upstash storage on Vercel so the operator process and application use the same session and rate-limit state. Restart a local process using in-memory storage after recovery to clear its sessions.
+Use `admin` to provision an operator account. For recovery, run `pnpm auth:password reset person@example.com` with the new password on standard input. Use a unique password of 12–128 characters. The reset commits the password and session version together in PostgreSQL. Previous sessions stop authorizing requests within 30 seconds, without requiring Redis credentials or a restart. Native password writes and impersonation are disabled.
+
+For the credential-version rollout, apply the migration before deploying the app, replace all instances serving the target database, then use the revised CLI. Unstamped sessions must sign in again. After using the revised reset command, keep the version check in place during any rollback.
 
 Before deploying anywhere:
 
 * Use Node.js 24 or newer to match the current `package.json` engine.
 * Set production values for the required variables in `.env.example`, especially `DATABASE_URL`, `AUTH_SECRET`, `CRON_SECRET`, `VITE_BASE_URL`, S3 storage, `FAL_KEY`, `BFL_API_KEY`, and any public `VITE_*` values. Email configuration and an external OpenTelemetry collector are optional.
-* Connect Upstash for shared sessions and rate limits. Both `UPSTASH_REDIS_REST_URL` / `UPSTASH_REDIS_REST_TOKEN` and Vercel's `KV_REST_API_URL` / `KV_REST_API_TOKEN` naming conventions are supported. An explicit Upstash pair takes precedence; partial pairs fail validation.
+* Connect Upstash for shared sessions and rate limits. Both `UPSTASH_REDIS_REST_URL` / `UPSTASH_REDIS_REST_TOKEN` and Vercel's `KV_REST_API_URL` / `KV_REST_API_TOKEN` naming conventions are supported. Nonblank explicit Upstash settings select that pair; otherwise the KV pair is used. Only the selected pair is validated, and it must be complete. Use separate Redis stores for Preview and Production: sharing credentials also shares session and rate-limit keys. Deployment isolation is not enforced by this app.
 * Point `VITE_BASE_URL` at the deployed HTTPS URL. For preview domains, also configure `AUTH_ALLOWED_HOSTS` as needed.
 * Production builds require both model keys. The GitHub Actions compilation job uses placeholders that Vercel rejects.
 * Run your versioned migration command against the production database before serving production traffic. Do not use `pnpm db:push` for production deployments because it bypasses migration history.
