@@ -5,6 +5,7 @@ const SCHEMA_PATHS = [
   'src/modules/kernel/infrastructure/db/schema.ts',
   'src/modules/kernel/infrastructure/db/schema',
   ':(glob)src/modules/*/infrastructure/drizzle/schema.ts',
+  'src/modules/auth/infrastructure/better-auth/schema.ts',
 ];
 const SQL_MIGRATION_PATTERN = /^drizzle\/migrations\/.*\.sql$/;
 

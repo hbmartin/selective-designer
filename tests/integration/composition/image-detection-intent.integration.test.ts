@@ -16,6 +16,12 @@ import {
   vi,
 } from 'vitest';
 
+import { reportTerminalDiagnostic } from '@/composition/telemetry/terminal-diagnostic';
+
+vi.mock('@/composition/telemetry/terminal-diagnostic', () => ({
+  reportTerminalDiagnostic: vi.fn(),
+}));
+
 import {
   renderImageIdentity,
   writeImageWithDetection,
@@ -867,7 +873,7 @@ describe('atomic image and detection writes', () => {
       const outcome = await ctx.pipeline.poll(ctx.identity);
       expect(outcome.isError() && outcome.getError().cause).toBe(lost);
       expect(ctx.scheduler.schedule).not.toHaveBeenCalled();
-      expect(ctx.kernel.logger.warn).toHaveBeenCalledWith(
+      expect(reportTerminalDiagnostic).toHaveBeenCalledWith(
         expect.objectContaining({ event: 'image.write.unresolved' })
       );
     } finally {

@@ -223,20 +223,9 @@ const readBoundedBody = async (request: Request) => {
 const forwardToCollector = async (
   signal: OtlpSignal,
   body: ArrayBuffer,
-  requestContentType: string
+  requestContentType: string,
+  config: ReturnType<typeof getTelemetryConfig> & { collectorUrl: string }
 ) => {
-  const config = getTelemetryConfig();
-  if (!config.collectorUrl) {
-    recordLocalTelemetrySummary({
-      bytes: body.byteLength,
-      kind: 'otlp_proxy',
-      signal,
-      statusCode: 204,
-      summary: { forwarded: false, reason: 'missing_collector_env' },
-    });
-    return noContent();
-  }
-
   const headers: Record<string, string> = {
     'Content-Type': requestContentType,
     ...(config.collectorBearerToken
@@ -314,6 +303,12 @@ export const handleOtlpProxyRequest = async (
   const rateLimited = enforceTelemetryRateLimit(request, signal);
   if (rateLimited) return rateLimited;
 
+  const config = getTelemetryConfig();
+  const { collectorUrl } = config;
+  if (!collectorUrl) {
+    return withTelemetryVary(noContent());
+  }
+
   const unauthenticated = await enforceTelemetryAuth(request);
   if (unauthenticated) return unauthenticated;
 
@@ -321,7 +316,10 @@ export const handleOtlpProxyRequest = async (
   if (!body.ok) return withTelemetryVary(body.response);
 
   return withTelemetryVary(
-    await forwardToCollector(signal, body.body, contentType(request))
+    await forwardToCollector(signal, body.body, contentType(request), {
+      ...config,
+      collectorUrl,
+    })
   );
 };
 

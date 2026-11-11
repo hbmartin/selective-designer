@@ -67,6 +67,7 @@
     "gen:build-info": "dotenv -- node ./run-jiti ./src/app/build-info/infrastructure/generate-build-info.ts",
     "gen:icons": "svgr --config-file src/platform/components/icons/svgr.config.cjs src/platform/components/icons/svg-sources && oxfmt src/platform/components/icons/generated",
     "test": "vitest run",
+    "test:telemetry:production": "node --test scripts/test-production-diagnostics.mjs",
     "test:unit": "vitest run --project=unit",
     "test:property": "node scripts/run-property-tests.mjs",
     "test:browser": "vitest run --project=browser",

@@ -4,44 +4,30 @@ import {
   baseEnvSchema,
   isProdRuntimeEnvironment,
   parseEnv,
+  zOptionalServiceString,
 } from './env-schema';
 import { assertSecureUrlInProduction } from './url-security';
 import { ConfigurationError } from '../../domain/errors/configuration-error';
 
-const LOCAL_TELEMETRY_HOSTS = new Set(['localhost', '127.0.0.1', '::1']);
-
-const stripIpv6Brackets = (value: string) =>
-  value.startsWith('[') && value.endsWith(']') ? value.slice(1, -1) : value;
-
-const isLocalTelemetryUrl = (value: string) => {
-  try {
-    return LOCAL_TELEMETRY_HOSTS.has(
-      stripIpv6Brackets(new URL(value).hostname)
-    );
-  } catch {
-    return false;
-  }
-};
-
 const telemetryEnvSchema = baseEnvSchema.extend({
-  SENTRY_DSN: z.string().url().optional(),
-  VITE_SENTRY_DSN: z.string().url().optional(),
-  SENTRY_ENVIRONMENT: z.string().optional(),
+  SENTRY_DSN: zOptionalServiceString(z.url()),
+  VITE_SENTRY_DSN: zOptionalServiceString(z.url()),
+  SENTRY_ENVIRONMENT: zOptionalServiceString(),
   SENTRY_TRACES_SAMPLE_RATE: z.coerce.number().min(0).max(1).optional(),
-  SENTRY_ORG: z.string().optional(),
-  SENTRY_PROJECT: z.string().optional(),
-  SENTRY_AUTH_TOKEN: z.string().optional(),
-  OTEL_COLLECTOR_URL: z.string().url().optional(),
-  OTEL_COLLECTOR_BEARER_TOKEN: z.string().optional(),
-  OTEL_SERVICE_NAME: z.string().optional(),
-  OTEL_SERVICE_VERSION: z.string().optional(),
-  OTEL_ENVIRONMENT: z.string().optional(),
+  SENTRY_ORG: zOptionalServiceString(),
+  SENTRY_PROJECT: zOptionalServiceString(),
+  SENTRY_AUTH_TOKEN: zOptionalServiceString(),
+  OTEL_COLLECTOR_URL: zOptionalServiceString(z.url()),
+  OTEL_COLLECTOR_BEARER_TOKEN: zOptionalServiceString(),
+  OTEL_SERVICE_NAME: zOptionalServiceString(),
+  OTEL_SERVICE_VERSION: zOptionalServiceString(),
+  OTEL_ENVIRONMENT: zOptionalServiceString(),
   OTEL_TRACES_SAMPLE_RATE: z.coerce.number().min(0).max(1).optional(),
   OTEL_LOCAL_SQLITE_ENABLED: z
     .enum(['true', 'false'])
     .optional()
     .transform((value) => (value === undefined ? undefined : value === 'true')),
-  OTEL_LOCAL_SQLITE_PATH: z.string().optional(),
+  OTEL_LOCAL_SQLITE_PATH: zOptionalServiceString(),
   TELEMETRY_PROXY_MAX_BYTES: z.coerce.number().int().positive().optional(),
   TELEMETRY_LOG_MAX_EVENTS: z.coerce.number().int().positive().optional(),
   TELEMETRY_RATE_LIMIT_PER_MINUTE: z.coerce
@@ -81,16 +67,16 @@ export function getTelemetryConfig(): TelemetryConfig {
 
   const env = parseEnv(telemetryEnvSchema);
   const isProduction = isProdRuntimeEnvironment(env);
-  if (
-    isProduction &&
-    env.OTEL_COLLECTOR_URL &&
-    new URL(env.OTEL_COLLECTOR_URL).protocol !== 'https:' &&
-    !isLocalTelemetryUrl(env.OTEL_COLLECTOR_URL)
-  ) {
+  if (env.OTEL_COLLECTOR_BEARER_TOKEN && !env.OTEL_COLLECTOR_URL) {
     throw new ConfigurationError(
-      'OTEL_COLLECTOR_URL must use HTTPS in production unless it targets localhost.'
+      'OTEL_COLLECTOR_URL is required when OTEL_COLLECTOR_BEARER_TOKEN is configured.'
     );
   }
+  assertSecureUrlInProduction({
+    name: 'OTEL_COLLECTOR_URL',
+    value: env.OTEL_COLLECTOR_URL,
+    env,
+  });
   assertSecureUrlInProduction({
     name: 'SENTRY_DSN',
     value: env.SENTRY_DSN,

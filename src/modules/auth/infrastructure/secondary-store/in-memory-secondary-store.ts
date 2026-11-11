@@ -11,7 +11,7 @@ import type { SecondaryStore } from '../../application/ports/secondary-store';
  * each instance keeps its own entries, so Better Auth rate-limit counters and
  * any other shared state only bind abuse per instance. For durable, shared
  * enforcement across instances, configure Upstash Redis
- * (`UPSTASH_REDIS_REST_URL` / `UPSTASH_REDIS_REST_TOKEN`) so composition selects
+ * (an `UPSTASH_REDIS_REST_*` or `KV_REST_API_*` pair) so composition selects
  * {@link import('./upstash-secondary-store').UpstashSecondaryStore}, or rely on
  * an edge/WAF control. Expiry is enforced lazily on read plus a size-bounded
  * sweep, mirroring `src/platform/http/rate-limiter.ts`.

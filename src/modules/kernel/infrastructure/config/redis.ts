@@ -1,15 +1,22 @@
 import { z } from 'zod';
 
-import { baseEnvSchema, parseEnv, zNonEmptyEnvString } from './env-schema';
+import {
+  baseEnvSchema,
+  parseEnv,
+  unsetBlankServiceValue,
+  zNonEmptyEnvString,
+} from './env-schema';
 import { assertSecureUrlInProduction } from './url-security';
 import { ConfigurationError } from '../../domain/errors/configuration-error';
 
-const redisEnvSchema = baseEnvSchema.extend({
-  UPSTASH_REDIS_REST_URL: z.url().optional(),
-  UPSTASH_REDIS_REST_TOKEN: zNonEmptyEnvString().optional(),
-  KV_REST_API_URL: z.url().optional(),
-  KV_REST_API_TOKEN: zNonEmptyEnvString().optional(),
-});
+const upstashPair = {
+  url: 'UPSTASH_REDIS_REST_URL',
+  token: 'UPSTASH_REDIS_REST_TOKEN',
+} as const;
+const vercelPair = {
+  url: 'KV_REST_API_URL',
+  token: 'KV_REST_API_TOKEN',
+} as const;
 
 export type RedisConfig = {
   restUrl: string;
@@ -38,44 +45,35 @@ const redisConfigMissingFieldsError = (
 export function getRedisConfig(): RedisConfig | null {
   if (cachedRedisConfig !== undefined) return cachedRedisConfig;
 
-  const env = parseEnv(redisEnvSchema);
-  // Treat each naming convention as a pair so an explicit override cannot
-  // accidentally combine one database's URL with another database's token.
-  const useUpstashNames =
-    env.UPSTASH_REDIS_REST_URL !== undefined ||
-    env.UPSTASH_REDIS_REST_TOKEN !== undefined;
-  const urlField = useUpstashNames
-    ? 'UPSTASH_REDIS_REST_URL'
-    : 'KV_REST_API_URL';
-  const tokenField = useUpstashNames
-    ? 'UPSTASH_REDIS_REST_TOKEN'
-    : 'KV_REST_API_TOKEN';
-  const restUrl = env[urlField];
-  const restToken = env[tokenField];
-  assertSecureUrlInProduction({
-    name: urlField,
-    value: restUrl,
-    env,
-  });
-  if (!restUrl && !restToken) {
+  const env = parseEnv(baseEnvSchema);
+  const pair =
+    unsetBlankServiceValue(env[upstashPair.url]) !== undefined ||
+    unsetBlankServiceValue(env[upstashPair.token]) !== undefined
+      ? upstashPair
+      : vercelPair;
+  const url = unsetBlankServiceValue(env[pair.url]);
+  const token = unsetBlankServiceValue(env[pair.token]);
+  if (url === undefined && token === undefined) {
     cachedRedisConfig = null;
     return cachedRedisConfig;
   }
-  if (!restUrl || !restToken) {
-    throw redisConfigMissingFieldsError(
-      [
-        !restUrl ? urlField : undefined,
-        !restToken ? tokenField : undefined,
-      ].filter((field): field is string => Boolean(field)),
-      urlField,
-      tokenField
-    );
+
+  const missing = [
+    ...(url === undefined ? [pair.url] : []),
+    ...(token === undefined ? [pair.token] : []),
+  ];
+  if (missing.length > 0) {
+    throw redisConfigMissingFieldsError(missing, pair.url, pair.token);
   }
 
-  const config: RedisConfig = {
-    restUrl,
-    restToken,
-  };
+  const selected = parseEnv(
+    z.object({ [pair.url]: z.url(), [pair.token]: zNonEmptyEnvString() }),
+    { [pair.url]: url, [pair.token]: token }
+  );
+  const restUrl = selected[pair.url]!;
+  const restToken = selected[pair.token]!;
+  assertSecureUrlInProduction({ name: pair.url, value: restUrl, env });
+  const config = { restUrl, restToken };
   cachedRedisConfig = config;
   return config;
 }

@@ -1,6 +1,9 @@
+import { sql } from 'drizzle-orm';
 import {
   boolean,
+  check,
   index,
+  integer,
   pgEnum,
   pgTable,
   text,
@@ -25,6 +28,7 @@ export const user = pgTable(
     name: text('name').notNull(),
     email: text('email').notNull(),
     emailVerified: boolean('emailVerified').notNull(),
+    credentialVersion: integer('credentialVersion').notNull().default(0),
     image: text('image'),
     createdAt: createdAtColumn(),
     updatedAt: updatedAtColumn(),
@@ -35,7 +39,13 @@ export const user = pgTable(
     banExpires: timestamp('banExpires', { precision: 3, mode: 'date' }),
     onboardedAt: timestamp('onboardedAt', { precision: 3, mode: 'date' }),
   },
-  (table) => [uniqueIndex('user_email_key').on(table.email)]
+  (table) => [
+    uniqueIndex('user_email_key').on(table.email),
+    check(
+      'user_credential_version_nonnegative',
+      sql`${table.credentialVersion} >= 0`
+    ),
+  ]
 );
 
 export const session = pgTable(
@@ -53,10 +63,15 @@ export const session = pgTable(
       .references(() => user.id, { onDelete: 'cascade' }),
 
     impersonatedBy: text('impersonatedBy'),
+    credentialVersion: integer('credentialVersion').notNull().default(0),
   },
   (table) => [
     uniqueIndex('session_token_key').on(table.token),
     index('session_user_id_idx').on(table.userId),
+    check(
+      'session_credential_version_nonnegative',
+      sql`${table.credentialVersion} >= 0`
+    ),
   ]
 );
 

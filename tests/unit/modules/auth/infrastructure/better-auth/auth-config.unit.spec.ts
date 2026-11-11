@@ -65,7 +65,16 @@ describe('Better Auth security configuration', () => {
     expect(options.advanced.disableCSRFCheck).toBeUndefined();
     expect(options.advanced.disableOriginCheck).toBeUndefined();
     expect(options.account.encryptOAuthTokens).toBe(true);
-    expect(options.disabledPaths).toEqual(['/admin/create-user']);
+    expect(options.disabledPaths).toEqual(
+      expect.arrayContaining([
+        '/admin/create-user',
+        '/change-password',
+        '/request-password-reset',
+        '/reset-password/:token',
+        '/admin/set-user-password',
+        '/admin/impersonate-user',
+      ])
+    );
     expect(options.trustedOrigins).toEqual(['https://app.example']);
   });
 
@@ -122,6 +131,8 @@ describe('Better Auth security configuration', () => {
       expiresIn: 604_800,
       updateAge: 86_400,
       freshAge: 900,
+      cookieCache: { enabled: false },
+      storeSessionInDatabase: false,
     });
 
     expect(options.emailAndPassword).toMatchObject({

@@ -2,6 +2,7 @@ import { betterAuth } from 'better-auth';
 import { drizzleAdapter } from 'better-auth/adapters/drizzle';
 import { admin, openAPI } from 'better-auth/plugins';
 import { tanstackStartCookies } from 'better-auth/tanstack-start';
+import { eq } from 'drizzle-orm';
 
 import { isProdRuntimeEnvironment } from '@/modules/kernel/backend';
 import { getBetterAuthConfig } from '@/modules/kernel/infrastructure/config/auth';
@@ -11,13 +12,19 @@ import {
 } from '@/modules/kernel/infrastructure/db/client';
 import { envClient } from '@/platform/env/client';
 
-import { BETTER_AUTH_CREATE_USER_PATH } from './auth-http-exposure';
+import { OPERATOR_ONLY_AUTH_PATHS } from './auth-http-exposure';
 import { createAuthCookieSecurityOptions } from './cookie-options';
 import {
   type CreateAuthOptions,
   normalizeCreateAuthInput,
 } from './create-auth-options';
+import { createCredentialVersionCache } from './credential-version-cache';
+import {
+  createCredentialVersionHooks,
+  credentialVersionField,
+} from './credential-version-hooks';
 import { betterAuthPermissions } from './permissions';
+import { user } from './schema';
 import { createBetterAuthSecondaryStorage } from './secondary-storage-adapter';
 import { InMemorySecondaryStore } from '../secondary-store/in-memory-secondary-store';
 import {
@@ -29,11 +36,23 @@ export function createAuth(input?: Database | CreateAuthOptions) {
   const options = normalizeCreateAuthInput(input);
   const database = options.database ?? getDefaultDbClient();
   const secondaryStore = options.secondaryStore ?? new InMemorySecondaryStore();
-  const secondaryStorage = createBetterAuthSecondaryStorage(secondaryStore);
+  const validateVersion = createCredentialVersionCache(async (userId) => {
+    const [row] = await database
+      .select({ version: user.credentialVersion })
+      .from(user)
+      .where(eq(user.id, userId))
+      .limit(1);
+    return row?.version;
+  }, options.credentialVersionClock);
+  const secondaryStorage = createBetterAuthSecondaryStorage(
+    secondaryStore,
+    validateVersion
+  );
   const authConfig = getBetterAuthConfig();
 
   return betterAuth({
-    disabledPaths: [BETTER_AUTH_CREATE_USER_PATH],
+    ...createCredentialVersionHooks(database),
+    disabledPaths: [...OPERATOR_ONLY_AUTH_PATHS, '/reset-password/:token'],
     secret: authConfig.secret,
     baseURL: {
       allowedHosts: [
@@ -49,6 +68,10 @@ export function createAuth(input?: Database | CreateAuthOptions) {
       max: authConfig.rateLimitMax,
     },
     session: {
+      // Secondary storage is the common validation boundary for all session reads.
+      cookieCache: { enabled: false },
+      storeSessionInDatabase: false,
+      additionalFields: { credentialVersion: credentialVersionField },
       expiresIn: authConfig.sessionExpirationInSeconds,
       updateAge: authConfig.sessionUpdateAgeInSeconds,
       freshAge: authConfig.sessionFreshAgeInSeconds,
@@ -65,6 +88,7 @@ export function createAuth(input?: Database | CreateAuthOptions) {
     }),
     user: {
       additionalFields: {
+        credentialVersion: credentialVersionField,
         onboardedAt: {
           type: 'date',
           // Server-managed workflow flag. `input: false` keeps it out of Better

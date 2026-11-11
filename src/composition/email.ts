@@ -1,3 +1,5 @@
+import { Result } from '@bloodyowl/boxed';
+
 import {
   createEmailUseCases,
   type EmailGateway,
@@ -12,7 +14,11 @@ import {
   EmailGatewaySmtp,
   ResendWebhookVerifier,
 } from '@/modules/email/backend';
-import type { Logger, TransactionRunner } from '@/modules/kernel';
+import {
+  AppError,
+  type Logger,
+  type TransactionRunner,
+} from '@/modules/kernel';
 import {
   createTelemetryLogger,
   getEmailConfig,
@@ -58,8 +64,15 @@ const createConfiguredEmailGateway = (
   statusTransactionRunner: TransactionRunner<EmailTransactionContext>,
   logger?: Pick<Logger, 'info'>
 ): EmailGateway => ({
-  sendEmail(input) {
-    if (getEmailConfig().server) {
+  async sendEmail(input) {
+    let config: ReturnType<typeof getEmailConfig>;
+    try {
+      config = getEmailConfig();
+    } catch (error) {
+      if (error instanceof AppError) return Result.Error(error);
+      throw error;
+    }
+    if (config.server) {
       return new EmailGatewaySmtp({
         logger,
         statusTransactionRunner,

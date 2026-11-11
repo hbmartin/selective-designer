@@ -5,6 +5,7 @@ import type { SecondaryStore } from '../../application/ports/secondary-store';
 export type CreateAuthOptions = {
   database?: Database;
   secondaryStore?: SecondaryStore;
+  credentialVersionClock?: () => number;
 };
 
 const hasDatabaseShape = (input: unknown): input is Database =>

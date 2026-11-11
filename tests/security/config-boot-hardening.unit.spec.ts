@@ -65,36 +65,53 @@ describe.each(['validateServerConfig', 'validateServerBuildConfig'] as const)(
       expect(() => validate()).not.toThrow();
     });
 
-    it('accepts production configuration without email services or a telemetry collector', async () => {
-      for (const key of [
-        'RESEND_API_KEY',
-        'RESEND_WEBHOOK_SECRET',
-        'RESEND_WEBHOOK_MAX_BYTES',
-        'EMAIL_SERVER',
-        'EMAIL_FROM',
-        'EMAIL_DELIVERY_DISABLED',
-      ]) {
-        vi.stubEnv(key, undefined);
+    it.each([
+      { sender: undefined, disabled: undefined, fails: false },
+      { sender: 'noreply@example.com', disabled: 'true', fails: false },
+      { sender: 'noreply@example.com', disabled: 'false', fails: true },
+    ])(
+      'validates enabled email only (disabled=$disabled, fails=$fails)',
+      async ({ sender, disabled, fails }) => {
+        for (const key of [
+          'UPSTASH_REDIS_REST_URL',
+          'UPSTASH_REDIS_REST_TOKEN',
+          'KV_REST_API_URL',
+          'KV_REST_API_TOKEN',
+          'OTEL_COLLECTOR_URL',
+          'OTEL_COLLECTOR_BEARER_TOKEN',
+          'SENTRY_DSN',
+          'VITE_SENTRY_DSN',
+          'RESEND_API_KEY',
+          'RESEND_WEBHOOK_SECRET',
+          'RESEND_WEBHOOK_MAX_BYTES',
+          'EMAIL_SERVER',
+          'EMAIL_FROM',
+          'EMAIL_DELIVERY_DISABLED',
+        ]) {
+          vi.stubEnv(key, undefined);
+        }
+        vi.stubEnv('NODE_ENV', 'production');
+        vi.stubEnv('AUTH_SECRET', makeStrongTestSecret('auth'));
+        vi.stubEnv('DATABASE_DRIVER', 'node-pg');
+        vi.stubEnv(
+          'DATABASE_URL',
+          `${makeTestDatabaseUrl()}?sslmode=verify-full`
+        );
+        vi.stubEnv('S3_ACCESS_KEY_ID', makeStrongTestSecret('s3-access'));
+        vi.stubEnv('S3_SECRET_ACCESS_KEY', makeStrongTestSecret('s3-secret'));
+        vi.stubEnv('S3_HOST', 'storage.example.com');
+        vi.stubEnv('S3_SECURE', 'true');
+        vi.stubEnv('PROVIDER_MODE', 'live');
+        vi.stubEnv('FAL_KEY', makeStrongTestSecret('fal'));
+        vi.stubEnv('BFL_API_KEY', makeStrongTestSecret('bfl'));
+        vi.stubEnv('EMAIL_FROM', sender);
+        vi.stubEnv('EMAIL_DELIVERY_DISABLED', disabled);
+
+        const validate = (await import('@/modules/kernel/backend'))[validator];
+
+        if (fails) expect(() => validate()).toThrow('RESEND_API_KEY');
+        else expect(() => validate()).not.toThrow();
       }
-      vi.stubEnv('NODE_ENV', 'production');
-      vi.stubEnv('AUTH_SECRET', makeStrongTestSecret('auth'));
-      vi.stubEnv('DATABASE_DRIVER', 'node-pg');
-      vi.stubEnv(
-        'DATABASE_URL',
-        `${makeTestDatabaseUrl()}?sslmode=verify-full`
-      );
-      vi.stubEnv('S3_ACCESS_KEY_ID', makeStrongTestSecret('s3-access'));
-      vi.stubEnv('S3_SECRET_ACCESS_KEY', makeStrongTestSecret('s3-secret'));
-      vi.stubEnv('S3_HOST', 'storage.example.com');
-      vi.stubEnv('S3_SECURE', 'true');
-      vi.stubEnv('PROVIDER_MODE', 'live');
-      vi.stubEnv('FAL_KEY', makeStrongTestSecret('fal'));
-      vi.stubEnv('BFL_API_KEY', makeStrongTestSecret('bfl'));
-      vi.stubEnv('OTEL_COLLECTOR_URL', undefined);
-
-      const validate = (await import('@/modules/kernel/backend'))[validator];
-
-      expect(() => validate()).not.toThrow();
-    });
+    );
   }
 );

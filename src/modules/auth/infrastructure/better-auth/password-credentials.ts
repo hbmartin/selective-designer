@@ -1,5 +1,5 @@
 import { hashPassword } from 'better-auth/crypto';
-import { eq } from 'drizzle-orm';
+import { eq, sql } from 'drizzle-orm';
 
 import {
   createTransactionRunner,
@@ -67,10 +67,10 @@ export async function writeOperatorPassword(
     }
 
     const [existing] = await tx
-      .select({ id: user.id })
-      .from(user)
+      .update(user)
+      .set({ credentialVersion: sql`${user.credentialVersion} + 1` })
       .where(eq(user.email, input.email))
-      .limit(1);
+      .returning({ id: user.id });
     if (!existing) return { type: 'account_missing' } as const;
     await writeCredential(tx, existing.id, passwordHash).onConflictDoUpdate({
       target: [account.providerId, account.accountId],

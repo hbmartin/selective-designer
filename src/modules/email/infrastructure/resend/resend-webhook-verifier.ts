@@ -1,10 +1,11 @@
 import type { WebhookEventPayload } from 'resend';
-import type { Resend } from 'resend';
+import { Resend } from 'resend';
 
 import { AppError } from '@/modules/kernel';
-import { getEmailConfig } from '@/modules/kernel/backend';
+import { getResendWebhookConfig } from '@/modules/kernel/backend';
 
-import { getDefaultResendClient } from './resend-client';
+// Verification in the Resend SDK is local and does not use the API key.
+const getLocalVerifier = () => new Resend('webhook-verification').webhooks;
 
 export type VerifyResendWebhookInput = {
   payload: string;
@@ -19,7 +20,7 @@ export class ResendWebhookVerifier {
   constructor(private readonly resend?: Resend) {}
 
   verify(input: VerifyResendWebhookInput): WebhookEventPayload {
-    const webhookSecret = getEmailConfig().resendWebhookSecret;
+    const webhookSecret = getResendWebhookConfig().secret;
     if (!webhookSecret) {
       throw new AppError({
         code: 'EMAIL_WEBHOOK_SECRET_NOT_CONFIGURED',
@@ -30,8 +31,8 @@ export class ResendWebhookVerifier {
     }
 
     try {
-      const resend = this.resend ?? getDefaultResendClient();
-      return resend.webhooks.verify({
+      const verifier = this.resend?.webhooks ?? getLocalVerifier();
+      return verifier.verify({
         payload: input.payload,
         headers: input.headers,
         webhookSecret,

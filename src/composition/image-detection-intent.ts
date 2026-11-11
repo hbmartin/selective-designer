@@ -29,6 +29,7 @@ import {
 import { createRegionRepository } from '@/modules/segmentation/backend';
 
 import type { PipelineKernel } from './pipeline-kernel';
+import { reportTerminalDiagnostic } from './telemetry/terminal-diagnostic';
 
 const RETRY_DELAYS = [100, 300] as const;
 type ExpectedImage = NewDesignImage & { designId: DesignId };
@@ -143,7 +144,7 @@ async function recoverWrite<T>(
             await wait(RETRY_DELAYS[read]!);
           }
         }
-        kernel.logger.warn({
+        await reportTerminalDiagnostic({
           event: 'image.write.unresolved',
           details: {
             imageId: input.image.id,

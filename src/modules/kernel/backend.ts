@@ -8,7 +8,10 @@ export {
   getBetterAuthConfig,
 } from './infrastructure/config/auth';
 export { assertLocalSeedTarget } from './infrastructure/config/database';
-export { getEmailConfig } from './infrastructure/config/email';
+export {
+  getEmailConfig,
+  getResendWebhookConfig,
+} from './infrastructure/config/email';
 export {
   getSeedAccountEmails,
   getSeedAccountPassword,

@@ -3,10 +3,9 @@ import { readFileSync } from 'node:fs';
 import { match } from 'ts-pattern';
 import { z } from 'zod';
 
-import { getAuth } from '@/composition/auth';
 import { operatorPasswordSchema } from '@/modules/auth';
 import { writeOperatorPassword } from '@/modules/auth/backend';
-import { getDefaultDbClient, getRedisConfig } from '@/modules/kernel/backend';
+import { getDefaultDbClient } from '@/modules/kernel/backend';
 
 const email = z.string().trim().toLowerCase().pipe(z.email());
 const args = z.union([
@@ -56,11 +55,6 @@ async function main() {
   }
   const db = getDefaultDbClient();
   try {
-    // Resolve shared session storage before changing an existing credential.
-    const authContext =
-      type === 'reset' && getRedisConfig()
-        ? await getAuth().$context
-        : undefined;
     const result = await writeOperatorPassword(
       db,
       type === 'create'
@@ -82,26 +76,16 @@ async function main() {
       .with({ type: 'account_missing' }, () => {
         throw new Error('No account found for that email.');
       })
-      .with({ type: 'password_set' }, async ({ userId }) => {
-        if (authContext) {
-          await authContext.internalAdapter
-            .deleteUserSessions(userId)
-            .catch(() => {
-              throw new Error(
-                'Password updated, but session revocation failed. Retry reset to revoke existing sessions.'
-              );
-            });
-        }
+      .with({ type: 'password_set' }, () => {
         if (type === 'create') {
           // Intentionally display the new credential once, only in an interactive terminal.
           // nosemgrep: token-or-secret-logging
           console.log(`Account created. Password: ${password.data}`);
-        } else if (authContext)
-          console.log('Password updated and sessions revoked.');
-        else
+        } else {
           console.log(
-            'Password updated. Restart running app instances to clear in-memory sessions.'
+            'Password updated. Previous sessions are rejected within 30 seconds.'
           );
+        }
       })
       .exhaustive();
   } finally {
@@ -115,9 +99,7 @@ try {
   // Database errors may include SQL parameters. Print only operator-facing messages.
   const message = error instanceof Error ? error.message : '';
   console.error(
-    /^(Account already exists|No account found|Password updated, but)/u.test(
-      message
-    )
+    /^(Account already exists|No account found)/u.test(message)
       ? message
       : 'Password operation failed. Check database and auth configuration.'
   );
