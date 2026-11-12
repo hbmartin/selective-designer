@@ -150,7 +150,7 @@
   },
   "dependencies": {
     "@base-ui/react": "1.6.0",
-    "@bearstudio/ui-state": "1.1.0",
+    "@bearstudio/ui-state": "2.0.0",
     "@better-upload/client": "3.0.19",
     "@better-upload/server": "3.0.19",
     "@bloodyowl/boxed": "^3.4.0",
