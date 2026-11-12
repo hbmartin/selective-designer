@@ -190,7 +190,7 @@
     "boring-avatars": "2.0.4",
     "class-variance-authority": "0.7.1",
     "clsx": "2.1.1",
-    "dotenv": "^17.4.2",
+    "dotenv": "^18.0.9",
     "drizzle-orm": "^0.45.4",
     "fast-png": "8.0.0",
     "i18next": "26.3.3",
