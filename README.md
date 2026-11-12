@@ -97,8 +97,9 @@ The app uses OpenTelemetry for traces, metrics, and server-emitted logs, with Se
 * Browser Sentry sends errors only, disables browser tracing, and uses the `/api/telemetry/sentry-tunnel` tunnel.
 * Frontend logs are batched to `/api/telemetry/logs`; production source should use `frontendLogger` instead of `console.*`.
 * Browser fetch instrumentation only propagates `traceparent` and `baggage` to same-origin requests and ignores `/api/telemetry/*`.
-* Server OTel exports to `OTEL_COLLECTOR_URL` when configured. A collector bearer token requires a URL. Without a collector, the OTLP proxy discards requests without reading their bodies; set `VITE_OTEL_BROWSER_ENABLED=false` to stop browser exports as well.
-* Server and workflow logs default to `error` in production. With no log sink, sanitized records go to console. Terminal unresolved diagnostics attempt configured OTel and Sentry delivery for up to five seconds; a failed or timed-out sink produces one console fallback. Sentry groups terminal issues by event name. Set `LOGGER_CONSOLE_MIRROR=true` to also mirror successful exports.
+* Server OTel exports to `OTEL_COLLECTOR_URL` when configured. A collector bearer token requires a URL. `TELEMETRY_REQUIRE_AUTH=true` requires a session for OTLP forwarding. Without a collector, the proxy returns 204 without looking up a session or reading the body. An enabled local SQLite sink records the signal and outcome. Set `VITE_OTEL_BROWSER_ENABLED=false` to stop browser exports.
+* Server and workflow Sentry prefer `SENTRY_DSN` and fall back to `VITE_SENTRY_DSN`. Server telemetry keeps user attribution scoped to each request.
+* Server and workflow logs default to `error` in production. Terminal unresolved diagnostics attempt configured OTel and Sentry delivery once per sink within five seconds. Missing or failed delivery produces one sanitized console record. The upload response leaves delivery to the host's background task support or writes the console record immediately when that support is unavailable. Sentry groups terminal issues by event name. Set `LOGGER_CONSOLE_MIRROR=true` to also mirror successful exports.
 
 The telemetry layer derives Query and mutation operation names from static TanStack Query key segments, such as `design.getAll`. Dynamic key values are hashed before becoming attributes; raw dynamic values are only exposed in localhost/debug mode. Route loaders and `beforeLoad` guards are wrapped with route-level spans so navigation time, guard time, loader time, and Query time can be separated.
 
@@ -212,6 +213,8 @@ pnpm auth:password create person@example.com "Person" user
 ```
 
 Use `admin` to provision an operator account. For recovery, run `pnpm auth:password reset person@example.com` with the new password on standard input. Use a unique password of 12–128 characters. The reset commits the password and session version together in PostgreSQL. Previous sessions stop authorizing requests within 30 seconds, without requiring Redis credentials or a restart. Native password writes and impersonation are disabled.
+
+When the database cannot return a fresh credential version, the app denies the request and keeps the session cookie. A later request can use the same cookie once validation succeeds.
 
 For the credential-version rollout, apply the migration before deploying the app, replace all instances serving the target database, then use the revised CLI. Unstamped sessions must sign in again. After using the revised reset command, keep the version check in place during any rollback.
 

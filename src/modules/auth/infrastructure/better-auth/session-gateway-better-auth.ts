@@ -1,4 +1,5 @@
 import { Option, Result } from '@bloodyowl/boxed';
+import { APIError } from 'better-auth/api';
 import { and, eq } from 'drizzle-orm';
 
 import {
@@ -20,6 +21,7 @@ import type { TelemetryAdapter } from '@/platform/telemetry';
 
 import type { Auth } from './auth';
 import { getDefaultAuth } from './auth';
+import { CREDENTIAL_VERSION_UNAVAILABLE } from './credential-version-cache';
 import { authIdentity, user as userTable } from '../drizzle/schema';
 import type { SessionGateway } from '../../application/ports/session-gateway';
 import { zRole } from '../../domain/permissions';
@@ -209,6 +211,19 @@ export class SessionGatewayBetterAuth implements SessionGateway {
             },
           });
         } catch (error) {
+          if (
+            error instanceof APIError &&
+            error.body?.code === CREDENTIAL_VERSION_UNAVAILABLE
+          ) {
+            return Result.Error(
+              new AppError({
+                code: CREDENTIAL_VERSION_UNAVAILABLE,
+                category: 'system',
+                status: 503,
+                message: 'Session validation is temporarily unavailable',
+              })
+            );
+          }
           return Result.Error(
             error instanceof AppError
               ? error

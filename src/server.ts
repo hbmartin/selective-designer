@@ -5,7 +5,12 @@ import handler, {
 } from '@tanstack/react-start/server-entry';
 import { randomUUID } from 'node:crypto';
 
-import { initTelemetryServer } from '@/composition/telemetry/sentry.server';
+import { withRequestLifetime } from '@/composition/telemetry/request-lifetime';
+import {
+  initTelemetryServer,
+  reportBootConfigurationFailure,
+  withServerTelemetryScope,
+} from '@/composition/telemetry/sentry.server';
 import { validateServerConfig } from '@/modules/kernel/backend';
 import { replaceCspNoncePlaceholderInHtmlResponse } from '@/platform/http/csp-nonce';
 import { createCspNonce } from '@/platform/http/csp-nonce-server';
@@ -15,8 +20,13 @@ import type { AppStartRequestContext } from './start';
 type ServerEntryRequestContext = AppStartRequestContext & { nonce?: string };
 
 // Fail-closed configuration validation at server boot, before request handling.
-validateServerConfig();
 initTelemetryServer();
+try {
+  validateServerConfig();
+} catch (error) {
+  await reportBootConfigurationFailure(error).catch(() => undefined);
+  throw error;
+}
 
 const requestHandler: ServerEntry = wrapFetchWithSentry({
   async fetch(request) {
@@ -35,4 +45,11 @@ const requestHandler: ServerEntry = wrapFetchWithSentry({
   },
 });
 
-export default createServerEntry(requestHandler);
+const startEntry = createServerEntry(requestHandler);
+
+export default {
+  fetch: (request, options) =>
+    withServerTelemetryScope(() =>
+      withRequestLifetime(request, () => startEntry.fetch(request, options))
+    ),
+} satisfies ServerEntry;

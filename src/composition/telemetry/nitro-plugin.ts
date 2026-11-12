@@ -1,7 +1,9 @@
 import { definePlugin } from 'nitro';
 
-import { initTelemetryServer } from './sentry.server';
+import { initTelemetryServer, withServerTelemetryScope } from './sentry.server';
 
-export default definePlugin(() => {
+export default definePlugin((app) => {
   initTelemetryServer();
+  const fetch = app.fetch.bind(app);
+  app.fetch = (request) => withServerTelemetryScope(() => fetch(request));
 });

@@ -4,6 +4,7 @@ import {
   baseEnvSchema,
   isProdRuntimeEnvironment,
   parseEnv,
+  unsetBlankServiceValue,
   zNonEmptyEnvString,
   zOptionalServiceString,
 } from './env-schema';
@@ -74,11 +75,10 @@ const enabledSendingEnvSchema = sendingEnvSchema
 const webhookEnvSchema = baseEnvSchema
   .extend({
     RESEND_WEBHOOK_SECRET: zOptionalServiceString(zNonEmptyEnvString()),
-    RESEND_WEBHOOK_MAX_BYTES: z.coerce
-      .number()
-      .int()
-      .positive()
-      .default(1_000_000),
+    RESEND_WEBHOOK_MAX_BYTES: z.preprocess(
+      unsetBlankServiceValue,
+      z.coerce.number().int().positive().default(1_000_000)
+    ),
   })
   .superRefine((env, ctx) => {
     if (

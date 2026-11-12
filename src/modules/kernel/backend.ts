@@ -9,6 +9,7 @@ export {
 } from './infrastructure/config/auth';
 export { assertLocalSeedTarget } from './infrastructure/config/database';
 export {
+  type EmailConfig,
   getEmailConfig,
   getResendWebhookConfig,
 } from './infrastructure/config/email';
@@ -16,6 +17,7 @@ export {
   getSeedAccountEmails,
   getSeedAccountPassword,
   isProdRuntimeEnvironment,
+  isTestRuntimeEnvironment,
 } from './infrastructure/config/env-schema';
 export { getHttpConfig } from './infrastructure/config/http';
 export { getRedisConfig } from './infrastructure/config/redis';

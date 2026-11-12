@@ -290,29 +290,31 @@ async function failureDiagnosticStep(
   unresolved: boolean
 ) {
   'use step';
-  const { getRenderFailureLogger } = await loadFailureDiagnostics();
-  const diagnostic = unresolved
-    ? {
-        level: 'error' as const,
-        event: 'rendering.result.failure_persistence_unresolved',
-      }
-    : {
-        level: 'warn' as const,
-        event: 'rendering.result.failure_persistence_exception',
-      };
-  await getRenderFailureLogger()[diagnostic.level]({
-    event: diagnostic.event,
-    details: {
-      ...executionOf(input),
-      reason,
-      receiptCapture: receiptCaptured ? 'confirmed' : 'unconfirmed',
-      code: error.code,
-      errorNames: error.errorNames,
-      errorCodes: error.errorCodes,
-      ...(error.recoveryWaitError
-        ? { recoveryWaitError: error.recoveryWaitError }
-        : {}),
-    },
+  const { getRenderFailureLogger, reportFailurePersistenceUnresolved } =
+    await loadFailureDiagnostics();
+  const details = {
+    ...executionOf(input),
+    reason,
+    receiptCapture: receiptCaptured
+      ? ('confirmed' as const)
+      : ('unconfirmed' as const),
+    code: error.code,
+    errorNames: error.errorNames,
+    errorCodes: error.errorCodes,
+    ...(error.recoveryWaitError
+      ? { recoveryWaitError: error.recoveryWaitError }
+      : {}),
+  };
+  if (unresolved) {
+    await reportFailurePersistenceUnresolved({
+      event: 'rendering.result.failure_persistence_unresolved',
+      details,
+    });
+    return;
+  }
+  getRenderFailureLogger().warn({
+    event: 'rendering.result.failure_persistence_exception',
+    details,
   });
 }
 failureDiagnosticStep.maxRetries = 0;

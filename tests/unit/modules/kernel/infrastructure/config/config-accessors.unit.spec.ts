@@ -537,6 +537,34 @@ describe('server config accessors', () => {
     });
   });
 
+  it.each([
+    ['', ' ', 1, 0.1],
+    ['0', '0', 0, 0],
+  ] as const)(
+    'distinguishes blank trace sample rates from zero',
+    async (otel, sentry, otelTracesSampleRate, tracesSampleRate) => {
+      vi.stubEnv('NODE_ENV', 'production');
+      vi.stubEnv('OTEL_TRACES_SAMPLE_RATE', otel);
+      vi.stubEnv('SENTRY_TRACES_SAMPLE_RATE', sentry);
+      const { getTelemetryConfig } =
+        await import('@/modules/kernel/infrastructure/config/telemetry');
+      expect(getTelemetryConfig()).toMatchObject({
+        otelTracesSampleRate,
+        tracesSampleRate,
+      });
+    }
+  );
+
+  it.each(['', '  '])(
+    'uses the default webhook size for a blank value',
+    async (size) => {
+      vi.stubEnv('RESEND_WEBHOOK_MAX_BYTES', size);
+      const { getResendWebhookConfig } =
+        await import('@/modules/kernel/infrastructure/config/email');
+      expect(getResendWebhookConfig().maxBodyBytes).toBe(1_000_000);
+    }
+  );
+
   it('accepts production telemetry config when the Collector URL is present', async () => {
     vi.stubEnv('NODE_ENV', 'production');
     vi.stubEnv('OTEL_COLLECTOR_URL', 'https://collector.example/v1');

@@ -377,6 +377,17 @@ jobs:
       - name: Verify production workflow diagnostics
         run: pnpm test:telemetry:production
 
+      - name: Build Vercel output and verify production diagnostics
+        env:
+          CI_PROVIDER_KEY_PLACEHOLDERS: 'true'
+          NITRO_PRESET: vercel
+          PRODUCTION_DIAGNOSTICS_ENTRY: .vercel/output/functions/.well-known/workflow/v1/flow.func/index.mjs
+          PRODUCTION_DIAGNOSTICS_HTTP_ENTRY: .vercel/output/functions/__server.func/index.mjs
+        run: |
+          set -o pipefail
+          pnpm build 2>&1 | tee test-results/build/build-vercel.log
+          pnpm test:telemetry:production
+
       - name: Upload build log
         if: always()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2

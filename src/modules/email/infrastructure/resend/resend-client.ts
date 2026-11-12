@@ -1,9 +1,8 @@
 import { Resend } from 'resend';
 
 import { AppError } from '@/modules/kernel';
-import { getEmailConfig } from '@/modules/kernel/backend';
 
-export function createResendClient(apiKey = getEmailConfig().resendApiKey) {
+export function createResendClient(apiKey: string | undefined) {
   if (!apiKey) {
     throw new AppError({
       code: 'EMAIL_RESEND_API_KEY_NOT_CONFIGURED',
@@ -14,11 +13,4 @@ export function createResendClient(apiKey = getEmailConfig().resendApiKey) {
   }
 
   return new Resend(apiKey);
-}
-
-let resend: ReturnType<typeof createResendClient> | undefined;
-
-export function getDefaultResendClient() {
-  resend ??= createResendClient();
-  return resend;
 }

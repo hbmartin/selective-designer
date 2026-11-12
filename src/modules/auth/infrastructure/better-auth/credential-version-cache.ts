@@ -1,5 +1,15 @@
+import { APIError } from 'better-auth/api';
+
 const VERSION_TTL_MS = 30_000;
 const MAX_ENTRIES = 1_024;
+export const CREDENTIAL_VERSION_UNAVAILABLE =
+  'AUTH_CREDENTIAL_VERSION_UNAVAILABLE';
+
+const unavailable = () =>
+  new APIError('SERVICE_UNAVAILABLE', {
+    code: CREDENTIAL_VERSION_UNAVAILABLE,
+    message: 'Session validation is temporarily unavailable',
+  });
 
 type VersionRead = { version: number; startedAt: number };
 
@@ -30,13 +40,18 @@ export function createCredentialVersionCache(
     if (existing) return existing;
     const startedAt = now();
     const task = readVersion(userId)
-      .then((version) => {
-        if (version === undefined || now() - startedAt >= VERSION_TTL_MS)
-          return undefined;
-        const entry = { version, startedAt };
-        remember(userId, entry);
-        return entries.get(userId);
-      })
+      .then(
+        (version) => {
+          if (now() - startedAt >= VERSION_TTL_MS) throw unavailable();
+          if (version === undefined) return undefined;
+          const entry = { version, startedAt };
+          remember(userId, entry);
+          return entries.get(userId);
+        },
+        () => {
+          throw unavailable();
+        }
+      )
       .finally(() => pending.delete(userId));
     pending.set(userId, task);
     return task;
@@ -57,8 +72,8 @@ export function createCredentialVersionCache(
     if (joinedRead && version && stamp > version.version) {
       version = await read(userId);
     }
-    return (
-      version?.version === stamp && now() - version.startedAt < VERSION_TTL_MS
-    );
+    if (version && now() - version.startedAt >= VERSION_TTL_MS)
+      throw unavailable();
+    return version?.version === stamp;
   };
 }

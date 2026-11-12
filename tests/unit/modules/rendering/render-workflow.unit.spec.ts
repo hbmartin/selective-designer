@@ -44,9 +44,9 @@ const makeDiagnosticsThrow = (message = 'diagnostics unavailable') => {
 
 vi.mock('@/composition/render-failure-diagnostics', () => ({
   reportSubmissionUnresolved: pipeline.reportSubmissionUnresolved,
+  reportFailurePersistenceUnresolved: pipeline.failureError,
   getRenderFailureLogger: () => ({
     warn: pipeline.failureWarning,
-    error: pipeline.failureError,
   }),
 }));
 const { sleep } = await import('workflow');

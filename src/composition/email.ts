@@ -63,25 +63,26 @@ const getDefaultEmailKernel = (): EmailKernel =>
 const createConfiguredEmailGateway = (
   statusTransactionRunner: TransactionRunner<EmailTransactionContext>,
   logger?: Pick<Logger, 'info'>
-): EmailGateway => ({
-  async sendEmail(input) {
-    let config: ReturnType<typeof getEmailConfig>;
-    try {
-      config = getEmailConfig();
-    } catch (error) {
-      if (error instanceof AppError) return Result.Error(error);
-      throw error;
-    }
-    if (config.server) {
-      return new EmailGatewaySmtp({
-        logger,
-        statusTransactionRunner,
-      }).sendEmail(input);
-    }
-
-    return new EmailGatewayResend({ statusTransactionRunner }).sendEmail(input);
-  },
-});
+): EmailGateway => {
+  let gateway: EmailGateway | undefined;
+  return {
+    async sendEmail(input) {
+      if (!gateway) {
+        let config: ReturnType<typeof getEmailConfig>;
+        try {
+          config = getEmailConfig();
+        } catch (error) {
+          if (error instanceof AppError) return Result.Error(error);
+          throw error;
+        }
+        gateway = config.server
+          ? new EmailGatewaySmtp({ config, logger, statusTransactionRunner })
+          : new EmailGatewayResend({ config, statusTransactionRunner });
+      }
+      return gateway.sendEmail(input);
+    },
+  };
+};
 
 const buildEmailServices = (overrides?: EmailOverrides): EmailServices => {
   const kernel =
