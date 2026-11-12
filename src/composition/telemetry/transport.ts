@@ -137,7 +137,7 @@ const validateTelemetryMutationRequest = (
  * multi-instance deployments each instance counts independently. Durable,
  * cross-instance rate limiting must be enforced at the edge/WAF (see
  * `docs/security-rate-limiting.md`); `TELEMETRY_REQUIRE_AUTH=true` is the
- * in-app lock-down that closes the anonymous proxy entirely. `scope` keeps a
+ * in-app gate for forwarding. `scope` keeps a
  * single page's traffic to one endpoint from starving the others.
  */
 const enforceTelemetryRateLimit = (request: Request, scope: string) => {
@@ -306,6 +306,12 @@ export const handleOtlpProxyRequest = async (
   const config = getTelemetryConfig();
   const { collectorUrl } = config;
   if (!collectorUrl) {
+    recordLocalTelemetrySummary({
+      kind: 'otlp_proxy',
+      signal,
+      statusCode: 204,
+      summary: { forwarded: false, reason: 'missing_collector_env' },
+    });
     return withTelemetryVary(noContent());
   }
 

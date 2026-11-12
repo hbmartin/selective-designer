@@ -5,7 +5,9 @@ import { AppError } from '@/modules/kernel';
 import { getResendWebhookConfig } from '@/modules/kernel/backend';
 
 // Verification in the Resend SDK is local and does not use the API key.
-const getLocalVerifier = () => new Resend('webhook-verification').webhooks;
+let verifier: Resend['webhooks'] | undefined;
+const getLocalVerifier = () =>
+  (verifier ??= new Resend('webhook-verification').webhooks);
 
 export type VerifyResendWebhookInput = {
   payload: string;

@@ -101,7 +101,12 @@ describe('telemetry transport handlers', () => {
     expect(proxyRequest.bodyUsed).toBe(false);
     expect(authUseCasesMock.getCurrentSession).not.toHaveBeenCalled();
     expect(fetch).not.toHaveBeenCalled();
-    expect(localSummaryMock).not.toHaveBeenCalled();
+    expect(localSummaryMock).toHaveBeenCalledExactlyOnceWith({
+      kind: 'otlp_proxy',
+      signal: 'traces',
+      statusCode: 204,
+      summary: { forwarded: false, reason: 'missing_collector_env' },
+    });
   });
 
   it('forwards OTLP protobuf payloads to the Collector with bearer auth', async () => {

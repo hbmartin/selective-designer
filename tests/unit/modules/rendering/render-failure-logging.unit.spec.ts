@@ -10,7 +10,7 @@ const pipeline = vi.hoisted(() => ({
 
 const emitLog = vi.hoisted(() => vi.fn());
 vi.mock('@/composition/telemetry/sentry.server', () => ({
-  initTelemetryServer: () => ({
+  getServerTelemetry: () => ({
     destinations: [
       async (record: unknown) => {
         emitLog(record);

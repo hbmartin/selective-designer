@@ -9,6 +9,7 @@ export {
 } from './infrastructure/config/auth';
 export { assertLocalSeedTarget } from './infrastructure/config/database';
 export {
+  type EmailConfig,
   getEmailConfig,
   getResendWebhookConfig,
 } from './infrastructure/config/email';

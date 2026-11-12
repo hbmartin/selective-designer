@@ -29,7 +29,11 @@ import {
 import { createRegionRepository } from '@/modules/segmentation/backend';
 
 import type { PipelineKernel } from './pipeline-kernel';
-import { reportTerminalDiagnostic } from './telemetry/terminal-diagnostic';
+import {
+  deferTerminalDiagnostic,
+  reportTerminalDiagnostic,
+  type TerminalDiagnostic,
+} from './telemetry/terminal-diagnostic';
 
 const RETRY_DELAYS = [100, 300] as const;
 type ExpectedImage = NewDesignImage & { designId: DesignId };
@@ -37,7 +41,12 @@ type WriteKernel = Pick<
   PipelineKernel,
   'db' | 'clock' | 'idGenerator' | 'logger'
 >;
-type Options = { delay?: (ms: number) => Promise<unknown> };
+type Options = {
+  delay?: (ms: number) => Promise<unknown>;
+  reportUnresolved?: (
+    fields: Extract<TerminalDiagnostic, { event: 'image.write.unresolved' }>
+  ) => void | Promise<void>;
+};
 type Registered =
   | RegisteredResultImage
   | { type: 'result_image_not_registered' }
@@ -82,7 +91,8 @@ async function recoverWrite<T>(
     work: (tx: DbTransaction) => Promise<ApplicationResult<T>>;
     verify?: (tx: DbTransaction) => Promise<boolean>;
   },
-  options: Options
+  options: Options,
+  reportUnresolved: NonNullable<Options['reportUnresolved']>
 ): Promise<ApplicationResult<T>> {
   const wait = options.delay ?? delay;
   const runner = createTransactionRunner(kernel.db);
@@ -144,7 +154,7 @@ async function recoverWrite<T>(
             await wait(RETRY_DELAYS[read]!);
           }
         }
-        await reportTerminalDiagnostic({
+        await (options.reportUnresolved ?? reportUnresolved)({
           event: 'image.write.unresolved',
           details: {
             imageId: input.image.id,
@@ -210,7 +220,8 @@ export function writeImageWithDetection(
         return saved;
       },
     },
-    options
+    options,
+    deferTerminalDiagnostic
   );
 }
 
@@ -378,6 +389,7 @@ export function writeRenderImageWithDetection(
         });
       },
     },
-    options
+    options,
+    reportTerminalDiagnostic
   );
 }

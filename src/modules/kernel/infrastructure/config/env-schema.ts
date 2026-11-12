@@ -66,6 +66,11 @@ export const isDevRuntimeEnvironment = (source?: RuntimeEnv) => {
   return env.NODE_ENV ? env.NODE_ENV === 'development' : isTruthy(env.DEV);
 };
 
+export const isTestRuntimeEnvironment = () => {
+  const env = runtimeEnv();
+  return env.NODE_ENV === 'test' || env.MODE === 'test';
+};
+
 export const shouldSkipEnvValidation = (source?: RuntimeEnv) => {
   const env = source ?? runtimeEnv();
   return isTruthy(env.SKIP_ENV_VALIDATION) && !isProdRuntimeEnvironment(env);

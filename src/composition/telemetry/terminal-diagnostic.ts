@@ -1,4 +1,3 @@
-import type { LogFields } from '@/modules/kernel/application/ports/logger';
 import { getLoggerConfig } from '@/modules/kernel/infrastructure/config/logger';
 import {
   createTelemetryLogger,
@@ -6,13 +5,45 @@ import {
 } from '@/modules/kernel/infrastructure/logger/telemetry';
 import { type TelemetryLogRecord, telemetryProxy } from '@/platform/telemetry';
 
+import { retainRequestTask } from './request-lifetime';
+
 const DELIVERY_TIMEOUT_MS = 5_000;
 
-export async function reportTerminalDiagnostic(
-  fields: Pick<LogFields, 'event' | 'details'>
-) {
+type ErrorDiagnostics = {
+  code: string;
+  errorNames: string[];
+  errorCodes: string[];
+};
+
+type RenderExecution = {
+  resultId: string;
+  attempt: number;
+  workflowRunId: string;
+  receiptCapture: 'confirmed' | 'unconfirmed';
+};
+
+export type TerminalDiagnostic =
+  | {
+      event: 'rendering.result.failure_persistence_unresolved';
+      details: RenderExecution &
+        ErrorDiagnostics & {
+          reason: string;
+          recoveryWaitError?: ErrorDiagnostics;
+        };
+    }
+  | {
+      event: 'rendering.result.submission_unresolved';
+      details: RenderExecution & { code: string };
+    }
+  | {
+      event: 'image.write.unresolved';
+      details: { imageId: string; errorNames: string[]; errorCodes: string[] };
+    };
+
+function prepareDiagnostic(fields: TerminalDiagnostic) {
   let record: TelemetryLogRecord | undefined;
   try {
+    const { consoleMirror } = getLoggerConfig();
     createTelemetryLogger({
       telemetry: {
         ...telemetryProxy,
@@ -21,8 +52,24 @@ export async function reportTerminalDiagnostic(
         },
       },
     }).error(fields);
-    if (!record) return;
+    if (record) return { record, consoleMirror };
+  } catch {
+    // Diagnostics never change the operation's outcome.
+  }
+}
 
+type PreparedDiagnostic = NonNullable<ReturnType<typeof prepareDiagnostic>>;
+
+function writeFallback({ record, consoleMirror }: PreparedDiagnostic) {
+  try {
+    if (!consoleMirror) writeConsoleLogRecord(record);
+  } catch {
+    // A console failure is also best effort.
+  }
+}
+
+async function deliverDiagnostic(prepared: PreparedDiagnostic) {
+  try {
     const controller = new AbortController();
     const expired = new Promise<false>((resolve) => {
       controller.signal.addEventListener('abort', () => resolve(false), {
@@ -36,13 +83,13 @@ export async function reportTerminalDiagnostic(
         expired,
       ]);
       if (bootstrap) {
-        const { destinations } = bootstrap.initTelemetryServer();
-        const entry = record;
+        const { destinations } = bootstrap.getServerTelemetry();
         const outcomes = await Promise.all(
           destinations.map(async (deliver) =>
-            Promise.race([deliver(entry, controller.signal), expired]).catch(
-              () => false
-            )
+            Promise.race([
+              deliver(prepared.record, controller.signal),
+              expired,
+            ]).catch(() => false)
           )
         );
         if (outcomes.length > 0 && outcomes.every(Boolean)) return;
@@ -54,10 +101,16 @@ export async function reportTerminalDiagnostic(
   } catch {
     // Diagnostics never change persistence certainty or accounting dispatch.
   }
-  try {
-    if (record && !getLoggerConfig().consoleMirror)
-      writeConsoleLogRecord(record);
-  } catch {
-    // A console failure is also best effort.
-  }
+  writeFallback(prepared);
+}
+
+export async function reportTerminalDiagnostic(fields: TerminalDiagnostic) {
+  const prepared = prepareDiagnostic(fields);
+  if (prepared) await deliverDiagnostic(prepared);
+}
+
+export function deferTerminalDiagnostic(fields: TerminalDiagnostic) {
+  const prepared = prepareDiagnostic(fields);
+  if (prepared && !retainRequestTask(() => deliverDiagnostic(prepared)))
+    writeFallback(prepared);
 }

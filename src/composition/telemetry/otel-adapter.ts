@@ -210,9 +210,14 @@ const completeSpanForResult = (
 };
 
 export const createOpenTelemetryAdapter = (
-  logger = otelLogger
+  logger = otelLogger,
+  userState?: {
+    get: () => TelemetryUser | null;
+    set: (user: TelemetryUser | null) => void;
+  }
 ): TelemetryAdapter => {
   let activeUser: TelemetryUser | null = null;
+  const getUser = userState?.get ?? (() => activeUser);
 
   return {
     captureException: (error, captureContext) => {
@@ -225,7 +230,7 @@ export const createOpenTelemetryAdapter = (
       activeSpan?.recordException(exception);
 
       logger.emit({
-        attributes: captureAttributes(captureContext, spanContext, activeUser),
+        attributes: captureAttributes(captureContext, spanContext, getUser()),
         body: message,
         eventName:
           typeof captureContext?.tags?.event === 'string'
@@ -250,6 +255,7 @@ export const createOpenTelemetryAdapter = (
     },
     emitLog: (record) => {
       const correlation = trace.getActiveSpan()?.spanContext();
+      const user = getUser();
       logger.emit({
         attributes: {
           ...compactAttributes(record.attributes),
@@ -257,7 +263,7 @@ export const createOpenTelemetryAdapter = (
           ...(record.error ? { error: record.error } : {}),
           ...(correlation?.spanId ? { 'span.id': correlation.spanId } : {}),
           ...(correlation?.traceId ? { 'trace.id': correlation.traceId } : {}),
-          ...(activeUser?.id ? { 'user.id': activeUser.id } : {}),
+          ...(user?.id ? { 'user.id': user.id } : {}),
           ...(record.details
             ? { details: JSON.stringify(record.details) }
             : {}),
@@ -275,29 +281,31 @@ export const createOpenTelemetryAdapter = (
       if (input.type === 'counter') {
         getCounter(input.name, input.unit).add(
           input.value,
-          metricAttributes(input.attributes, activeUser)
+          metricAttributes(input.attributes, getUser())
         );
         return;
       }
 
       getHistogram(input.name, input.unit).record(
         input.value,
-        metricAttributes(input.attributes, activeUser)
+        metricAttributes(input.attributes, getUser())
       );
     },
     setUser: (user) => {
-      activeUser = user;
+      if (userState) userState.set(user);
+      else activeUser = user;
     },
     startManualSpan: (options) => {
+      const user = getUser();
       const span = tracer.startSpan(options.name, {
-        attributes: spanAttributes(options.attributes, activeUser),
+        attributes: spanAttributes(options.attributes, user),
       });
-      return manualSpanHandle(span, activeUser);
+      return manualSpanHandle(span, user);
     },
     startSpan: (options: TelemetrySpanOptions, fn) =>
       tracer.startActiveSpan(
         options.name,
-        { attributes: spanAttributes(options.attributes, activeUser) },
+        { attributes: spanAttributes(options.attributes, getUser()) },
         (span) => {
           try {
             const result = fn();

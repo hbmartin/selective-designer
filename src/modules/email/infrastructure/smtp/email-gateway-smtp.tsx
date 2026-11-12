@@ -25,10 +25,11 @@ import {
   toEmailRecipientList,
   type TransactionRunner,
 } from '@/modules/kernel';
-import { getEmailConfig } from '@/modules/kernel/backend';
+import type { EmailConfig } from '@/modules/kernel/backend';
 import { envClient } from '@/platform/env/client';
 
 type EmailGatewaySmtpDeps = {
+  config: EmailConfig;
   logger?: Pick<Logger, 'info'>;
   statusTransactionRunner: TransactionRunner<EmailTransactionContext>;
 };
@@ -415,10 +416,12 @@ const sendSmtpMessage = async (
 };
 
 export class EmailGatewaySmtp implements EmailGateway {
+  private readonly config: EmailConfig;
   private readonly logger?: Pick<Logger, 'info'>;
   private readonly statusTransactionRunner: TransactionRunner<EmailTransactionContext>;
 
   constructor(deps: EmailGatewaySmtpDeps) {
+    this.config = deps.config;
     this.logger = deps.logger;
     this.statusTransactionRunner = deps.statusTransactionRunner;
   }
@@ -461,13 +464,7 @@ export class EmailGatewaySmtp implements EmailGateway {
       return Result.Error(idempotencyKeyError());
     }
 
-    let emailConfig: ReturnType<typeof getEmailConfig>;
-    try {
-      emailConfig = getEmailConfig();
-    } catch (error) {
-      if (error instanceof AppError) return Result.Error(error);
-      throw error;
-    }
+    const emailConfig = this.config;
     if (emailConfig.deliveryDisabled) {
       logE2eSmtpDiagnostic(
         this.logger,

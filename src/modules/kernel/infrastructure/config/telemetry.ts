@@ -4,25 +4,38 @@ import {
   baseEnvSchema,
   isProdRuntimeEnvironment,
   parseEnv,
+  unsetBlankServiceValue,
   zOptionalServiceString,
 } from './env-schema';
 import { assertSecureUrlInProduction } from './url-security';
 import { ConfigurationError } from '../../domain/errors/configuration-error';
 
-const telemetryEnvSchema = baseEnvSchema.extend({
+const sampleRate = z.preprocess(
+  unsetBlankServiceValue,
+  z.coerce.number().min(0).max(1).optional()
+);
+
+const sentryEnvSchema = baseEnvSchema.extend({
   SENTRY_DSN: zOptionalServiceString(z.url()),
   VITE_SENTRY_DSN: zOptionalServiceString(z.url()),
   SENTRY_ENVIRONMENT: zOptionalServiceString(),
-  SENTRY_TRACES_SAMPLE_RATE: z.coerce.number().min(0).max(1).optional(),
+  SENTRY_TRACES_SAMPLE_RATE: sampleRate,
   SENTRY_ORG: zOptionalServiceString(),
   SENTRY_PROJECT: zOptionalServiceString(),
   SENTRY_AUTH_TOKEN: zOptionalServiceString(),
+});
+
+const otelEnvSchema = baseEnvSchema.extend({
   OTEL_COLLECTOR_URL: zOptionalServiceString(z.url()),
   OTEL_COLLECTOR_BEARER_TOKEN: zOptionalServiceString(),
   OTEL_SERVICE_NAME: zOptionalServiceString(),
   OTEL_SERVICE_VERSION: zOptionalServiceString(),
   OTEL_ENVIRONMENT: zOptionalServiceString(),
-  OTEL_TRACES_SAMPLE_RATE: z.coerce.number().min(0).max(1).optional(),
+  OTEL_TRACES_SAMPLE_RATE: sampleRate,
+  SENTRY_ENVIRONMENT: zOptionalServiceString(),
+});
+
+const proxyEnvSchema = baseEnvSchema.extend({
   OTEL_LOCAL_SQLITE_ENABLED: z
     .enum(['true', 'false'])
     .optional()
@@ -38,34 +51,8 @@ const telemetryEnvSchema = baseEnvSchema.extend({
   TELEMETRY_REQUIRE_AUTH: z.stringbool().default(false),
 });
 
-export type TelemetryConfig = {
-  dsn?: string;
-  browserDsn?: string;
-  environment?: string;
-  tracesSampleRate: number;
-  org?: string;
-  project?: string;
-  authToken?: string;
-  collectorUrl?: string;
-  collectorBearerToken?: string;
-  serviceName: string;
-  serviceVersion?: string;
-  otelEnvironment?: string;
-  otelTracesSampleRate: number;
-  localSqliteEnabled: boolean;
-  localSqlitePath: string;
-  proxyMaxBytes: number;
-  logMaxEvents: number;
-  rateLimitPerMinute: number;
-  requireAuth: boolean;
-};
-
-let cachedTelemetryConfig: TelemetryConfig | undefined;
-
-export function getTelemetryConfig(): TelemetryConfig {
-  if (cachedTelemetryConfig) return cachedTelemetryConfig;
-
-  const env = parseEnv(telemetryEnvSchema);
+function readOtelConfig() {
+  const env = parseEnv(otelEnvSchema);
   const isProduction = isProdRuntimeEnvironment(env);
   if (env.OTEL_COLLECTOR_BEARER_TOKEN && !env.OTEL_COLLECTOR_URL) {
     throw new ConfigurationError(
@@ -77,6 +64,25 @@ export function getTelemetryConfig(): TelemetryConfig {
     value: env.OTEL_COLLECTOR_URL,
     env,
   });
+  return {
+    collectorUrl: env.OTEL_COLLECTOR_URL,
+    collectorBearerToken: env.OTEL_COLLECTOR_BEARER_TOKEN,
+    serviceName: env.OTEL_SERVICE_NAME ?? 'selective-designer',
+    serviceVersion: env.OTEL_SERVICE_VERSION,
+    otelEnvironment:
+      env.OTEL_ENVIRONMENT ??
+      env.SENTRY_ENVIRONMENT ??
+      (isProduction ? 'production' : 'local'),
+    otelTracesSampleRate: env.OTEL_TRACES_SAMPLE_RATE ?? 1,
+  };
+}
+
+let cachedOtelConfig: ReturnType<typeof readOtelConfig> | undefined;
+export const getOtelTelemetryConfig = () =>
+  (cachedOtelConfig ??= readOtelConfig());
+
+function readSentryConfig() {
+  const env = parseEnv(sentryEnvSchema);
   assertSecureUrlInProduction({
     name: 'SENTRY_DSN',
     value: env.SENTRY_DSN,
@@ -88,24 +94,32 @@ export function getTelemetryConfig(): TelemetryConfig {
     env,
   });
 
-  cachedTelemetryConfig = {
-    dsn: env.SENTRY_DSN,
+  return {
+    dsn: env.SENTRY_DSN ?? env.VITE_SENTRY_DSN,
     browserDsn: env.VITE_SENTRY_DSN ?? env.SENTRY_DSN,
     environment: env.SENTRY_ENVIRONMENT,
-    tracesSampleRate: env.SENTRY_TRACES_SAMPLE_RATE ?? (isProduction ? 0.1 : 1),
+    tracesSampleRate:
+      env.SENTRY_TRACES_SAMPLE_RATE ??
+      (isProdRuntimeEnvironment(env) ? 0.1 : 1),
     org: env.SENTRY_ORG,
     project: env.SENTRY_PROJECT,
     authToken: env.SENTRY_AUTH_TOKEN,
-    collectorUrl: env.OTEL_COLLECTOR_URL,
-    collectorBearerToken: env.OTEL_COLLECTOR_BEARER_TOKEN,
-    serviceName: env.OTEL_SERVICE_NAME ?? 'selective-designer',
-    serviceVersion: env.OTEL_SERVICE_VERSION,
-    otelEnvironment:
-      env.OTEL_ENVIRONMENT ??
-      env.SENTRY_ENVIRONMENT ??
-      (isProduction ? 'production' : 'local'),
-    otelTracesSampleRate: env.OTEL_TRACES_SAMPLE_RATE ?? 1,
-    localSqliteEnabled: env.OTEL_LOCAL_SQLITE_ENABLED ?? !isProduction,
+  };
+}
+
+let cachedSentryConfig: ReturnType<typeof readSentryConfig> | undefined;
+export const getSentryTelemetryConfig = () =>
+  (cachedSentryConfig ??= readSentryConfig());
+
+function readTelemetryConfig() {
+  const otel = getOtelTelemetryConfig();
+  const sentry = getSentryTelemetryConfig();
+  const env = parseEnv(proxyEnvSchema);
+  return {
+    ...otel,
+    ...sentry,
+    localSqliteEnabled:
+      env.OTEL_LOCAL_SQLITE_ENABLED ?? !isProdRuntimeEnvironment(env),
     localSqlitePath:
       env.OTEL_LOCAL_SQLITE_PATH ?? '.telemetry/telemetry.sqlite',
     proxyMaxBytes: env.TELEMETRY_PROXY_MAX_BYTES ?? 1_000_000,
@@ -113,5 +127,9 @@ export function getTelemetryConfig(): TelemetryConfig {
     rateLimitPerMinute: env.TELEMETRY_RATE_LIMIT_PER_MINUTE ?? 600,
     requireAuth: env.TELEMETRY_REQUIRE_AUTH,
   };
-  return cachedTelemetryConfig;
 }
+
+export type TelemetryConfig = ReturnType<typeof readTelemetryConfig>;
+let cachedTelemetryConfig: TelemetryConfig | undefined;
+export const getTelemetryConfig = () =>
+  (cachedTelemetryConfig ??= readTelemetryConfig());

@@ -19,11 +19,12 @@ import {
   toEmailRecipientList,
   type TransactionRunner,
 } from '@/modules/kernel';
-import { getEmailConfig } from '@/modules/kernel/backend';
+import type { EmailConfig } from '@/modules/kernel/backend';
 
-import { getDefaultResendClient } from './resend-client';
+import { createResendClient } from './resend-client';
 
 type EmailGatewayResendDeps = {
+  config: EmailConfig;
   statusTransactionRunner: TransactionRunner<EmailTransactionContext>;
   resend?: Resend;
 };
@@ -85,10 +86,12 @@ const providerErrorMetadata = (error: unknown): EmailMetadata => {
 };
 
 export class EmailGatewayResend implements EmailGateway {
-  private readonly resend?: Resend;
+  private resend?: Resend;
+  private readonly config: EmailConfig;
   private readonly statusTransactionRunner: TransactionRunner<EmailTransactionContext>;
 
   constructor(deps: EmailGatewayResendDeps) {
+    this.config = deps.config;
     this.resend = deps.resend;
     this.statusTransactionRunner = deps.statusTransactionRunner;
   }
@@ -112,13 +115,7 @@ export class EmailGatewayResend implements EmailGateway {
       return Result.Error(idempotencyKeyError());
     }
 
-    let emailConfig: ReturnType<typeof getEmailConfig>;
-    try {
-      emailConfig = getEmailConfig();
-    } catch (error) {
-      if (error instanceof AppError) return Result.Error(error);
-      throw error;
-    }
+    const emailConfig = this.config;
     if (emailConfig.deliveryDisabled) {
       return Result.Ok({
         type: 'email_send_skipped',
@@ -218,7 +215,9 @@ export class EmailGatewayResend implements EmailGateway {
       ...(input.tags ? { tags: input.tags } : {}),
     };
 
-    const resend = this.resend ?? getDefaultResendClient();
+    const resend = (this.resend ??= createResendClient(
+      emailConfig.resendApiKey
+    ));
     const responseResult = await Result.fromPromise(
       resend.emails.send(payload, {
         idempotencyKey: input.idempotencyKey,

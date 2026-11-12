@@ -16,9 +16,13 @@ import {
   vi,
 } from 'vitest';
 
-import { reportTerminalDiagnostic } from '@/composition/telemetry/terminal-diagnostic';
+import {
+  deferTerminalDiagnostic,
+  reportTerminalDiagnostic,
+} from '@/composition/telemetry/terminal-diagnostic';
 
 vi.mock('@/composition/telemetry/terminal-diagnostic', () => ({
+  deferTerminalDiagnostic: vi.fn(),
   reportTerminalDiagnostic: vi.fn(),
 }));
 
@@ -355,6 +359,14 @@ describe('atomic image and detection writes', () => {
         expect(result.isError() && result.getError().cause).toBe(lost);
         expect(spy).toHaveBeenCalledTimes(4);
         expect(ctx.wait.mock.calls).toEqual([[100], [300]]);
+        expect(deferTerminalDiagnostic).toHaveBeenCalledWith({
+          event: 'image.write.unresolved',
+          details: {
+            imageId: image().id,
+            errorNames: ['Error'],
+            errorCodes: [],
+          },
+        });
       } finally {
         spy.mockRestore();
       }

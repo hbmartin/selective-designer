@@ -6,6 +6,7 @@ import viteReact, { reactCompilerPreset } from '@vitejs/plugin-react';
 import { nitro } from 'nitro/vite';
 import { readFile } from 'node:fs/promises';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { defineConfig, loadEnv, type Plugin } from 'vite';
 import { workflow } from 'workflow/vite';
 
@@ -109,7 +110,14 @@ export default defineConfig(({ mode }) => {
       srcJsonImportPlugin(),
       tanstackStart(),
       nitro({
-        plugins: [path.resolve('src/composition/telemetry/nitro-plugin.ts')],
+        plugins: [
+          fileURLToPath(
+            new URL(
+              './src/composition/telemetry/nitro-plugin.ts',
+              import.meta.url
+            )
+          ),
+        ],
       }),
       // react's vite plugin must come after start's vite plugin
       viteReact(),

@@ -1,8 +1,7 @@
-import { metrics } from '@opentelemetry/api';
+import { type ContextManager, metrics } from '@opentelemetry/api';
 import { logs } from '@opentelemetry/api-logs';
 import {
   CompositePropagator,
-  ExportResultCode,
   W3CBaggagePropagator,
   W3CTraceContextPropagator,
 } from '@opentelemetry/core';
@@ -14,6 +13,7 @@ import {
   BatchLogRecordProcessor,
   LoggerProvider,
   type LogRecordProcessor,
+  type ReadableLogRecord,
 } from '@opentelemetry/sdk-logs';
 import {
   MeterProvider,
@@ -32,38 +32,32 @@ import {
 } from '@opentelemetry/semantic-conventions';
 import { AsyncLocalStorage } from 'node:async_hooks';
 
-import { getTelemetryConfig } from '@/modules/kernel/infrastructure/config/telemetry';
-import type { TelemetryLogRecord } from '@/platform/telemetry';
+import type { getOtelTelemetryConfig } from '@/modules/kernel/infrastructure/config/telemetry';
+import type { TelemetryLogRecord, TelemetryUser } from '@/platform/telemetry';
 
 import { telemetrySignalUrl } from './collector-url';
 import { createOpenTelemetryAdapter } from './otel-adapter';
+import { createTerminalOtlpExporter } from './terminal-otlp-export';
 
-const createResource = () => {
-  const config = getTelemetryConfig();
-  return resourceFromAttributes({
+type OtelConfig = ReturnType<typeof getOtelTelemetryConfig>;
+
+const createResource = (config: OtelConfig) =>
+  resourceFromAttributes({
     [ATTR_DEPLOYMENT_ENVIRONMENT_NAME]: config.otelEnvironment,
     [ATTR_SERVICE_NAME]: config.serviceName,
     ...(config.serviceVersion
       ? { [ATTR_SERVICE_VERSION]: config.serviceVersion }
       : {}),
   });
-};
 
-const exporterHeaders = () => {
-  const { collectorBearerToken } = getTelemetryConfig();
-  return collectorBearerToken
-    ? { Authorization: `Bearer ${collectorBearerToken}` }
+export const initOpenTelemetryServer = (
+  config: OtelConfig & { collectorUrl: string },
+  contextManager?: ContextManager | null
+) => {
+  const resource = createResource(config);
+  const headers = config.collectorBearerToken
+    ? { Authorization: `Bearer ${config.collectorBearerToken}` }
     : undefined;
-};
-
-export const initOpenTelemetryServer = () => {
-  const config = getTelemetryConfig();
-  if (!config.collectorUrl) {
-    return undefined;
-  }
-
-  const resource = createResource();
-  const headers = exporterHeaders();
   const tracerProvider = new NodeTracerProvider({
     resource,
     sampler: new ParentBasedSampler({
@@ -79,15 +73,6 @@ export const initOpenTelemetryServer = () => {
     ],
   });
 
-  tracerProvider.register({
-    propagator: new CompositePropagator({
-      propagators: [
-        new W3CTraceContextPropagator(),
-        new W3CBaggagePropagator(),
-      ],
-    }),
-  });
-
   const meterProvider = new MeterProvider({
     readers: [
       new PeriodicExportingMetricReader({
@@ -100,25 +85,19 @@ export const initOpenTelemetryServer = () => {
     ],
     resource,
   });
-  metrics.setGlobalMeterProvider(meterProvider);
-
-  const exporter = new OTLPLogExporter({
-    headers,
-    url: telemetrySignalUrl(config.collectorUrl, 'logs'),
-    timeoutMillis: 5_000,
-  });
-  const batch = new BatchLogRecordProcessor(exporter);
-  const delivery = new AsyncLocalStorage<(accepted: boolean) => void>();
+  const logsUrl = telemetrySignalUrl(config.collectorUrl, 'logs');
+  const batch = new BatchLogRecordProcessor(
+    new OTLPLogExporter({ headers, url: logsUrl })
+  );
+  const exportTerminal = createTerminalOtlpExporter(logsUrl, headers);
+  const terminalRecord = new AsyncLocalStorage<
+    (record: ReadableLogRecord) => void
+  >();
   const processor: LogRecordProcessor = {
     onEmit(record) {
-      const acknowledge = delivery.getStore();
-      if (!acknowledge) {
-        batch.onEmit(record);
-        return;
-      }
-      exporter.export([record], (result) => {
-        acknowledge(result.code === ExportResultCode.SUCCESS);
-      });
+      const capture = terminalRecord.getStore();
+      if (capture) capture(record);
+      else batch.onEmit(record);
     },
     forceFlush: () => batch.forceFlush(),
     shutdown: () => batch.shutdown(),
@@ -127,16 +106,42 @@ export const initOpenTelemetryServer = () => {
     processors: [processor],
     resource,
   });
+  tracerProvider.register({
+    contextManager,
+    propagator: new CompositePropagator({
+      propagators: [
+        new W3CTraceContextPropagator(),
+        new W3CBaggagePropagator(),
+      ],
+    }),
+  });
+  metrics.setGlobalMeterProvider(meterProvider);
   logs.setGlobalLoggerProvider(loggerProvider);
 
+  const requestUser = new AsyncLocalStorage<{ value: TelemetryUser | null }>();
   const adapter = createOpenTelemetryAdapter(
-    loggerProvider.getLogger('selective-designer')
+    loggerProvider.getLogger('selective-designer'),
+    {
+      get: () => requestUser.getStore()?.value ?? null,
+      set: (value) => {
+        const user = requestUser.getStore();
+        if (user) user.value = value;
+      },
+    }
   );
   return {
     adapter,
-    deliver: (record: TelemetryLogRecord) =>
-      new Promise<boolean>((resolve) =>
-        delivery.run(resolve, () => adapter.emitLog(record))
-      ),
+    withUserScope: <T>(run: () => T) => requestUser.run({ value: null }, run),
+    async deliver(record: TelemetryLogRecord, signal: AbortSignal) {
+      if (signal.aborted) return false;
+      let sdkRecord: ReadableLogRecord | undefined;
+      terminalRecord.run(
+        (entry) => {
+          sdkRecord = entry;
+        },
+        () => adapter.emitLog(record)
+      );
+      return sdkRecord ? exportTerminal(sdkRecord, signal) : false;
+    },
   };
 };

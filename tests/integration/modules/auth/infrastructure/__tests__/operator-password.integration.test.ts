@@ -1,9 +1,9 @@
 import { createRecoveryTestDatabase } from '@tests/server/recovery-database';
 import { okValue } from '@tests/support/result';
-import { randomBytes } from 'node:crypto';
-import { createServer } from 'node:http';
-import { once } from 'node:events';
 import { eq } from 'drizzle-orm';
+import { randomBytes } from 'node:crypto';
+import { once } from 'node:events';
+import { createServer } from 'node:http';
 import {
   afterAll,
   beforeAll,
@@ -14,19 +14,20 @@ import {
   vi,
 } from 'vitest';
 
-import { createNoOpTelemetry } from '@/platform/telemetry';
-import { UpstashSecondaryStore } from '@/modules/auth/infrastructure/secondary-store/upstash-secondary-store';
-import { SessionGatewayBetterAuth } from '@/modules/auth/infrastructure/better-auth/session-gateway-better-auth';
-import { user } from '@/modules/auth/infrastructure/better-auth/schema';
 import {
-  createAuth,
   type Auth,
+  createAuth,
 } from '@/modules/auth/infrastructure/better-auth/auth';
 import { writeOperatorPassword } from '@/modules/auth/infrastructure/better-auth/password-credentials';
+import { user } from '@/modules/auth/infrastructure/better-auth/schema';
+import { SessionGatewayBetterAuth } from '@/modules/auth/infrastructure/better-auth/session-gateway-better-auth';
 import { createUserRepository } from '@/modules/auth/infrastructure/drizzle/user-repository-drizzle';
+import { InMemorySecondaryStore } from '@/modules/auth/infrastructure/secondary-store/in-memory-secondary-store';
+import { UpstashSecondaryStore } from '@/modules/auth/infrastructure/secondary-store/upstash-secondary-store';
 import { toEmailAddress, toUserId } from '@/modules/kernel/domain/ids';
 import { unwrapParseResult } from '@/modules/kernel/testing';
 import { envClient } from '@/platform/env/client';
+import { createNoOpTelemetry } from '@/platform/telemetry';
 
 const email = 'operator-test@example.com';
 const generatedPassword = () => randomBytes(24).toString('hex');
@@ -255,6 +256,57 @@ describe('operator passwords', () => {
         headers: await signInCookie(authB, newPassword),
       })
     ).not.toBeNull();
+  });
+
+  it('preserves the session cookie through a transient credential version read', async () => {
+    const password = generatedPassword();
+    await provision(password);
+    const secondaryStore = new InMemorySecondaryStore();
+    const headers = await signInCookie(
+      createAuth({ database: database.db, secondaryStore }),
+      password
+    );
+    const createVerifier = () => {
+      // The first read starts at 0 and finishes exactly at expiry.
+      let clockReads = 0;
+      return createAuth({
+        database: database.db,
+        secondaryStore,
+        credentialVersionClock: () => (clockReads++ === 0 ? 0 : 30_000),
+      });
+    };
+    const request = (path: string) =>
+      new Request(new URL(`/api/auth/${path}`, envClient.VITE_BASE_URL), {
+        headers,
+      });
+    const verifier = createVerifier();
+    const failed = await verifier.handler(request('get-session'));
+    expect(failed.status).toBe(503);
+    expect(failed.headers.getSetCookie()).toEqual([]);
+    await expect(failed.json()).resolves.toMatchObject({
+      code: 'AUTH_CREDENTIAL_VERSION_UNAVAILABLE',
+    });
+    const nativeProtected = await createVerifier().handler(
+      request('list-sessions')
+    );
+    expect(nativeProtected.status).toBe(401);
+    expect(nativeProtected.headers.getSetCookie()).toEqual([]);
+
+    const gateway = new SessionGatewayBetterAuth(
+      createVerifier(),
+      database.db,
+      undefined,
+      createNoOpTelemetry()
+    );
+    const result = await gateway.getSession({ headers });
+    expect(result.isError() && result.getError()).toMatchObject({
+      code: 'AUTH_CREDENTIAL_VERSION_UNAVAILABLE',
+      status: 503,
+    });
+    const recovered = await verifier.handler(request('get-session'));
+    expect(recovered.status).toBe(200);
+    await expect(recovered.json()).resolves.toMatchObject({ user: { email } });
+    expect((await verifier.handler(request('list-sessions'))).status).toBe(200);
   });
 
   it('rejects stale Upstash sessions without removing records and accepts the new version immediately', async () => {

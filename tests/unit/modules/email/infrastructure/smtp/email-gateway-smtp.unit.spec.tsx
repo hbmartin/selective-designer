@@ -20,6 +20,7 @@ import {
   toEmailRecipientList,
   toEmailStatusId,
 } from '@/modules/kernel/domain/ids';
+import type { EmailConfig } from '@/modules/kernel/backend';
 import { unwrapParseResult } from '@/modules/kernel/testing';
 
 const testState = vi.hoisted(() => {
@@ -41,9 +42,10 @@ const testState = vi.hoisted(() => {
   };
 });
 
-vi.mock('@/modules/kernel/backend', () => ({
-  getEmailConfig: () => testState.emailConfig,
-}));
+const emailConfig = (): EmailConfig =>
+  testState.emailConfig.deliveryDisabled
+    ? { deliveryDisabled: true }
+    : { ...testState.emailConfig, deliveryDisabled: false };
 
 vi.mock('@react-email/render', () => ({
   render: testState.render,
@@ -272,6 +274,7 @@ describe('EmailGatewaySmtp', () => {
     const { EmailGatewaySmtp } = await loadGateway();
 
     const result = await new EmailGatewaySmtp({
+      config: emailConfig(),
       statusTransactionRunner: makeStatusTransactionRunner(statusRepository),
     }).sendEmail({
       to: recipient,
@@ -327,6 +330,7 @@ describe('EmailGatewaySmtp', () => {
     const { EmailGatewaySmtp } = await loadGateway();
 
     const result = await new EmailGatewaySmtp({
+      config: emailConfig(),
       statusTransactionRunner: makeStatusTransactionRunner(statusRepository),
     }).sendEmail({
       to: recipient,
@@ -350,6 +354,7 @@ describe('EmailGatewaySmtp', () => {
     const { EmailGatewaySmtp } = await loadGateway();
 
     const result = await new EmailGatewaySmtp({
+      config: emailConfig(),
       statusTransactionRunner: makeStatusTransactionRunner(statusRepository),
     }).sendEmail({
       to: recipient,
