@@ -17,6 +17,7 @@ export {
   getSeedAccountEmails,
   getSeedAccountPassword,
   isProdRuntimeEnvironment,
+  isTestRuntimeEnvironment,
 } from './infrastructure/config/env-schema';
 export { getHttpConfig } from './infrastructure/config/http';
 export { getRedisConfig } from './infrastructure/config/redis';

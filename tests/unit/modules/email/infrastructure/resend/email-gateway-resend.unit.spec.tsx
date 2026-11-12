@@ -9,13 +9,13 @@ import type {
   EmailTransactionContext,
 } from '@/modules/email';
 import type { ApplicationResult, TransactionRunner } from '@/modules/kernel';
+import type { EmailConfig } from '@/modules/kernel/backend';
 import {
   toEmailIdempotencyKey,
   toEmailProviderMessageId,
   toEmailRecipientList,
   toEmailStatusId,
 } from '@/modules/kernel/domain/ids';
-import type { EmailConfig } from '@/modules/kernel/backend';
 import { unwrapParseResult } from '@/modules/kernel/testing';
 
 const testState = vi.hoisted(() => {

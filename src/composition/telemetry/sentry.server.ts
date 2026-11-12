@@ -2,8 +2,8 @@ import { context } from '@opentelemetry/api';
 import * as Sentry from '@sentry/tanstackstart-react';
 import { randomUUID } from 'node:crypto';
 
+import { isTestRuntimeEnvironment } from '@/modules/kernel/backend';
 import { ConfigurationError } from '@/modules/kernel/domain/errors/configuration-error';
-import { isTestRuntimeEnvironment } from '@/modules/kernel/infrastructure/config/env-schema';
 import { getLoggerConfig } from '@/modules/kernel/infrastructure/config/logger';
 import {
   getOtelTelemetryConfig,
