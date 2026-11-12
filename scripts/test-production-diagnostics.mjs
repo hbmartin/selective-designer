@@ -284,6 +284,10 @@ for (const scenario of scenarios) {
     try {
       const port = receiver.address().port;
       const sentryDsn = `http://public@127.0.0.1:${port}/1`;
+      const invalidDsnMarker = randomBytes(12).toString('hex');
+      const invalidDsn = new URL('https://host!invalid/1');
+      invalidDsn.username = 'public';
+      invalidDsn.password = invalidDsnMarker;
       const env = {
         NODE_ENV: scenario.testRuntime ? 'test' : 'production',
         NITRO_HOST: '127.0.0.1',
@@ -302,7 +306,7 @@ for (const scenario of scenarios) {
         FAL_KEY: randomBytes(16).toString('hex'),
         BFL_API_KEY: randomBytes(16).toString('hex'),
         SENTRY_DSN: scenario.invalidSentry
-          ? 'https://public:privateInvalidDsnProbe@host!invalid/1'
+          ? invalidDsn.href
           : scenario.sentry && !scenario.sentryFallback
             ? sentryDsn
             : '',
@@ -356,7 +360,7 @@ for (const scenario of scenarios) {
         output + received.otel.join('') + received.sentry.join('');
       assert(!allLogs.includes('private-locator-fixture'));
       assert(!allLogs.includes('private-message-fixture'));
-      assert(!allLogs.includes('privateInvalidDsnProbe'));
+      assert(!allLogs.includes(invalidDsnMarker));
       assert(!allLogs.includes('private-invalid-sample-rate-probe'));
       assert(!allLogs.includes('failure_persistence_exception'));
       if (scenario.bootFailure) {
