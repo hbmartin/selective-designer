@@ -7,18 +7,31 @@ import {
   type TerminalDiagnostic,
 } from './telemetry/terminal-diagnostic';
 
+type FailurePersistenceDetails = Extract<
+  TerminalDiagnostic,
+  { event: 'rendering.result.failure_persistence_unresolved' }
+>['details'];
+
 // Failure reporting must remain available when rendering or database setup fails.
 const factory = createCachedFactory(() =>
   createTelemetryLogger({ telemetry: telemetryProxy })
 );
-export const getRenderFailureLogger = () => factory.get();
+
+export const reportFailurePersistenceException = (
+  details: FailurePersistenceDetails
+) =>
+  factory.get().warn({
+    event: 'rendering.result.failure_persistence_exception',
+    details,
+  });
 
 export const reportFailurePersistenceUnresolved = (
-  fields: Extract<
-    TerminalDiagnostic,
-    { event: 'rendering.result.failure_persistence_unresolved' }
-  >
-) => reportTerminalDiagnostic(fields);
+  details: FailurePersistenceDetails
+) =>
+  reportTerminalDiagnostic({
+    event: 'rendering.result.failure_persistence_unresolved',
+    details,
+  });
 
 export const reportSubmissionUnresolved = (details: {
   resultId: string;

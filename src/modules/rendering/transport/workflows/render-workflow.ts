@@ -290,8 +290,10 @@ async function failureDiagnosticStep(
   unresolved: boolean
 ) {
   'use step';
-  const { getRenderFailureLogger, reportFailurePersistenceUnresolved } =
-    await loadFailureDiagnostics();
+  const {
+    reportFailurePersistenceException,
+    reportFailurePersistenceUnresolved,
+  } = await loadFailureDiagnostics();
   const details = {
     ...executionOf(input),
     reason,
@@ -306,16 +308,10 @@ async function failureDiagnosticStep(
       : {}),
   };
   if (unresolved) {
-    await reportFailurePersistenceUnresolved({
-      event: 'rendering.result.failure_persistence_unresolved',
-      details,
-    });
+    await reportFailurePersistenceUnresolved(details);
     return;
   }
-  getRenderFailureLogger().warn({
-    event: 'rendering.result.failure_persistence_exception',
-    details,
-  });
+  reportFailurePersistenceException(details);
 }
 failureDiagnosticStep.maxRetries = 0;
 export const FAILURE_RECOVERY_MS = 2 * 60_000;

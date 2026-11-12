@@ -44,10 +44,8 @@ const makeDiagnosticsThrow = (message = 'diagnostics unavailable') => {
 
 vi.mock('@/composition/render-failure-diagnostics', () => ({
   reportSubmissionUnresolved: pipeline.reportSubmissionUnresolved,
+  reportFailurePersistenceException: pipeline.failureWarning,
   reportFailurePersistenceUnresolved: pipeline.failureError,
-  getRenderFailureLogger: () => ({
-    warn: pipeline.failureWarning,
-  }),
 }));
 const { sleep } = await import('workflow');
 const { renderResultWorkflow, renderWorkflow, MAX_POLLS, pollDelayMs } =
@@ -427,16 +425,14 @@ describe('render workflow', () => {
         ])
       );
       expect(pipeline.failureWarning).toHaveBeenCalledWith({
-        event: 'rendering.result.failure_persistence_exception',
-        details: {
-          ...execution,
-          reason: 'PROVIDER_RECEIPT_IDENTITY_MISMATCH',
-          receiptCapture: captured ? 'confirmed' : 'unconfirmed',
-          code: 'ECONNRESET',
-          errorNames: ['Error'],
-          errorCodes: ['ECONNRESET'],
-        },
+        ...execution,
+        reason: 'PROVIDER_RECEIPT_IDENTITY_MISMATCH',
+        receiptCapture: captured ? 'confirmed' : 'unconfirmed',
+        code: 'ECONNRESET',
+        errorNames: ['Error'],
+        errorCodes: ['ECONNRESET'],
       });
+      expect(pipeline.failureError).not.toHaveBeenCalled();
       expect(JSON.stringify(pipeline.failureWarning.mock.calls)).not.toContain(
         'private'
       );
@@ -489,7 +485,7 @@ describe('render workflow', () => {
       'confirmed'
     );
   });
-  it('retains the failure-write code when recovery backoff fails', async () => {
+  it('awaits the unresolved diagnostic and retains the failure-write code when recovery backoff fails', async () => {
     pipeline.poll.mockRejectedValue(new Error('provider unavailable'));
     pipeline.markFailed.mockResolvedValue(
       Result.Error(
@@ -509,17 +505,32 @@ describe('render workflow', () => {
         message: 'private wait failure',
       })
     );
-    expect(await renderResultWorkflow(attempt)).toEqual({
+    const started = Promise.withResolvers<void>();
+    const delivered = Promise.withResolvers<void>();
+    const settled = vi.fn();
+    pipeline.failureError.mockImplementationOnce(() => {
+      started.resolve();
+      return delivered.promise;
+    });
+    const workflow = renderResultWorkflow(attempt).then((result) => {
+      settled();
+      return result;
+    });
+    await started.promise;
+    try {
+      await vi.advanceTimersByTimeAsync(0);
+      expect(settled).not.toHaveBeenCalled();
+    } finally {
+      delivered.resolve();
+    }
+    expect(await workflow).toEqual({
       result: 'result_failure_persistence_unresolved',
     });
     expect(pipeline.markFailed).toHaveBeenCalledOnce();
     expect(pipeline.failureError).toHaveBeenCalledWith(
       expect.objectContaining({
-        event: 'rendering.result.failure_persistence_unresolved',
-        details: expect.objectContaining({
-          code: 'DB_UNAVAILABLE',
-          recoveryWaitError: expect.objectContaining({ code: 'WAIT_FAILED' }),
-        }),
+        code: 'DB_UNAVAILABLE',
+        recoveryWaitError: expect.objectContaining({ code: 'WAIT_FAILED' }),
       })
     );
     expect(JSON.stringify(pipeline.failureError.mock.calls)).not.toContain(
@@ -538,13 +549,10 @@ describe('render workflow', () => {
     expect(pipeline.markFailed).not.toHaveBeenCalled();
     expect(pipeline.failureError).toHaveBeenCalledWith(
       expect.objectContaining({
-        event: 'rendering.result.failure_persistence_unresolved',
-        details: expect.objectContaining({
-          ...execution,
-          code: 'CONFIG_FAILED',
-          reason: 'CONFIG_FAILED',
-          receiptCapture: 'unconfirmed',
-        }),
+        ...execution,
+        code: 'CONFIG_FAILED',
+        reason: 'CONFIG_FAILED',
+        receiptCapture: 'unconfirmed',
       })
     );
     expect(JSON.stringify(pipeline.failureError.mock.calls)).not.toContain(
@@ -559,7 +567,8 @@ describe('render workflow', () => {
     expect(sleep).not.toHaveBeenCalled();
     expect(pipeline.failureError).toHaveBeenCalledWith(
       expect.objectContaining({
-        event: 'rendering.result.failure_persistence_unresolved',
+        resultId: '   ',
+        receiptCapture: 'unconfirmed',
       })
     );
   });
