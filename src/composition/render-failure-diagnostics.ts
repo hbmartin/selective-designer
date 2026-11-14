@@ -1,8 +1,8 @@
-import { createTelemetryLogger } from '@/modules/kernel/backend';
-import { ConfigurationError } from '@/modules/kernel/domain/errors/configuration-error';
+import { createTelemetryLogger } from '@/modules/kernel/infrastructure/logger/telemetry';
 
 import { createCachedFactory } from './shared/singleton';
 import { telemetryProxy } from './telemetry';
+import { getDiagnosticLoggerConfig } from './telemetry/diagnostic-logger-config';
 import {
   type FailurePersistenceDetails,
   reportTerminalDiagnostic,
@@ -11,12 +11,8 @@ import {
 
 // Failure reporting must remain available when rendering or database setup fails.
 const factory = createCachedFactory(() => {
-  try {
+  if (getDiagnosticLoggerConfig())
     return createTelemetryLogger({ telemetry: telemetryProxy });
-  } catch (error) {
-    // The process configuration stays the same across recovery attempts.
-    if (!(error instanceof ConfigurationError)) throw error;
-  }
 });
 
 function reportWarning(event: string, details: Record<string, unknown>) {

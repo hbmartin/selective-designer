@@ -1,10 +1,10 @@
-import { getLoggerConfig } from '@/modules/kernel/infrastructure/config/logger';
 import {
   createTelemetryLogger,
   writeConsoleLogRecord,
 } from '@/modules/kernel/infrastructure/logger/telemetry';
 import { type TelemetryLogRecord, telemetryProxy } from '@/platform/telemetry';
 
+import { getDiagnosticLoggerConfig } from './diagnostic-logger-config';
 import { retainRequestTask } from './request-lifetime';
 
 const DELIVERY_TIMEOUT_MS = 5_000;
@@ -48,43 +48,62 @@ type PreparedDiagnostic = {
   consoleMirror: boolean;
 };
 
+function readCorrelation() {
+  try {
+    const { traceId, spanId } = telemetryProxy.currentCorrelation();
+    return {
+      ...(traceId ? { traceId } : {}),
+      ...(spanId ? { spanId } : {}),
+    };
+  } catch {
+    return {};
+  }
+}
+
 function prepareDiagnostic(
   fields: TerminalDiagnostic
 ): PreparedDiagnostic | undefined {
-  let consoleMirror: boolean;
-  try {
-    ({ consoleMirror } = getLoggerConfig());
-  } catch {
-    // The workflow host can report failures before SSR validates configuration.
-    writeFallback({
-      record: { event: fields.event, level: 'error', details: fields.details },
-      consoleMirror: false,
-    });
-    return;
-  }
-
+  const correlation = readCorrelation();
   let record: TelemetryLogRecord | undefined;
   try {
-    createTelemetryLogger({
-      telemetry: {
-        ...telemetryProxy,
-        emitLog: (entry) => {
-          record = entry;
+    const config = getDiagnosticLoggerConfig();
+    if (config) {
+      createTelemetryLogger({
+        consoleMirror: false,
+        telemetry: {
+          ...telemetryProxy,
+          currentCorrelation: () => correlation,
+          emitLog: (entry) => {
+            record = entry;
+          },
         },
-      },
-    }).error(fields);
-    if (record) return { record, consoleMirror };
+      }).error(fields);
+      if (record) {
+        if (config.consoleMirror) writeDiagnosticConsole(record);
+        return { record, consoleMirror: config.consoleMirror };
+      }
+    }
   } catch {
-    // Diagnostics never change the operation's outcome.
+    // Record preparation is best effort even when logger configuration is valid.
+  }
+  writeDiagnosticConsole({
+    event: fields.event,
+    level: 'error',
+    details: fields.details,
+    attributes: correlation,
+  });
+}
+
+function writeDiagnosticConsole(record: TelemetryLogRecord) {
+  try {
+    writeConsoleLogRecord(record, { onSanitizationFailure: 'event_only' });
+  } catch {
+    // The console can fail after writing. Attempt output only once.
   }
 }
 
 function writeFallback({ record, consoleMirror }: PreparedDiagnostic) {
-  try {
-    if (!consoleMirror) writeConsoleLogRecord(record);
-  } catch {
-    // A console failure is also best effort.
-  }
+  if (!consoleMirror) writeDiagnosticConsole(record);
 }
 
 async function deliverDiagnostic(prepared: PreparedDiagnostic) {

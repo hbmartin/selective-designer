@@ -162,7 +162,7 @@ describe('server entry', () => {
     }
   );
 
-  it('writes one sanitized upload diagnostic when logger configuration is invalid', async () => {
+  it('defensively reports an upload diagnostic if invoked with invalid logger configuration', async () => {
     vi.stubEnv('LOGGER_LEVEL', 'WARN');
     vi.stubEnv('LOGGER_CONSOLE_MIRROR', 'true');
     const consoleError = vi
@@ -191,7 +191,17 @@ describe('server entry', () => {
         context: { requestId: 'test' },
       });
       expect(response.status).toBe(500);
-      expect(consoleError).toHaveBeenCalledExactlyOnceWith(
+      expect(consoleError).toHaveBeenCalledTimes(2);
+      expect(consoleError).toHaveBeenNthCalledWith(
+        1,
+        'telemetry.logger_config_invalid',
+        expect.objectContaining({
+          level: 'error',
+          details: { code: 'CONFIGURATION_ERROR', fields: ['LOGGER_LEVEL'] },
+        })
+      );
+      expect(consoleError).toHaveBeenNthCalledWith(
+        2,
         'image.write.unresolved',
         expect.objectContaining({
           level: 'error',
@@ -207,6 +217,10 @@ describe('server entry', () => {
     } finally {
       consoleError.mockRestore();
       vi.unstubAllEnvs();
+      Reflect.deleteProperty(
+        globalThis,
+        Symbol.for('selective-designer.logger-config-invalid')
+      );
     }
   });
 });
