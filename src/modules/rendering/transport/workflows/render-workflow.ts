@@ -215,7 +215,8 @@ async function persistenceExceptionStep(
   diagnostics: ReturnType<typeof safeErrorDiagnostics>
 ) {
   'use step';
-  (await pipeline()).reportSubmissionException({
+  const { reportSubmissionException } = await loadFailureDiagnostics();
+  reportSubmissionException({
     resultId: input.resultId,
     attempt: input.attempt,
     workflowRunId: input.workflowRunId,
@@ -303,12 +304,14 @@ async function failureDiagnosticStep(
     code: error.code,
     errorNames: error.errorNames,
     errorCodes: error.errorCodes,
-    ...(error.recoveryWaitError
-      ? { recoveryWaitError: error.recoveryWaitError }
-      : {}),
   };
   if (unresolved) {
-    await reportFailurePersistenceUnresolved(details);
+    await reportFailurePersistenceUnresolved({
+      ...details,
+      ...(error.recoveryWaitError
+        ? { recoveryWaitError: error.recoveryWaitError }
+        : {}),
+    });
     return;
   }
   reportFailurePersistenceException(details);

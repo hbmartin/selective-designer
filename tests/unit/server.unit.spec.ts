@@ -161,4 +161,52 @@ describe('server entry', () => {
       }
     }
   );
+
+  it('writes one sanitized upload diagnostic when logger configuration is invalid', async () => {
+    vi.stubEnv('LOGGER_LEVEL', 'WARN');
+    vi.stubEnv('LOGGER_CONSOLE_MIRROR', 'true');
+    const consoleError = vi
+      .spyOn(console, 'error')
+      .mockImplementation(() => {});
+    try {
+      const { deferTerminalDiagnostic } =
+        await import('@/composition/telemetry/terminal-diagnostic');
+      mocks.handlerFetch.mockImplementationOnce(async () => {
+        deferTerminalDiagnostic({
+          event: 'image.write.unresolved',
+          details: {
+            imageId: 'upload',
+            errorNames: [],
+            errorCodes: ['private-diagnostic@example.test'],
+          },
+        });
+        return new Response(null, { status: 500 });
+      });
+      const server = (await import('@/server')).default;
+      const waitUntil = vi.fn();
+      const request = Object.assign(new Request('https://app.example/'), {
+        waitUntil,
+      });
+      const response = await server.fetch(request, {
+        context: { requestId: 'test' },
+      });
+      expect(response.status).toBe(500);
+      expect(consoleError).toHaveBeenCalledExactlyOnceWith(
+        'image.write.unresolved',
+        expect.objectContaining({
+          level: 'error',
+          details: {
+            imageId: 'upload',
+            errorNames: [],
+            errorCodes: ['[REDACTED]'],
+          },
+        })
+      );
+      expect(waitUntil).not.toHaveBeenCalled();
+      expect(mocks.delivery).not.toHaveBeenCalled();
+    } finally {
+      consoleError.mockRestore();
+      vi.unstubAllEnvs();
+    }
+  });
 });

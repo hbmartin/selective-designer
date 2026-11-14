@@ -61,20 +61,6 @@ export function createRenderingPipelineUseCases(deps: RenderingPipelineDeps) {
     reconcileSubmission: (input: Input<typeof reconcileSubmission>) =>
       reconcileSubmission(deps, input),
     poll: (input: Input<typeof pollResult>) => pollResult(deps, input),
-    reportSubmissionException: (input: {
-      resultId: string;
-      attempt: number;
-      workflowRunId: string;
-      code: string;
-      lastKnownCode: string;
-      errorNames: string[];
-      errorCodes: string[];
-    }) => {
-      deps.logger.warn({
-        event: 'rendering.result.submission_persistence_exception',
-        details: input,
-      });
-    },
     markFailed: (input: Input<typeof markResultFailed>) =>
       markResultFailed(deps, input),
     copyDraftPlacements: (input: Input<typeof copyDraftPlacements>) =>

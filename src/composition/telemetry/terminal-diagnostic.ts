@@ -22,14 +22,17 @@ type RenderExecution = {
   receiptCapture: 'confirmed' | 'unconfirmed';
 };
 
+export type FailurePersistenceDetails = RenderExecution &
+  ErrorDiagnostics & { reason: string };
+
+export type UnresolvedFailurePersistenceDetails = FailurePersistenceDetails & {
+  recoveryWaitError?: ErrorDiagnostics;
+};
+
 export type TerminalDiagnostic =
   | {
       event: 'rendering.result.failure_persistence_unresolved';
-      details: RenderExecution &
-        ErrorDiagnostics & {
-          reason: string;
-          recoveryWaitError?: ErrorDiagnostics;
-        };
+      details: UnresolvedFailurePersistenceDetails;
     }
   | {
       event: 'rendering.result.submission_unresolved';
@@ -40,10 +43,28 @@ export type TerminalDiagnostic =
       details: { imageId: string; errorNames: string[]; errorCodes: string[] };
     };
 
-function prepareDiagnostic(fields: TerminalDiagnostic) {
+type PreparedDiagnostic = {
+  record: TelemetryLogRecord;
+  consoleMirror: boolean;
+};
+
+function prepareDiagnostic(
+  fields: TerminalDiagnostic
+): PreparedDiagnostic | undefined {
+  let consoleMirror: boolean;
+  try {
+    ({ consoleMirror } = getLoggerConfig());
+  } catch {
+    // The workflow host can report failures before SSR validates configuration.
+    writeFallback({
+      record: { event: fields.event, level: 'error', details: fields.details },
+      consoleMirror: false,
+    });
+    return;
+  }
+
   let record: TelemetryLogRecord | undefined;
   try {
-    const { consoleMirror } = getLoggerConfig();
     createTelemetryLogger({
       telemetry: {
         ...telemetryProxy,
@@ -57,8 +78,6 @@ function prepareDiagnostic(fields: TerminalDiagnostic) {
     // Diagnostics never change the operation's outcome.
   }
 }
-
-type PreparedDiagnostic = NonNullable<ReturnType<typeof prepareDiagnostic>>;
 
 function writeFallback({ record, consoleMirror }: PreparedDiagnostic) {
   try {

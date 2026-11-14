@@ -43,6 +43,7 @@ const makeDiagnosticsThrow = (message = 'diagnostics unavailable') => {
 };
 
 vi.mock('@/composition/render-failure-diagnostics', () => ({
+  reportSubmissionException: pipeline.reportSubmissionException,
   reportSubmissionUnresolved: pipeline.reportSubmissionUnresolved,
   reportFailurePersistenceException: pipeline.failureWarning,
   reportFailurePersistenceUnresolved: pipeline.failureError,
@@ -505,19 +506,20 @@ describe('render workflow', () => {
         message: 'private wait failure',
       })
     );
-    const started = Promise.withResolvers<void>();
     const delivered = Promise.withResolvers<void>();
     const settled = vi.fn();
-    pipeline.failureError.mockImplementationOnce(() => {
-      started.resolve();
-      return delivered.promise;
-    });
+    pipeline.failureError.mockReturnValueOnce(delivered.promise);
     const workflow = renderResultWorkflow(attempt).then((result) => {
       settled();
       return result;
     });
-    await started.promise;
     try {
+      await vi.waitFor(
+        () => expect(pipeline.failureError).toHaveBeenCalledOnce(),
+        {
+          timeout: 500,
+        }
+      );
       await vi.advanceTimersByTimeAsync(0);
       expect(settled).not.toHaveBeenCalled();
     } finally {
@@ -527,6 +529,14 @@ describe('render workflow', () => {
       result: 'result_failure_persistence_unresolved',
     });
     expect(pipeline.markFailed).toHaveBeenCalledOnce();
+    expect(pipeline.failureWarning).toHaveBeenCalledExactlyOnceWith({
+      ...execution,
+      reason: 'render_step_failed',
+      receiptCapture: 'unconfirmed',
+      code: 'DB_UNAVAILABLE',
+      errorNames: ['AppError'],
+      errorCodes: ['DB_UNAVAILABLE'],
+    });
     expect(pipeline.failureError).toHaveBeenCalledWith(
       expect.objectContaining({
         code: 'DB_UNAVAILABLE',

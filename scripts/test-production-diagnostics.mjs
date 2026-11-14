@@ -91,6 +91,13 @@ const scenarios = [
     bootFailure: true,
   },
   {
+    name: 'invalid logger configuration retains terminal errors in the console',
+    otel: 200,
+    sentry: 200,
+    invalidLogger: true,
+    fallback: 1,
+  },
+  {
     name: 'test runtime does not start configured sinks',
     sentry: 200,
     otel: 200,
@@ -123,6 +130,20 @@ const serveRequests = `
 `;
 
 function probe(scenario) {
+  if (scenario.invalidLogger)
+    return `
+    ${setup}
+    const submissionWarning = steps.get(${JSON.stringify(workflow + 'persistenceExceptionStep')});
+    const submissionTerminal = steps.get(${JSON.stringify(workflow + 'unresolvedSubmissionStep')});
+    const redactedCode = 'private-diagnostic@example.test';
+    await step(input, 'PROVIDER_UNAVAILABLE', true, error, false);
+    await submissionWarning(input, error.code, 'WRITE_UNCONFIRMED', {
+      errorNames: error.errorNames,
+      errorCodes: error.errorCodes,
+    });
+    await step(input, 'PROVIDER_UNAVAILABLE', true, { ...error, errorCodes: [redactedCode] }, true);
+    await submissionTerminal(input, redactedCode, true);
+  `;
   if (scenario.bootFailure)
     return `
     ${serveRequests}
@@ -329,6 +350,7 @@ for (const scenario of scenarios) {
         env.LOGGER_LEVEL = 'error';
         env.LOGGER_CONSOLE_MIRROR = 'false';
       }
+      if (scenario.invalidLogger) env.LOGGER_LEVEL = 'WARN';
       if (scenario.mirror) env.LOGGER_CONSOLE_MIRROR = 'true';
       const { stdout, stderr } = await run(
         process.execPath,
@@ -363,6 +385,18 @@ for (const scenario of scenarios) {
       assert(!allLogs.includes(invalidDsnMarker));
       assert(!allLogs.includes('private-invalid-sample-rate-probe'));
       assert(!allLogs.includes('failure_persistence_exception'));
+      if (scenario.invalidLogger) {
+        assert(!allLogs.includes('submission_persistence_exception'));
+        assert(!allLogs.includes('private-diagnostic@example.test'));
+        assert.equal(
+          output.split('\n').filter((line) => line.startsWith(sibling)).length,
+          1
+        );
+        assert.equal(output.match(/\[REDACTED\]/g)?.length, 2);
+        assert(output.includes('DB_UNAVAILABLE'));
+        assert.deepEqual(received, { otel: [], sentry: [] });
+        return;
+      }
       if (scenario.bootFailure) {
         assert.equal(received.sentry.length, 1);
         assert(received.sentry[0].includes('server.config_validation_failed'));
