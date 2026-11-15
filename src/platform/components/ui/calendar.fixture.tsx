@@ -52,7 +52,7 @@ const Dropdowns = () => {
 };
 
 const DisabledSelected = () => {
-  const date = withDayOfMonth(new Date(), 8);
+  const [date] = useState(() => withDayOfMonth(new Date(), 8));
 
   return <Calendar mode="single" selected={date} disabled={date} />;
 };

@@ -23,6 +23,8 @@ export function createScopedStrykerConfig({
     mutate: mutationSourceFiles,
     testFiles: mutationTestFiles,
     ignorePatterns: [
+      '/.claude',
+      '/.vercel',
       '/coverage',
       '/playwright-report',
       '/test-results',

@@ -42,7 +42,10 @@ export const ResponsiveDrawer = ({
 
 export const ResponsiveDrawerTrigger = ({
   ...props
-}: ComponentProps<typeof DrawerTrigger | typeof DialogTrigger>) =>
+}: Omit<
+  ComponentProps<typeof DrawerTrigger | typeof DialogTrigger>,
+  'handle'
+>) =>
   useIsMobile(BREAKPOINT) ? (
     <DrawerTrigger {...props} />
   ) : (

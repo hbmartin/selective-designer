@@ -111,7 +111,6 @@ export const initOpenTelemetryClient = (): TelemetryAdapter | undefined => {
         clearTimingResources: true,
         ignoreUrls: [TELEMETRY_PATH_PATTERN, VENDOR_PATTERN],
         propagateTraceHeaderCorsUrls: [sameOriginPattern()],
-        semconvStabilityOptIn: 'http',
       }),
     ],
     meterProvider,

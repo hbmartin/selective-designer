@@ -158,7 +158,7 @@ describe('demo seed command', () => {
     );
     expect(console.error).toHaveBeenNthCalledWith(
       2,
-      'Closing the seed database connection failed. (ECONNRESET)'
+      'Closing the seed database connection failed.'
     );
   });
 });

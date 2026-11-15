@@ -33,7 +33,7 @@ export const createFalSam3Segmenter = (config: {
                   point_prompts: prompt.points.map((point) => ({
                     x: px(point.x, width),
                     y: px(point.y, height),
-                    label: point.positive ? ('1' as const) : ('0' as const),
+                    label: point.positive ? 1 : 0,
                   })),
                 }
               : {}),

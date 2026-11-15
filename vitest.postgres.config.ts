@@ -1,7 +1,8 @@
 import path from 'node:path';
 import { defineConfig } from 'vitest/config';
 
-const resolve = (filePath: string) => path.resolve(__dirname, filePath);
+const resolve = (filePath: string) =>
+  path.resolve(import.meta.dirname, filePath);
 
 export default defineConfig({
   test: {

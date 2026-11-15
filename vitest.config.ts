@@ -3,7 +3,8 @@ import { playwright } from '@vitest/browser-playwright';
 import path from 'node:path';
 import { coverageConfigDefaults, defineConfig } from 'vitest/config';
 
-const resolve = (filePath: string) => path.resolve(__dirname, filePath);
+const resolve = (filePath: string) =>
+  path.resolve(import.meta.dirname, filePath);
 
 const testAliases = [
   {

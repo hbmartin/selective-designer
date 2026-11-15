@@ -65,8 +65,12 @@ test('default value', async () => {
   );
 
   await expect
-    .element(page.getByRole('combobox', { name: 'Bearstronaut' }))
-    .toHaveTextContent('Yuri Grizzlyrin');
+    .element(
+      page
+        .getByRole('combobox', { name: 'Bearstronaut' })
+        .getByText('Yuri Grizzlyrin', { exact: true })
+    )
+    .toBeVisible();
 
   await user.click(page.getByRole('button', { name: 'Submit' }));
   expect(mockedSubmit).toHaveBeenCalledWith({ bear: 'grizzlyrin' });
