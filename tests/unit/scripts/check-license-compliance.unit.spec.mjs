@@ -86,6 +86,26 @@ describe('license compliance checker', () => {
     ]);
   });
 
+  it('accepts LGPL analyzer configurations by exact package name and license', () => {
+    const name = '@sonarsource/analyzer-commons-configurations';
+    const similarName = `${name}-other`;
+    const unrelatedName = 'another-lgpl-package';
+    expect(
+      findLicenseViolations({
+        'LGPL-3.0-only': [
+          { name },
+          { name: similarName },
+          { name: unrelatedName },
+        ],
+        'GPL-3.0-only': [{ name }],
+      })
+    ).toEqual([
+      { name: similarName, license: 'LGPL-3.0-only', versions: '' },
+      { name: unrelatedName, license: 'LGPL-3.0-only', versions: '' },
+      { name, license: 'GPL-3.0-only', versions: '' },
+    ]);
+  });
+
   it('resolves pnpm from an absolute package-manager runner path', () => {
     const pnpmPath = path.join(
       process.cwd(),

@@ -9,8 +9,8 @@ import { pathToFileURL } from 'node:url';
 // comes from `pnpm licenses list --json`, so the result reflects the packages
 // actually installed for the current platform (CI = Linux). Platform-specific
 // native binaries (esbuild, oxide, lightningcss, @sentry/cli, ...) differ
-// between macOS and Linux, so per-package exceptions match by NAME PREFIX to
-// cover every `<pkg>-<platform>-<arch>` variant.
+// between macOS and Linux, so exceptions can match a name prefix to cover
+// every `<pkg>-<platform>-<arch>` variant.
 
 // SPDX identifiers that are unconditionally acceptable for an MIT template:
 // permissive, no copyleft, no source-disclosure obligation.
@@ -29,8 +29,7 @@ export const ALLOWED_LICENSES = new Set([
 ]);
 
 // Packages allowed despite a non-allowlisted license. Keyed by package name;
-// a key matches `name === key` OR `name.startsWith(key + '-')` so that
-// platform-native sibling packages are covered without re-listing each one.
+// a key can also cover platform-native siblings unless exactName is set.
 // Keep this list small and justified — every entry is a deliberate acceptance.
 export const LICENSE_EXCEPTIONS = [
   {
@@ -58,6 +57,13 @@ export const LICENSE_EXCEPTIONS = [
       'Dev-only ESLint plugin. Not distributed with or linked into the application; LGPL obligations do not attach to our shipped code.',
   },
   {
+    name: '@sonarsource/analyzer-commons-configurations',
+    license: 'LGPL-3.0-only',
+    exactName: true,
+    reason:
+      'Accepted as a dev-only transitive dependency of eslint-plugin-sonarjs. The application production dependency graph excludes it.',
+  },
+  {
     name: 'caniuse-lite',
     license: 'CC-BY-4.0',
     reason:
@@ -81,7 +87,8 @@ function matchesException(packageName, license) {
   return LICENSE_EXCEPTIONS.find(
     (entry) =>
       entry.license === license &&
-      (packageName === entry.name || packageName.startsWith(`${entry.name}-`))
+      (packageName === entry.name ||
+        (!entry.exactName && packageName.startsWith(`${entry.name}-`)))
   );
 }
 
