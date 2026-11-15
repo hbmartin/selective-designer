@@ -1,10 +1,10 @@
-import { getLoggerConfig } from '@/modules/kernel/infrastructure/config/logger';
 import {
   createTelemetryLogger,
   writeConsoleLogRecord,
 } from '@/modules/kernel/infrastructure/logger/telemetry';
 import { type TelemetryLogRecord, telemetryProxy } from '@/platform/telemetry';
 
+import { getDiagnosticLoggerConfig } from './diagnostic-logger-config';
 import { retainRequestTask } from './request-lifetime';
 
 const DELIVERY_TIMEOUT_MS = 5_000;
@@ -22,14 +22,17 @@ type RenderExecution = {
   receiptCapture: 'confirmed' | 'unconfirmed';
 };
 
+export type FailurePersistenceDetails = RenderExecution &
+  ErrorDiagnostics & { reason: string };
+
+export type UnresolvedFailurePersistenceDetails = FailurePersistenceDetails & {
+  recoveryWaitError?: ErrorDiagnostics;
+};
+
 export type TerminalDiagnostic =
   | {
       event: 'rendering.result.failure_persistence_unresolved';
-      details: RenderExecution &
-        ErrorDiagnostics & {
-          reason: string;
-          recoveryWaitError?: ErrorDiagnostics;
-        };
+      details: UnresolvedFailurePersistenceDetails;
     }
   | {
       event: 'rendering.result.submission_unresolved';
@@ -40,32 +43,67 @@ export type TerminalDiagnostic =
       details: { imageId: string; errorNames: string[]; errorCodes: string[] };
     };
 
-function prepareDiagnostic(fields: TerminalDiagnostic) {
-  let record: TelemetryLogRecord | undefined;
+type PreparedDiagnostic = {
+  record: TelemetryLogRecord;
+  consoleMirror: boolean;
+};
+
+function readCorrelation() {
   try {
-    const { consoleMirror } = getLoggerConfig();
-    createTelemetryLogger({
-      telemetry: {
-        ...telemetryProxy,
-        emitLog: (entry) => {
-          record = entry;
-        },
-      },
-    }).error(fields);
-    if (record) return { record, consoleMirror };
+    const { traceId, spanId } = telemetryProxy.currentCorrelation();
+    return {
+      ...(traceId ? { traceId } : {}),
+      ...(spanId ? { spanId } : {}),
+    };
   } catch {
-    // Diagnostics never change the operation's outcome.
+    return {};
   }
 }
 
-type PreparedDiagnostic = NonNullable<ReturnType<typeof prepareDiagnostic>>;
+function prepareDiagnostic(
+  fields: TerminalDiagnostic
+): PreparedDiagnostic | undefined {
+  const correlation = readCorrelation();
+  let record: TelemetryLogRecord | undefined;
+  try {
+    const config = getDiagnosticLoggerConfig();
+    if (config) {
+      createTelemetryLogger({
+        consoleMirror: false,
+        telemetry: {
+          ...telemetryProxy,
+          currentCorrelation: () => correlation,
+          emitLog: (entry) => {
+            record = entry;
+          },
+        },
+      }).error(fields);
+      if (record) {
+        if (config.consoleMirror) writeDiagnosticConsole(record);
+        return { record, consoleMirror: config.consoleMirror };
+      }
+    }
+  } catch {
+    // Record preparation is best effort even when logger configuration is valid.
+  }
+  writeDiagnosticConsole({
+    event: fields.event,
+    level: 'error',
+    details: fields.details,
+    attributes: correlation,
+  });
+}
+
+function writeDiagnosticConsole(record: TelemetryLogRecord) {
+  try {
+    writeConsoleLogRecord(record, { onSanitizationFailure: 'event_only' });
+  } catch {
+    // The console can fail after writing. Attempt output only once.
+  }
+}
 
 function writeFallback({ record, consoleMirror }: PreparedDiagnostic) {
-  try {
-    if (!consoleMirror) writeConsoleLogRecord(record);
-  } catch {
-    // A console failure is also best effort.
-  }
+  if (!consoleMirror) writeDiagnosticConsole(record);
 }
 
 async function deliverDiagnostic(prepared: PreparedDiagnostic) {

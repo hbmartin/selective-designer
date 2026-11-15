@@ -171,18 +171,32 @@ const writeConsoleMirror = ({
   });
 };
 
-export const writeConsoleLogRecord = (record: TelemetryLogRecord) =>
-  writeConsoleMirror({
-    level: record.level,
-    message: record.message ?? record.event,
-    sanitizedLogRecord: sanitizeLogFields({
+export function writeConsoleLogRecord(
+  record: TelemetryLogRecord,
+  options?: { onSanitizationFailure: 'event_only' }
+) {
+  let sanitizedLogRecord: Record<string, unknown>;
+  let message = record.message ?? record.event;
+  try {
+    sanitizedLogRecord = sanitizeLogFields({
       event: record.event,
       details: record.details,
       attributes: record.attributes,
       error: record.error,
       direction: record.direction,
-    }),
+    });
+  } catch (error) {
+    if (options?.onSanitizationFailure !== 'event_only') throw error;
+    // Only use this mode with a fixed event name supplied by the caller.
+    sanitizedLogRecord = { event: record.event };
+    message = record.event;
+  }
+  writeConsoleMirror({
+    level: record.level,
+    message,
+    sanitizedLogRecord,
   });
+}
 
 export function createTelemetryLogger({
   telemetry,

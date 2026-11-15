@@ -500,6 +500,18 @@ describe('server config accessors', () => {
     expect(getLoggerConfig().consoleMirror).toBe(true);
   });
 
+  it('shares a cached validation failure between diagnostic and strict logger config readers', async () => {
+    vi.stubEnv('LOGGER_LEVEL', 'WARN');
+    const { getLoggerConfig, getLoggerConfigResult } =
+      await import('@/modules/kernel/infrastructure/config/logger');
+
+    const invalid = getLoggerConfigResult();
+    expect(invalid.error?.message).toContain('LOGGER_LEVEL');
+    vi.stubEnv('LOGGER_LEVEL', 'warn');
+    expect(getLoggerConfigResult()).toBe(invalid);
+    expect(getLoggerConfig).toThrow(invalid.error);
+  });
+
   it('keeps external telemetry and local SQLite off by default in production', async () => {
     vi.stubEnv('NODE_ENV', 'production');
     vi.stubEnv('OTEL_COLLECTOR_URL', undefined);
