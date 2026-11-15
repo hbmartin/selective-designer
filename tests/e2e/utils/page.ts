@@ -371,9 +371,21 @@ export const pageWithUtils: CustomFixture<Page & PageUtils> = async (
     await page
       .getByPlaceholder(auth.common.password.label)
       .fill(getSeedAccountPassword());
-    await page
-      .getByRole('button', { name: auth.pageLogin.submit, exact: true })
-      .click();
+    const [response] = await Promise.all([
+      page.waitForResponse(
+        (candidate) =>
+          candidate.request().method() === 'POST' &&
+          new URL(candidate.url()).pathname === '/api/auth/sign-in/email',
+        { timeout: AUTH_WAIT_TIMEOUT_MS }
+      ),
+      page
+        .getByRole('button', { name: auth.pageLogin.submit, exact: true })
+        .click(),
+    ]);
+    expect(
+      response.ok(),
+      `Email sign-in returned HTTP ${response.status()}`
+    ).toBe(true);
   };
 
   page.attachAuthDiagnostics = diagnostics.attach;
