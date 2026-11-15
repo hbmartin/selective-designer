@@ -134,17 +134,22 @@ describe('demo seed command', () => {
     }
   );
 
-  it('reports the seed failure before the close failure and omits SQL details', async () => {
+  it('reports the seed SQLSTATE before the close connection code and omits private details', async () => {
     mocks.createUsers.mockRejectedValueOnce(
-      new Error('SQL contains sensitive parameters', {
-        cause: Object.assign(new Error('private row contents'), {
-          code: '23505',
+      Object.assign(
+        new Error('SQL contains sensitive parameters', {
+          cause: Object.assign(new Error('private row contents'), {
+            code: '23505',
+          }),
         }),
-      })
+        { code: 'EPIPE' }
+      )
     );
     mocks.close.mockRejectedValueOnce(
-      Object.assign(new Error('private connection details'), {
-        code: 'ECONNRESET',
+      new Error('private close failure', {
+        cause: Object.assign(new Error('private connection details'), {
+          code: 'ECONNRESET',
+        }),
       })
     );
 
@@ -158,6 +163,21 @@ describe('demo seed command', () => {
     );
     expect(console.error).toHaveBeenNthCalledWith(
       2,
+      'Closing the seed database connection failed. (ECONNRESET)'
+    );
+  });
+
+  it('omits unknown error codes', async () => {
+    mocks.close.mockRejectedValueOnce(
+      Object.assign(new Error('private connection details'), {
+        code: 'PRIVATE_CODE',
+      })
+    );
+
+    await import('../../../drizzle/seed/index');
+
+    expect(process.exitCode).toBe(1);
+    expect(console.error).toHaveBeenCalledExactlyOnceWith(
       'Closing the seed database connection failed.'
     );
   });

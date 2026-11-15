@@ -13,17 +13,37 @@ import {
   getSeedAccountEmails,
   getSeedAccountPassword,
 } from '@/modules/kernel/backend';
+import { errorCauses } from '@/modules/kernel/domain/errors/error-causes';
+
+const connectionErrorCodes = new Set([
+  'ECONNREFUSED',
+  'ECONNRESET',
+  'ETIMEDOUT',
+  'EPIPE',
+  'ENOTFOUND',
+  'EAI_AGAIN',
+]);
+
+function getSeedErrorCode(error: unknown): string | undefined {
+  const sqlState = getDatabaseErrorCode(error);
+  if (sqlState) return sqlState;
+
+  for (const cause of errorCauses(error)) {
+    if (typeof cause.code === 'string' && connectionErrorCodes.has(cause.code))
+      return cause.code;
+  }
+  return undefined;
+}
 
 function reportFailure(message: string, error: unknown) {
-  const code = getDatabaseErrorCode(error);
-  console.error(
-    error instanceof ConfigurationError
-      ? error.message
-      : code && /^[A-Z0-9_]{3,32}$/u.test(code)
-        ? `${message} (${code})`
-        : message
-  );
   process.exitCode = 1;
+  if (error instanceof ConfigurationError) {
+    console.error(error.message);
+    return;
+  }
+
+  const code = getSeedErrorCode(error);
+  console.error(code ? `${message} (${code})` : message);
 }
 
 async function main() {

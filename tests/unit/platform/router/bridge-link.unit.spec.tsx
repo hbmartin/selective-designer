@@ -1,4 +1,4 @@
-import { createElement, type ReactNode } from 'react';
+import { type ComponentType, createElement, type ReactNode } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -11,7 +11,7 @@ type ForesightMockOptions = {
   callback: () => Promise<void> | void;
   enabled?: boolean;
   meta?: Record<string, unknown>;
-  name?: string;
+  foresightName?: string;
   reactivateAfter?: number;
 };
 
@@ -19,7 +19,6 @@ const linkMocks = vi.hoisted(() => ({
   props: [] as LinkMockProps[],
 }));
 const foresightMocks = vi.hoisted(() => ({
-  elementRef: vi.fn(),
   options: [] as ForesightMockOptions[],
 }));
 const routerMocks = vi.hoisted(() => ({
@@ -27,9 +26,16 @@ const routerMocks = vi.hoisted(() => ({
 }));
 
 vi.mock('@foresightjs/react', () => ({
-  useForesight: (options: ForesightMockOptions) => {
+  Foresight: ({
+    as: Target,
+    linkProps,
+    ...options
+  }: ForesightMockOptions & {
+    as: ComponentType<{ linkProps: LinkMockProps }>;
+    linkProps: LinkMockProps;
+  }) => {
     foresightMocks.options.push(options);
-    return { elementRef: foresightMocks.elementRef };
+    return createElement(Target, { linkProps });
   },
 }));
 
@@ -47,7 +53,6 @@ import { BridgeLink } from '@/platform/router';
 
 describe('BridgeLink', () => {
   beforeEach(() => {
-    foresightMocks.elementRef.mockClear();
     foresightMocks.options = [];
     linkMocks.props = [];
     routerMocks.preloadRoute.mockClear();
@@ -69,7 +74,7 @@ describe('BridgeLink', () => {
     expect(foresightOptions).toMatchObject({
       enabled: true,
       meta: { to: '/manager' },
-      name: 'BridgeLink /manager',
+      foresightName: 'BridgeLink /manager',
       reactivateAfter: 60_000,
     });
 
@@ -94,8 +99,9 @@ describe('BridgeLink', () => {
       preload: 'intent',
       to: '/login',
     });
-    expect(foresightMocks.options).toHaveLength(1);
-    expect(foresightMocks.options[0]).toMatchObject({ enabled: false });
+    expect(foresightMocks.options).toEqual([
+      expect.objectContaining({ enabled: false }),
+    ]);
   });
 
   it('supports TanStack Link render-prop children', () => {
@@ -114,8 +120,7 @@ describe('BridgeLink', () => {
     ).toThrow(
       'BridgeLink cannot navigate declaratively to protected side-effect route "/logout". Use an explicit command flow such as ConfirmSignOut instead.'
     );
-    expect(foresightMocks.options).toHaveLength(1);
-    expect(foresightMocks.options[0]).toMatchObject({ enabled: false });
+    expect(foresightMocks.options).toEqual([]);
     expect(linkMocks.props).toEqual([]);
   });
 

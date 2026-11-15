@@ -22,6 +22,7 @@ overrides:
   svgo: 4.1.0
   'testcontainers>undici': 7.30.1
   # Rolldown 1.2.19 fails when Vite bundles the application and Vitest configs.
+  # On the next Vite bump, verify config loading and the Node and Vercel builds before dropping this override.
   'vite@8.3.8>rolldown': 1.2.18
   # 2026-11-02 security pass: patched releases within each consumer's major line.
   '@grpc/grpc-js@<1.14.5': ^1.14.7
