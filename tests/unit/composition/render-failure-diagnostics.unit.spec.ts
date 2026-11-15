@@ -1,22 +1,37 @@
 import { mockLogger } from '@tests/server/test-utils';
-import { expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 
-const database = vi.hoisted(() =>
-  vi.fn(() => {
+const dependencies = vi.hoisted(() => ({
+  database: vi.fn(() => {
     throw new Error('database unavailable');
-  })
-);
-vi.mock('@/modules/kernel/infrastructure/db/client', async (original) => ({
-  ...(await original<
-    typeof import('@/modules/kernel/infrastructure/db/client')
-  >()),
-  getDefaultDbClient: database,
+  }),
+  rendering: vi.fn(() => {
+    throw new Error('rendering unavailable');
+  }),
 }));
-vi.mock('@/composition/rendering-pipeline', () => {
-  throw new Error('rendering unavailable');
+vi.mock('@/modules/kernel/infrastructure/db/client', () =>
+  dependencies.database()
+);
+vi.mock('@/composition/rendering-pipeline', () => dependencies.rendering());
+
+beforeEach(() => {
+  vi.resetModules();
+  vi.stubEnv('LOGGER_LEVEL', 'info');
+  vi.stubEnv('LOGGER_CONSOLE_MIRROR', 'false');
+  vi.stubEnv('LOGGER_PRETTY', 'false');
+});
+
+afterEach(() => {
+  vi.restoreAllMocks();
+  vi.unstubAllEnvs();
 });
 
 const loadReporters = () => import('@/composition/render-failure-diagnostics');
+const spyOnLoggerFactory = async () =>
+  vi.spyOn(
+    await import('@/modules/kernel/infrastructure/logger/telemetry'),
+    'createTelemetryLogger'
+  );
 
 const details = {
   resultId: 'result-1',
@@ -34,34 +49,35 @@ const failure = {
 const submission = { ...details, lastKnownCode: 'WRITE_UNCONFIRMED' };
 
 it('shares one logger for both intermediate warnings without initializing the database or rendering pipeline', async () => {
-  vi.resetModules();
-  const logger =
-    await import('@/modules/kernel/infrastructure/logger/telemetry');
-  const createLogger = vi.spyOn(logger, 'createTelemetryLogger');
-  try {
-    const { reportFailurePersistenceException, reportSubmissionException } =
-      await loadReporters();
-    reportFailurePersistenceException(failure);
-    reportSubmissionException(submission);
-    expect(createLogger).toHaveBeenCalledOnce();
-    expect(mockLogger.warn.mock.calls).toEqual([
-      [
-        {
-          event: 'rendering.result.failure_persistence_exception',
-          details: failure,
-        },
-      ],
-      [
-        {
-          event: 'rendering.result.submission_persistence_exception',
-          details: submission,
-        },
-      ],
-    ]);
-    expect(database).not.toHaveBeenCalled();
-  } finally {
-    createLogger.mockRestore();
-  }
+  const createLogger = await spyOnLoggerFactory();
+  const { telemetryProxy } = await import('@/composition/telemetry');
+  const { reportFailurePersistenceException, reportSubmissionException } =
+    await loadReporters();
+  expect(createLogger).not.toHaveBeenCalled();
+
+  reportFailurePersistenceException(failure);
+  reportSubmissionException(submission);
+  await vi.dynamicImportSettled();
+
+  expect(dependencies.database).not.toHaveBeenCalled();
+  expect(dependencies.rendering).not.toHaveBeenCalled();
+  expect(createLogger).toHaveBeenCalledExactlyOnceWith({
+    telemetry: telemetryProxy,
+  });
+  expect(mockLogger.warn.mock.calls).toEqual([
+    [
+      {
+        event: 'rendering.result.failure_persistence_exception',
+        details: failure,
+      },
+    ],
+    [
+      {
+        event: 'rendering.result.submission_persistence_exception',
+        details: submission,
+      },
+    ],
+  ]);
 });
 
 it.each([
@@ -80,26 +96,18 @@ it.each([
 );
 
 it('reports a subsequent warning after an unexpected logger construction error', async () => {
-  vi.resetModules();
-  const logger =
-    await import('@/modules/kernel/infrastructure/logger/telemetry');
-  const createLogger = vi
-    .spyOn(logger, 'createTelemetryLogger')
-    .mockImplementationOnce(() => {
-      throw new Error('logger unavailable');
-    });
-  try {
-    const { reportFailurePersistenceException, reportSubmissionException } =
-      await loadReporters();
-    expect(() => reportFailurePersistenceException(failure)).not.toThrow();
-    expect(mockLogger.warn).not.toHaveBeenCalled();
+  const createLogger = await spyOnLoggerFactory();
+  createLogger.mockImplementationOnce(() => {
+    throw new Error('logger unavailable');
+  });
+  const { reportFailurePersistenceException, reportSubmissionException } =
+    await loadReporters();
+  expect(() => reportFailurePersistenceException(failure)).not.toThrow();
+  expect(mockLogger.warn).not.toHaveBeenCalled();
 
-    reportSubmissionException(submission);
-    expect(mockLogger.warn).toHaveBeenCalledExactlyOnceWith({
-      event: 'rendering.result.submission_persistence_exception',
-      details: submission,
-    });
-  } finally {
-    createLogger.mockRestore();
-  }
+  reportSubmissionException(submission);
+  expect(mockLogger.warn).toHaveBeenCalledExactlyOnceWith({
+    event: 'rendering.result.submission_persistence_exception',
+    details: submission,
+  });
 });

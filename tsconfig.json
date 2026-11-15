@@ -15,7 +15,7 @@
       "@tests/*": ["./tests/*"]
     },
     "types": ["node", "vite/client"],
-    "typeRoots": ["node_modules/@types", "node_modules", "src/types"],
+    "typeRoots": ["node_modules/@types", "node_modules"],
     "plugins": [
       {
         "name": "ts-plugin-sort-import-suggestions",

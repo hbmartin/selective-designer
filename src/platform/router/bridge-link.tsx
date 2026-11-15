@@ -1,4 +1,4 @@
-import { useForesight } from '@foresightjs/react';
+import { Foresight } from '@foresightjs/react';
 import { Link, type LinkProps, useRouter } from '@tanstack/react-router';
 import * as React from 'react';
 
@@ -100,19 +100,16 @@ const toRouterPreloadOptions = ({
   viewTransition,
 });
 
-const assignForwardedRef = (
-  forwardedRef: React.ForwardedRef<HTMLAnchorElement>,
-  node: HTMLAnchorElement | null
-) => {
-  if (typeof forwardedRef === 'function') {
-    forwardedRef(node);
-    return;
-  }
-
-  if (forwardedRef) {
-    forwardedRef.current = node;
-  }
-};
+// Keep TanStack's render-prop children out of Foresight's state subscription.
+function ForesightRouterLink({
+  linkProps,
+  ref,
+}: {
+  linkProps: BridgeLinkProps;
+  ref?: React.Ref<HTMLAnchorElement>;
+}) {
+  return <Link {...linkProps} ref={ref} />;
+}
 
 const BridgeLinkComponent = React.forwardRef<
   HTMLAnchorElement,
@@ -121,48 +118,37 @@ const BridgeLinkComponent = React.forwardRef<
   const router = useRouter();
   const protectedTarget = protectedNavigationTarget(props);
   const usePredictedPreload = shouldUsePredictedPreload(props, protectedTarget);
-  const routePreloadOptions = toRouterPreloadOptions(props);
-  const { elementRef } = useForesight<HTMLAnchorElement>({
-    callback: () => {
-      void router
-        .preloadRoute(
-          routePreloadOptions as Parameters<typeof router.preloadRoute>[0]
-        )
-        .catch(() => undefined);
-    },
-    enabled: usePredictedPreload,
-    meta: { to: props.to },
-    name:
-      typeof props.to === 'string' ? `BridgeLink ${props.to}` : 'BridgeLink',
-    reactivateAfter: PREDICTED_PRELOAD_REACTIVATE_AFTER_MS,
-  });
-  const linkRef = React.useCallback(
-    (node: HTMLAnchorElement | null) => {
-      elementRef(node);
-      assignForwardedRef(forwardedRef, node);
-    },
-    [elementRef, forwardedRef]
-  );
-
-  if (!protectedTarget) {
-    const linkProps = usePredictedPreload
-      ? { ...props, preload: false as const }
-      : props;
-
-    return <Link {...linkProps} ref={linkRef} />;
-  }
-
-  const guardedProps = {
-    ...props,
-    disabled: true,
-    preload: false as const,
-  };
-
-  if (!isProductionBuild()) {
+  if (protectedTarget && !isProductionBuild()) {
     throw new Error(protectedNavigationErrorMessage(protectedTarget));
   }
 
-  return <Link {...guardedProps} ref={linkRef} />;
+  const linkProps: BridgeLinkProps = {
+    ...props,
+    disabled: protectedTarget ? true : props.disabled,
+    preload: usePredictedPreload || protectedTarget ? false : props.preload,
+  };
+  return (
+    <Foresight
+      as={ForesightRouterLink}
+      linkProps={linkProps}
+      ref={forwardedRef}
+      callback={() => {
+        void router
+          .preloadRoute(
+            toRouterPreloadOptions(props) as Parameters<
+              typeof router.preloadRoute
+            >[0]
+          )
+          .catch(() => undefined);
+      }}
+      enabled={usePredictedPreload}
+      meta={{ to: props.to }}
+      foresightName={
+        typeof props.to === 'string' ? `BridgeLink ${props.to}` : 'BridgeLink'
+      }
+      reactivateAfter={PREDICTED_PRELOAD_REACTIVATE_AFTER_MS}
+    />
+  );
 });
 
 BridgeLinkComponent.displayName = 'BridgeLink';
