@@ -21,14 +21,15 @@ const Default = () => {
 
 const CalendarCustomization = () => {
   const [date, setDate] = useState<Date | null>();
+  const [currentMonth] = useState(() => new Date());
 
   return (
     <DatePicker
       onChange={(value) => setDate(value)}
       value={date}
       calendarProps={{
-        startMonth: new Date(),
-        endMonth: new Date(),
+        startMonth: currentMonth,
+        endMonth: currentMonth,
       }}
     />
   );

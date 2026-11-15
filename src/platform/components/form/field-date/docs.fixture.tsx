@@ -1,3 +1,4 @@
+import { useState } from 'react';
 import { z } from 'zod';
 
 import {
@@ -9,8 +10,9 @@ import {
 import { onSubmit } from '@/platform/components/form/docs.utils';
 
 const Default = () => {
+  const [date] = useState(() => new Date());
   const form = useAppForm({
-    defaultValues: { date: new Date() },
+    defaultValues: { date },
     validators: { onSubmit: z.object({ date: z.date() }) },
     onSubmit: ({ value }) => onSubmit(value),
   });

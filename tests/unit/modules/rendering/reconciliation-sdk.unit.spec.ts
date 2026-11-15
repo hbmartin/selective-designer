@@ -35,7 +35,7 @@ const sdkRequire = createRequire(require.resolve('workflow'));
 const sdkRoot = path.dirname(sdkRequire.resolve('@workflow/core/runtime'));
 const sdk = (file: string) =>
   import(pathToFileURL(path.join(sdkRoot, file)).href);
-const { executeStep } = await sdk('runtime/step-executor.js');
+const { executeStep } = await sdk('runtime/spec8/step-executor.js');
 const { registerStepFunction } = await sdk('private.js');
 const { dehydrateStepArguments } = await sdk('serialization.js');
 const stepName = 'step//reconciliation-contract//reconcileSubmissionStep';

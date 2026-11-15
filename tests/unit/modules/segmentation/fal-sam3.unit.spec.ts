@@ -12,6 +12,40 @@ vi.mock('@fal-ai/client', async (importOriginal) => ({
   createFalClient: () => ({ subscribe }),
 }));
 
+it('serializes foreground and background clicks as numeric point labels', async () => {
+  subscribe.mockResolvedValueOnce({
+    data: { masks: [] },
+    requestId: 'request-1',
+  });
+
+  await createFalSam3Segmenter({ falKey: 'test' }).segment({
+    imageUrl: 'https://example.test/image.png',
+    imageKey: unwrapParseResult(toObjectKey('images/source.png')),
+    width: 100,
+    height: 200,
+    prompt: {
+      type: 'click',
+      points: [
+        { x: 0.25, y: 0.5, positive: true },
+        { x: 0.75, y: 0.25, positive: false },
+      ],
+    },
+    maxMasks: 1,
+  });
+
+  expect(subscribe).toHaveBeenLastCalledWith(
+    'fal-ai/sam-3/image',
+    expect.objectContaining({
+      input: expect.objectContaining({
+        point_prompts: [
+          { x: 25, y: 100, label: 1 },
+          { x: 75, y: 50, label: 0 },
+        ],
+      }),
+    })
+  );
+});
+
 it.each([
   { fields: ['prompt'], terminal: true },
   { fields: ['point_prompts'], terminal: false },
