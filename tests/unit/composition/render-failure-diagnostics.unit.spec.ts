@@ -33,26 +33,35 @@ const failure = {
 };
 const submission = { ...details, lastKnownCode: 'WRITE_UNCONFIRMED' };
 
-it('reports both intermediate warnings without initializing the database or rendering pipeline', async () => {
-  const { reportFailurePersistenceException, reportSubmissionException } =
-    await loadReporters();
-  reportFailurePersistenceException(failure);
-  reportSubmissionException(submission);
-  expect(mockLogger.warn.mock.calls).toEqual([
-    [
-      {
-        event: 'rendering.result.failure_persistence_exception',
-        details: failure,
-      },
-    ],
-    [
-      {
-        event: 'rendering.result.submission_persistence_exception',
-        details: submission,
-      },
-    ],
-  ]);
-  expect(database).not.toHaveBeenCalled();
+it('shares one logger for both intermediate warnings without initializing the database or rendering pipeline', async () => {
+  vi.resetModules();
+  const logger =
+    await import('@/modules/kernel/infrastructure/logger/telemetry');
+  const createLogger = vi.spyOn(logger, 'createTelemetryLogger');
+  try {
+    const { reportFailurePersistenceException, reportSubmissionException } =
+      await loadReporters();
+    reportFailurePersistenceException(failure);
+    reportSubmissionException(submission);
+    expect(createLogger).toHaveBeenCalledOnce();
+    expect(mockLogger.warn.mock.calls).toEqual([
+      [
+        {
+          event: 'rendering.result.failure_persistence_exception',
+          details: failure,
+        },
+      ],
+      [
+        {
+          event: 'rendering.result.submission_persistence_exception',
+          details: submission,
+        },
+      ],
+    ]);
+    expect(database).not.toHaveBeenCalled();
+  } finally {
+    createLogger.mockRestore();
+  }
 });
 
 it.each([
