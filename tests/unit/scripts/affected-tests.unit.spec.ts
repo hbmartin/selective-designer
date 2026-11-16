@@ -185,7 +185,8 @@ describe('changed file classification', () => {
         'tests/integration/modules/design/infrastructure/__tests__/design-repository-drizzle.postgres.integration.test.ts',
       ],
       globalConfigChanged: true,
-      globalConfigFiles: ['vitest.config.ts', 'vitest.production.config.ts'],
+      globalConfigFiles: ['vitest.config.ts'],
+      productionConfigChanged: true,
       sourceFiles: [
         'scripts/affected-tests.ts',
         'src/modules/design/domain/design.ts',
@@ -206,7 +207,7 @@ describe('global config fallback', () => {
         'tests/unit/a.unit.spec.ts',
         'tests/browser/a.browser.spec.tsx',
       ],
-      changedFiles: ['vitest.config.ts'],
+      changedFiles: ['vitest.config.ts', 'vitest.production.config.ts'],
       dependencyCruiser,
     });
 
@@ -217,6 +218,62 @@ describe('global config fallback', () => {
       'tests/browser/a.browser.spec.tsx',
     ]);
     expect(dependencyCruiser).not.toHaveBeenCalled();
+  });
+});
+
+describe('production config changes', () => {
+  const config = 'vitest.production.config.ts';
+  const productionTests = [
+    'tests/production/a.spec.tsx',
+    'tests/production/nested/b.test.mts',
+  ];
+
+  it('selects all production specs without cruising or selecting ordinary specs', async () => {
+    const cwd = makeTempCwd([...productionTests, 'tests/unit/a.unit.spec.ts']);
+    const dependencyCruiser = vi.fn();
+    const result = await findAffectedTests({
+      changedFiles: [config],
+      cwd,
+      dependencyCruiser,
+    });
+
+    expect(result.runAll).toBe(false);
+    expect(result.excludedChangedFiles).toEqual([]);
+    expect(result.testFiles).toEqual(productionTests);
+    expect(buildVitestCommands(result.testFiles)).toEqual([
+      { command: 'pnpm', args: ['test:production', ...productionTests] },
+    ]);
+    expect(dependencyCruiser).not.toHaveBeenCalled();
+  });
+
+  it('adds production specs to the direct and graph-selected ordinary specs', async () => {
+    const source = 'src/shared.ts';
+    const directTest = 'tests/unit/direct.unit.spec.ts';
+    const graphTest = 'tests/unit/graph.unit.spec.ts';
+    const cwd = makeTempCwd([
+      ...productionTests,
+      source,
+      directTest,
+      graphTest,
+      'tests/unit/unused.unit.spec.ts',
+    ]);
+    const result = await findAffectedTests({
+      changedFiles: [config, source, directTest],
+      cwd,
+      dependencyCruiser: async () => ({
+        modules: [
+          { source },
+          { source: graphTest, dependencies: [{ resolved: source }] },
+        ],
+      }),
+    });
+
+    expect(result.runAll).toBe(false);
+    expect(result.testFiles).toEqual([
+      ...productionTests,
+      directTest,
+      graphTest,
+    ]);
   });
 });
 
