@@ -1,6 +1,7 @@
+import type { Link } from '@tanstack/react-router';
 import { type ComponentType, createElement, type ReactNode } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, expectTypeOf, it, vi } from 'vitest';
 
 type LinkMockProps = Record<string, unknown> & {
   children?:
@@ -114,6 +115,22 @@ describe('BridgeLink', () => {
     expect(markup).toBe('<span>true</span>');
   });
 
+  it('keeps TanStack route and parameter inference', () => {
+    expectTypeOf(BridgeLink).toEqualTypeOf<typeof Link>();
+    void (<BridgeLink to="/manager/users/$id" params={{ id: 'sample' }} />);
+    void (
+      <BridgeLink
+        from="/manager/users/$id/"
+        to="./update"
+        params={{ id: 'sample' }}
+      />
+    );
+    // @ts-expect-error The user route requires a parameter named id.
+    void (<BridgeLink to="/manager/users/$id" params={{ userId: 'sample' }} />);
+    // @ts-expect-error This relative destination does not exist.
+    void (<BridgeLink from="/manager/users/$id/" to="./no-such-route" />);
+  });
+
   it('throws for protected side-effect routes in test mode', () => {
     expect(() =>
       renderToStaticMarkup(<BridgeLink to="/logout">Logout</BridgeLink>)
@@ -160,4 +177,28 @@ describe('BridgeLink', () => {
     ).toThrow(/ConfirmSignOut/);
     expect(linkMocks.props).toEqual([]);
   });
+
+  it.runIf(process.env.NODE_ENV === 'production')(
+    'disables protected links in production',
+    () => {
+      const markup = renderToStaticMarkup(
+        <BridgeLink to="/logout" preload="intent">
+          Logout
+        </BridgeLink>
+      );
+
+      expect(markup).toBe('Logout');
+      expect(linkMocks.props).toEqual([
+        expect.objectContaining({
+          to: '/logout',
+          disabled: true,
+          preload: false,
+        }),
+      ]);
+      expect(foresightMocks.options).toEqual([
+        expect.objectContaining({ enabled: false }),
+      ]);
+      expect(routerMocks.preloadRoute).not.toHaveBeenCalled();
+    }
+  );
 });

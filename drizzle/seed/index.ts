@@ -16,8 +16,12 @@ import {
 import { errorCauses } from '@/modules/kernel/domain/errors/error-causes';
 
 const connectionErrorCodes = new Set([
+  'EADDRNOTAVAIL',
+  'ECONNABORTED',
   'ECONNREFUSED',
   'ECONNRESET',
+  'EHOSTUNREACH',
+  'ENETUNREACH',
   'ETIMEDOUT',
   'EPIPE',
   'ENOTFOUND',

@@ -1,6 +1,16 @@
 import { Foresight } from '@foresightjs/react';
-import { Link, type LinkProps, useRouter } from '@tanstack/react-router';
-import * as React from 'react';
+import {
+  type AnyRouter,
+  type CreateLinkProps,
+  Link,
+  type LinkComponent,
+  type LinkComponentProps,
+  type LinkProps,
+  type RegisteredRouter,
+  useRouter,
+} from '@tanstack/react-router';
+import type { Ref } from 'react';
+import { useMergeRefs } from 'react-merge-refs';
 
 import {
   isProtectedNavigationPath,
@@ -26,7 +36,7 @@ const toDirectoryPath = (pathname: string) =>
   pathname.endsWith('/') ? pathname : `${pathname}/`;
 
 const resolveNavigationPathname = (
-  props: Pick<BridgeLinkProps, 'from' | 'to'>
+  props: Pick<CreateLinkProps, 'from' | 'to'>
 ) => {
   if (typeof props.to !== 'string') return undefined;
   if (props.to.startsWith('//') || hasScheme(props.to)) return undefined;
@@ -50,14 +60,17 @@ const resolveNavigationPathname = (
 };
 
 const protectedNavigationTarget = (
-  props: Pick<BridgeLinkProps, 'from' | 'to'>
+  props: Pick<CreateLinkProps, 'from' | 'to'>
 ) => {
   const pathname = resolveNavigationPathname(props);
   return pathname && isProtectedNavigationPath(pathname) ? pathname : undefined;
 };
 
 const shouldUsePredictedPreload = (
-  props: BridgeLinkProps,
+  props: Pick<
+    CreateLinkProps,
+    'preload' | 'disabled' | 'reloadDocument' | 'target' | 'to'
+  >,
   protectedTarget: string | undefined
 ) =>
   protectedTarget === undefined &&
@@ -83,7 +96,7 @@ const toRouterPreloadOptions = ({
   state,
   to,
   viewTransition,
-}: BridgeLinkProps) => ({
+}: Partial<Record<keyof CreateLinkProps, unknown>>) => ({
   _fromLocation,
   from,
   hash,
@@ -101,20 +114,35 @@ const toRouterPreloadOptions = ({
 });
 
 // Keep TanStack's render-prop children out of Foresight's state subscription.
-function ForesightRouterLink({
+function ForesightRouterLink<
+  TRouter extends AnyRouter,
+  TFrom extends string,
+  TTo extends string | undefined,
+  TMaskFrom extends string,
+  TMaskTo extends string,
+>({
   linkProps,
   ref,
 }: {
-  linkProps: BridgeLinkProps;
-  ref?: React.Ref<HTMLAnchorElement>;
+  linkProps: LinkComponentProps<'a', TRouter, TFrom, TTo, TMaskFrom, TMaskTo>;
+  ref?: Ref<HTMLAnchorElement>;
 }) {
-  return <Link {...linkProps} ref={ref} />;
+  // Foresight's top-level ref merger discards callback ref cleanup functions.
+  const anchorRef = useMergeRefs([ref, linkProps.ref]);
+  return (
+    <Link<TRouter, TFrom, TTo, TMaskFrom, TMaskTo>
+      {...Object.assign({}, linkProps, { ref: anchorRef })}
+    />
+  );
 }
 
-const BridgeLinkComponent = React.forwardRef<
-  HTMLAnchorElement,
-  BridgeLinkProps
->((props, forwardedRef) => {
+export const BridgeLink: LinkComponent<'a'> = function BridgeLink<
+  TRouter extends AnyRouter = RegisteredRouter,
+  const TFrom extends string = string,
+  const TTo extends string | undefined = undefined,
+  const TMaskFrom extends string = TFrom,
+  const TMaskTo extends string = '',
+>(props: LinkComponentProps<'a', TRouter, TFrom, TTo, TMaskFrom, TMaskTo>) {
   const router = useRouter();
   const protectedTarget = protectedNavigationTarget(props);
   const usePredictedPreload = shouldUsePredictedPreload(props, protectedTarget);
@@ -122,16 +150,15 @@ const BridgeLinkComponent = React.forwardRef<
     throw new Error(protectedNavigationErrorMessage(protectedTarget));
   }
 
-  const linkProps: BridgeLinkProps = {
-    ...props,
+  const linkProps = Object.assign({}, props, {
     disabled: protectedTarget ? true : props.disabled,
-    preload: usePredictedPreload || protectedTarget ? false : props.preload,
-  };
+    preload:
+      usePredictedPreload || protectedTarget ? (false as const) : props.preload,
+  });
   return (
     <Foresight
-      as={ForesightRouterLink}
+      as={ForesightRouterLink<TRouter, TFrom, TTo, TMaskFrom, TMaskTo>}
       linkProps={linkProps}
-      ref={forwardedRef}
       callback={() => {
         void router
           .preloadRoute(
@@ -149,8 +176,4 @@ const BridgeLinkComponent = React.forwardRef<
       reactivateAfter={PREDICTED_PRELOAD_REACTIVATE_AFTER_MS}
     />
   );
-});
-
-BridgeLinkComponent.displayName = 'BridgeLink';
-
-export const BridgeLink = BridgeLinkComponent as typeof Link;
+};
