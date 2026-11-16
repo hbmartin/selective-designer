@@ -69,7 +69,7 @@
     "test": "vitest run",
     "test:telemetry:production": "node --test scripts/test-production-diagnostics.mjs",
     "test:react-compiler:production": "node scripts/check-production-react-compiler.mjs",
-    "test:bridge-link:production": "cross-env NODE_ENV=production vitest run --project=unit tests/unit/platform/router/bridge-link.unit.spec.tsx -t \"disables protected links in production\"",
+    "test:bridge-link:production": "cross-env NODE_ENV=production vitest run --config vitest.production.config.ts",
     "test:unit": "vitest run --project=unit",
     "test:property": "node scripts/run-property-tests.mjs",
     "test:browser": "vitest run --project=browser",

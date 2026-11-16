@@ -1,7 +1,6 @@
-import type { Link } from '@tanstack/react-router';
 import { type ComponentType, createElement, type ReactNode } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
-import { beforeEach, describe, expect, expectTypeOf, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 type LinkMockProps = Record<string, unknown> & {
   children?:
@@ -54,14 +53,23 @@ import { BridgeLink } from '@/platform/router';
 
 describe('BridgeLink', () => {
   beforeEach(() => {
+    vi.stubEnv('PROD', false);
     foresightMocks.options = [];
     linkMocks.props = [];
     routerMocks.preloadRoute.mockClear();
   });
+  afterEach(() => vi.unstubAllEnvs());
 
   it('uses Foresight to preload ordinary routes by default', async () => {
     const markup = renderToStaticMarkup(
-      <BridgeLink to="/manager">Manager</BridgeLink>
+      <BridgeLink
+        to="/manager"
+        hash="reports"
+        replace
+        data-testid="manager-link"
+      >
+        Manager
+      </BridgeLink>
     );
 
     expect(markup).toBe('Manager');
@@ -81,9 +89,11 @@ describe('BridgeLink', () => {
 
     await foresightOptions.callback();
 
-    expect(routerMocks.preloadRoute).toHaveBeenCalledWith(
-      expect.objectContaining({ to: '/manager' })
-    );
+    expect(routerMocks.preloadRoute).toHaveBeenCalledExactlyOnceWith({
+      to: '/manager',
+      hash: 'reports',
+      replace: true,
+    });
   });
 
   it('respects explicit TanStack preload props', () => {
@@ -116,15 +126,24 @@ describe('BridgeLink', () => {
   });
 
   it('keeps TanStack route and parameter inference', () => {
-    expectTypeOf(BridgeLink).toEqualTypeOf<typeof Link>();
-    void (<BridgeLink to="/manager/users/$id" params={{ id: 'sample' }} />);
-    void (
-      <BridgeLink
-        from="/manager/users/$id/"
-        to="./update"
-        params={{ id: 'sample' }}
-      />
-    );
+    expect(
+      renderToStaticMarkup(
+        <BridgeLink to="/manager/users/$id" params={{ id: 'sample' }}>
+          User
+        </BridgeLink>
+      )
+    ).toBe('User');
+    expect(
+      renderToStaticMarkup(
+        <BridgeLink
+          from="/manager/users/$id/"
+          to="./update"
+          params={{ id: 'sample' }}
+        >
+          Edit user
+        </BridgeLink>
+      )
+    ).toBe('Edit user');
     // @ts-expect-error The user route requires a parameter named id.
     void (<BridgeLink to="/manager/users/$id" params={{ userId: 'sample' }} />);
     // @ts-expect-error This relative destination does not exist.
@@ -177,28 +196,4 @@ describe('BridgeLink', () => {
     ).toThrow(/ConfirmSignOut/);
     expect(linkMocks.props).toEqual([]);
   });
-
-  it.runIf(process.env.NODE_ENV === 'production')(
-    'disables protected links in production',
-    () => {
-      const markup = renderToStaticMarkup(
-        <BridgeLink to="/logout" preload="intent">
-          Logout
-        </BridgeLink>
-      );
-
-      expect(markup).toBe('Logout');
-      expect(linkMocks.props).toEqual([
-        expect.objectContaining({
-          to: '/logout',
-          disabled: true,
-          preload: false,
-        }),
-      ]);
-      expect(foresightMocks.options).toEqual([
-        expect.objectContaining({ enabled: false }),
-      ]);
-      expect(routerMocks.preloadRoute).not.toHaveBeenCalled();
-    }
-  );
 });

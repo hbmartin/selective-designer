@@ -11,6 +11,7 @@ import {
 } from '@tanstack/react-router';
 import type { Ref } from 'react';
 import { useMergeRefs } from 'react-merge-refs';
+import { pick } from 'remeda';
 
 import {
   isProtectedNavigationPath,
@@ -25,8 +26,7 @@ const PREDICTED_PRELOAD_REACTIVATE_AFTER_MS = 60_000;
 const protectedNavigationErrorMessage = (target: string) =>
   `BridgeLink cannot navigate declaratively to protected side-effect route "${target}". Use an explicit command flow such as ConfirmSignOut instead.`;
 
-const isProductionBuild = () =>
-  Boolean((import.meta as ImportMeta & { env?: { PROD?: boolean } }).env?.PROD);
+const isProductionBuild = () => import.meta.env?.PROD === true;
 
 const SCHEME_PATTERN = /^[A-Za-z][A-Za-z\d+.-]*:/;
 
@@ -81,37 +81,22 @@ const shouldUsePredictedPreload = (
   typeof props.to === 'string' &&
   props.to.length > 0;
 
-const toRouterPreloadOptions = ({
-  _fromLocation,
-  from,
-  hash,
-  hashScrollIntoView,
-  ignoreBlocker,
-  mask,
-  params,
-  reloadDocument,
-  replace,
-  resetScroll,
-  search,
-  state,
-  to,
-  viewTransition,
-}: Partial<Record<keyof CreateLinkProps, unknown>>) => ({
-  _fromLocation,
-  from,
-  hash,
-  hashScrollIntoView,
-  ignoreBlocker,
-  mask,
-  params,
-  reloadDocument,
-  replace,
-  resetScroll,
-  search,
-  state,
-  to,
-  viewTransition,
-});
+const preloadRouteOptionKeys = [
+  '_fromLocation',
+  'from',
+  'hash',
+  'hashScrollIntoView',
+  'ignoreBlocker',
+  'mask',
+  'params',
+  'reloadDocument',
+  'replace',
+  'resetScroll',
+  'search',
+  'state',
+  'to',
+  'viewTransition',
+] as const;
 
 // Keep TanStack's render-prop children out of Foresight's state subscription.
 function ForesightRouterLink<
@@ -136,7 +121,7 @@ function ForesightRouterLink<
   );
 }
 
-export const BridgeLink: LinkComponent<'a'> = function BridgeLink<
+function BridgeLinkImpl<
   TRouter extends AnyRouter = RegisteredRouter,
   const TFrom extends string = string,
   const TTo extends string | undefined = undefined,
@@ -160,9 +145,10 @@ export const BridgeLink: LinkComponent<'a'> = function BridgeLink<
       as={ForesightRouterLink<TRouter, TFrom, TTo, TMaskFrom, TMaskTo>}
       linkProps={linkProps}
       callback={() => {
+        if (!usePredictedPreload) return;
         void router
           .preloadRoute(
-            toRouterPreloadOptions(props) as Parameters<
+            pick(props, preloadRouteOptionKeys) as Parameters<
               typeof router.preloadRoute
             >[0]
           )
@@ -176,4 +162,8 @@ export const BridgeLink: LinkComponent<'a'> = function BridgeLink<
       reactivateAfter={PREDICTED_PRELOAD_REACTIVATE_AFTER_MS}
     />
   );
-};
+}
+
+BridgeLinkImpl.displayName = 'BridgeLink';
+
+export const BridgeLink = BridgeLinkImpl satisfies LinkComponent<'a'>;

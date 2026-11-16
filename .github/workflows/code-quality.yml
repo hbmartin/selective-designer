@@ -262,6 +262,9 @@ jobs:
           mkdir -p test-results/vitest
           pnpm test:coverage --reporter=default --reporter=junit --outputFile.junit=test-results/vitest/junit.xml
 
+      - name: Verify protected links under the production transform
+        run: pnpm test:bridge-link:production
+
       - name: Ensure lcov report was generated
         run: test -s coverage/lcov.info
 
@@ -374,9 +377,6 @@ jobs:
           set -o pipefail
           pnpm build 2>&1 | tee test-results/build/build.log
           pnpm test:react-compiler:production .output/public/assets
-
-      - name: Verify protected links in production
-        run: pnpm test:bridge-link:production
 
       - name: Verify production workflow diagnostics
         run: pnpm test:telemetry:production
