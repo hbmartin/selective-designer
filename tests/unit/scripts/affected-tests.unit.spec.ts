@@ -401,8 +401,9 @@ describe('output formatting', () => {
 describe('Vitest runner command', () => {
   const ordinary = 'tests/unit/a.unit.spec.ts';
   const production = 'tests/production/bridge-link.production.spec.tsx';
+  const secondProduction = 'tests/production/bridge-link-destinations.spec.tsx';
   const productionCommand = {
-    args: ['test:bridge-link:production', production],
+    args: ['test:production', production],
     command: 'pnpm',
   };
 
@@ -415,6 +416,18 @@ describe('Vitest runner command', () => {
       buildVitestCommand([ordinary]),
     ]);
     expect(buildVitestCommands([production])).toEqual([productionCommand]);
+    expect(buildVitestCommands([secondProduction])).toEqual([
+      { command: 'pnpm', args: ['test:production', secondProduction] },
+    ]);
+    expect(
+      buildVitestCommands([production, ordinary, secondProduction])
+    ).toEqual([
+      buildVitestCommand([ordinary]),
+      {
+        command: 'pnpm',
+        args: ['test:production', production, secondProduction],
+      },
+    ]);
     expect(buildVitestCommands([])).toEqual([]);
   });
 

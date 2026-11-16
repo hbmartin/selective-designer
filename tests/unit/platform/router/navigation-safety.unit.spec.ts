@@ -34,6 +34,8 @@ describe('navigation safety', () => {
   it('protects logout route variants', () => {
     expect(isProtectedNavigationPath('/logout')).toBe(true);
     expect(isProtectedNavigationPath('/logout/')).toBe(true);
+    expect(isProtectedNavigationPath('/LOGOUT')).toBe(true);
+    expect(isProtectedNavigationPath('/%6Cogout')).toBe(true);
     expect(isProtectedNavigationPath('/app/../logout')).toBe(true);
   });
 

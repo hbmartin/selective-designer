@@ -223,6 +223,9 @@ jobs:
           mkdir -p test-results/architecture
           pnpm exec vitest run --project=unit tests/architecture --reporter=default --reporter=junit --outputFile.junit=test-results/architecture/junit.xml
 
+      - name: Run production-mode tests
+        run: pnpm test:production
+
       - name: Upload architecture test report
         if: always()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
@@ -285,24 +288,6 @@ jobs:
           name: vitest
           fail_ci_if_error: true
           token: ${{ env.CODECOV_TOKEN }}
-
-  production-bridge-link:
-    name: BridgeLink (production)
-    if: github.event_name != 'pull_request' || github.event.pull_request.draft == false
-    timeout-minutes: 10
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-
-      - name: Setup pnpm
-        uses: ./.github/actions/setup-pnpm
-        with:
-          node-version: 24
-
-      - name: Test protected links in production mode
-        run: pnpm test:bridge-link:production
 
   postgres-integration:
     name: PostgreSQL Integration

@@ -2,14 +2,22 @@ import babel from '@rolldown/plugin-babel';
 import react, { reactCompilerPreset } from '@vitejs/plugin-react';
 import assert from 'node:assert/strict';
 import { fileURLToPath } from 'node:url';
-import { build, type Plugin } from 'vite';
+import { build, normalizePath, type Plugin } from 'vite';
 import { expect, it } from 'vitest';
 
-import { verifyBackButtonCompiler } from '../../scripts/verify-back-button-compiler';
+import {
+  backButtonUsesCompilerCache,
+  verifyBackButtonCompiler,
+} from '../../scripts/verify-back-button-compiler';
 
 const entry = fileURLToPath(
   new URL('../../src/platform/components/back-button.tsx', import.meta.url)
 );
+
+function replaceFixture(code: string, before: string, after: string) {
+  assert(code.includes(before), `Missing BackButton fixture text: ${before}`);
+  return code.replace(before, after);
+}
 
 const compileBackButton = ({
   transform,
@@ -22,7 +30,8 @@ const compileBackButton = ({
     name: 'back-button-compiler-fixture',
     enforce: 'pre',
     transform(code, id) {
-      if (id === entry && transform) return transform(code);
+      if (normalizePath(id) === normalizePath(entry) && transform)
+        return transform(code);
     },
   };
   return build({
@@ -62,7 +71,11 @@ it('accepts a translation refactor that still compiles BackButton', async () => 
   await expect(
     compileBackButton({
       transform: (code) =>
-        code.replace("useTranslation(['components'])", 'useTranslation()'),
+        replaceFixture(
+          code,
+          "useTranslation(['components'])",
+          'useTranslation()'
+        ),
     })
   ).resolves.toBeDefined();
 });
@@ -71,7 +84,8 @@ it.each([
   {
     name: 'function opt-out',
     transform: (code: string) =>
-      code.replace(
+      replaceFixture(
+        code,
         '=> {\n  const { t }',
         "=> {\n  'use no memo';\n  const { t }"
       ),
@@ -96,6 +110,22 @@ it('fails separately when the rendered client export is absent', async () => {
   ).rejects.toThrow('BackButton was not rendered in a client chunk.');
 });
 
+const cacheImport = "import { c as cache } from 'react/compiler-runtime';";
+
+it.each([
+  'export function BackButton() { return cache(16); }',
+  'export const BackButton = () => cache(16);',
+  'const BackButton = () => cache(16); export { BackButton };',
+  'const Button = function () { return cache(16); }; export { Button as BackButton };',
+])(
+  'recognizes the local exported implementation in %s',
+  async (declaration) => {
+    await expect(
+      backButtonUsesCompilerCache(entry, `${cacheImport} ${declaration}`)
+    ).resolves.toBe(true);
+  }
+);
+
 it.each([
   {
     name: 'a shadowing parameter',
@@ -105,13 +135,20 @@ it.each([
     name: 'a neighboring function',
     body: 'export const BackButton = () => null; export const Other = () => cache(16);',
   },
+  {
+    name: 'a nested function',
+    body: 'export function BackButton() { return () => cache(16); }',
+  },
+  {
+    name: 'a type-only export',
+    body: 'const Button = () => cache(16); export type { Button as BackButton };',
+  },
+  {
+    name: 'a re-export',
+    body: "const Button = () => cache(16); export { Button as BackButton } from './other';",
+  },
 ])('rejects a cache call from $name', async ({ body }) => {
   await expect(
-    compileBackButton({
-      transform: () =>
-        `'use no memo'; import { c as cache } from 'react/compiler-runtime'; ${body}`,
-    })
-  ).rejects.toThrow(
-    'React Compiler did not emit a memo cache inside BackButton.'
-  );
+    backButtonUsesCompilerCache(entry, `${cacheImport} ${body}`)
+  ).resolves.toBe(false);
 });

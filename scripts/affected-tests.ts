@@ -735,7 +735,7 @@ export const buildVitestCommands = (testFiles: string[]) => {
   if (production.length > 0) {
     commands.push({
       command: 'pnpm',
-      args: ['test:bridge-link:production', ...production],
+      args: ['test:production', ...production],
     });
   }
   return commands;

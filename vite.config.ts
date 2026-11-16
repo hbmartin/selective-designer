@@ -10,7 +10,6 @@ import { fileURLToPath } from 'node:url';
 import { defineConfig, loadEnv, type Plugin } from 'vite';
 import { workflow } from 'workflow/vite';
 
-import { verifyBackButtonCompiler } from './scripts/verify-back-button-compiler';
 import { CSP_NONCE_PLACEHOLDER } from './src/platform/http/csp-nonce';
 
 function srcJsonImportPlugin(): Plugin {
@@ -71,12 +70,25 @@ function srcJsonImportPlugin(): Plugin {
   };
 }
 
-export default defineConfig(({ mode }) => {
+export default defineConfig(async ({ command, mode }) => {
   // Load env file based on `mode` in the current working directory.
   const env = loadEnv(mode, process.cwd(), 'VITE_');
   const sentryEnv = loadEnv(mode, process.cwd(), 'SENTRY_');
   const envName = env.VITE_ENV_NAME?.toLowerCase();
   const isTestRuntime = envName === 'test' || envName === 'tests';
+  const compilerVerifier =
+    command === 'build' && process.env.VERIFY_REACT_COMPILER === '1'
+      ? (
+          await import('./scripts/verify-back-button-compiler')
+        ).verifyBackButtonCompiler(
+          fileURLToPath(
+            new URL(
+              './src/platform/components/back-button.tsx',
+              import.meta.url
+            )
+          )
+        )
+      : undefined;
   const sentryPlugins =
     env.VITE_SENTRY_DSN &&
     sentryEnv.SENTRY_ORG &&
@@ -123,15 +135,7 @@ export default defineConfig(({ mode }) => {
       // react's vite plugin must come after start's vite plugin
       viteReact(),
       babel({ presets: [reactCompilerPreset()] }),
-      process.env.VERIFY_REACT_COMPILER === '1' &&
-        verifyBackButtonCompiler(
-          fileURLToPath(
-            new URL(
-              './src/platform/components/back-button.tsx',
-              import.meta.url
-            )
-          )
-        ),
+      compilerVerifier,
       ...sentryPlugins,
     ],
   };

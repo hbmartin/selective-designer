@@ -1,9 +1,11 @@
-import ts from 'typescript';
+import type { Node, Symbol } from 'typescript';
 import { normalizePath, type Plugin } from 'vite';
 
-function backButtonUsesCompilerCache(file: string, code: string): boolean {
+export async function backButtonUsesCompilerCache(file: string, code: string) {
+  const { default: ts } = await import('typescript');
+  const fileName = normalizePath(file);
   const syntax = ts.createSourceFile(
-    file,
+    fileName,
     code,
     ts.ScriptTarget.Latest,
     false,
@@ -12,10 +14,37 @@ function backButtonUsesCompilerCache(file: string, code: string): boolean {
   // Resolve bindings in the transformed module without loading its imports.
   const options = { noLib: true, noResolve: true, types: [] };
   const host = ts.createCompilerHost(options);
-  host.getSourceFile = (name) => (name === file ? syntax : undefined);
-  const checker = ts.createProgram([file], options, host).getTypeChecker();
-  const cacheBindings = new Set<ts.Symbol>();
-  let body: ts.ConciseBody | undefined;
+  host.getSourceFile = (name) => (name === fileName ? syntax : undefined);
+  const checker = ts.createProgram([fileName], options, host).getTypeChecker();
+  const moduleSymbol = checker.getSymbolAtLocation(syntax);
+  if (!moduleSymbol) return false;
+
+  const component = checker
+    .getExportsOfModule(moduleSymbol)
+    .find((entry) => entry.name === 'BackButton');
+  const specifier = component?.declarations?.find(ts.isExportSpecifier);
+  const binding = specifier
+    ? !specifier.isTypeOnly &&
+      !specifier.parent.parent.isTypeOnly &&
+      !specifier.parent.parent.moduleSpecifier &&
+      checker.getExportSpecifierLocalTargetSymbol(specifier)
+    : component;
+  const declaration = binding && binding.valueDeclaration;
+  const implementation =
+    declaration && ts.isVariableDeclaration(declaration)
+      ? declaration.initializer
+      : declaration;
+  if (
+    !implementation ||
+    (!ts.isFunctionDeclaration(implementation) &&
+      !ts.isArrowFunction(implementation) &&
+      !ts.isFunctionExpression(implementation)) ||
+    !implementation.body
+  ) {
+    return false;
+  }
+
+  const cacheBindings = new Set<Symbol>();
 
   for (const statement of syntax.statements) {
     if (
@@ -23,48 +52,25 @@ function backButtonUsesCompilerCache(file: string, code: string): boolean {
       ts.isStringLiteral(statement.moduleSpecifier) &&
       statement.moduleSpecifier.text === 'react/compiler-runtime'
     ) {
-      const bindings = statement.importClause?.namedBindings;
+      const bindings = statement.importClause?.isTypeOnly
+        ? undefined
+        : statement.importClause?.namedBindings;
       if (bindings && ts.isNamedImports(bindings)) {
         for (const binding of bindings.elements) {
-          if ((binding.propertyName ?? binding.name).text !== 'c') continue;
+          if (
+            binding.isTypeOnly ||
+            (binding.propertyName ?? binding.name).text !== 'c'
+          )
+            continue;
           const symbol = checker.getSymbolAtLocation(binding.name);
           if (symbol) cacheBindings.add(symbol);
         }
       }
     }
-
-    if (
-      !ts.canHaveModifiers(statement) ||
-      !ts
-        .getModifiers(statement)
-        ?.some(({ kind }) => kind === ts.SyntaxKind.ExportKeyword)
-    ) {
-      continue;
-    }
-    if (
-      ts.isFunctionDeclaration(statement) &&
-      statement.name?.text === 'BackButton'
-    ) {
-      body = statement.body;
-    }
-    if (ts.isVariableStatement(statement)) {
-      for (const { name, initializer } of statement.declarationList
-        .declarations) {
-        if (
-          ts.isIdentifier(name) &&
-          name.text === 'BackButton' &&
-          initializer &&
-          (ts.isArrowFunction(initializer) ||
-            ts.isFunctionExpression(initializer))
-        ) {
-          body = initializer.body;
-        }
-      }
-    }
   }
 
-  if (!body || cacheBindings.size === 0) return false;
-  const pending: ts.Node[] = [body];
+  if (cacheBindings.size === 0) return false;
+  const pending: Node[] = [implementation.body];
   while (pending.length > 0) {
     const node = pending.pop();
     if (!node) break;
@@ -92,6 +98,9 @@ function backButtonUsesCompilerCache(file: string, code: string): boolean {
 
 export function verifyBackButtonCompiler(backButtonFile: string): Plugin {
   const file = normalizePath(backButtonFile);
+  const exactId = new RegExp(
+    '^' + file.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '$'
+  );
   let hasCache = false;
   return {
     name: 'selective-designer:verify-back-button-compiler',
@@ -101,10 +110,13 @@ export function verifyBackButtonCompiler(backButtonFile: string): Plugin {
     buildStart() {
       hasCache = false;
     },
-    transform(code, id) {
-      if (normalizePath(id) === file) {
-        hasCache = backButtonUsesCompilerCache(file, code);
-      }
+    transform: {
+      filter: { id: exactId },
+      async handler(code, id) {
+        if (normalizePath(id) === file) {
+          hasCache = await backButtonUsesCompilerCache(file, code);
+        }
+      },
     },
     generateBundle(_, bundle) {
       const rendered = Object.values(bundle).some(

@@ -5,6 +5,6 @@ export default defineConfig({
   plugins: [react()],
   resolve: { tsconfigPaths: true },
   test: {
-    include: ['tests/production/bridge-link.production.spec.tsx'],
+    include: ['tests/production/**/*.{test,spec}.?(c|m)[jt]s?(x)'],
   },
 });

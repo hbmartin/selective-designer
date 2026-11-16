@@ -29,8 +29,13 @@ export const normalizeNavigationPathname = (value: string) => {
 
 export const isProtectedNavigationPath = (pathname: string) => {
   const normalizedPathname = normalizeNavigationPathname(pathname);
-  return (
-    normalizedPathname !== null &&
-    protectedNavigationPathnames.has(normalizedPathname)
-  );
+  if (normalizedPathname === null) return false;
+
+  try {
+    return protectedNavigationPathnames.has(
+      decodeURI(normalizedPathname).toLowerCase()
+    );
+  } catch {
+    return false;
+  }
 };
