@@ -223,6 +223,9 @@ jobs:
           mkdir -p test-results/architecture
           pnpm exec vitest run --project=unit tests/architecture --reporter=default --reporter=junit --outputFile.junit=test-results/architecture/junit.xml
 
+      - name: Run production-mode tests
+        run: pnpm test:production
+
       - name: Upload architecture test report
         if: always()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
@@ -261,9 +264,6 @@ jobs:
         run: |
           mkdir -p test-results/vitest
           pnpm test:coverage --reporter=default --reporter=junit --outputFile.junit=test-results/vitest/junit.xml
-
-      - name: Verify protected links under the production transform
-        run: pnpm test:bridge-link:production
 
       - name: Ensure lcov report was generated
         run: test -s coverage/lcov.info
@@ -372,11 +372,11 @@ jobs:
       - name: Build app
         env:
           CI_PROVIDER_KEY_PLACEHOLDERS: 'true'
+          VERIFY_REACT_COMPILER: '1'
         run: |
           mkdir -p test-results/build
           set -o pipefail
           pnpm build 2>&1 | tee test-results/build/build.log
-          pnpm test:react-compiler:production .output/public/assets
 
       - name: Verify production workflow diagnostics
         run: pnpm test:telemetry:production
@@ -384,13 +384,13 @@ jobs:
       - name: Build Vercel output and verify production diagnostics
         env:
           CI_PROVIDER_KEY_PLACEHOLDERS: 'true'
+          VERIFY_REACT_COMPILER: '1'
           NITRO_PRESET: vercel
           PRODUCTION_DIAGNOSTICS_ENTRY: .vercel/output/functions/.well-known/workflow/v1/flow.func/index.mjs
           PRODUCTION_DIAGNOSTICS_HTTP_ENTRY: .vercel/output/functions/__server.func/index.mjs
         run: |
           set -o pipefail
           pnpm build 2>&1 | tee test-results/build/build-vercel.log
-          pnpm test:react-compiler:production .vercel/output/static/assets
           pnpm test:telemetry:production
 
       - name: Upload build log

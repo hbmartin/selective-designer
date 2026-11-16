@@ -14,6 +14,7 @@ Use these commands instead of invoking underlying tools directly.
 | `pnpm dev` | Start the local dev server. |
 | `pnpm check` | Static checks: format, lint, typecheck, depcruise, semgrep, audit. |
 | `pnpm test` | Vitest unit and browser projects. |
+| `pnpm test:production` | Vitest specs that require production mode. |
 | `pnpm test:affected:list` | List tests associated with changed files. |
 | `pnpm test:affected` | Run tests associated with changed files. |
 | `pnpm test:e2e:visual` | Local Chromium visual regression check for stable critical screens. |
@@ -22,7 +23,7 @@ Use these commands instead of invoking underlying tools directly.
 | `pnpm test:e2e:visual:manager-users` | Local Chromium visual regression check for manager user screens. |
 | `pnpm test:e2e:visual:update` | Update local visual baselines for review. |
 | `pnpm build` | Production build. |
-| `pnpm verify` | Full pre-merge gate: `check` + `test` + `build`. |
+| `pnpm verify` | Full pre-merge gate: `check`, `test`, `test:production`, and `build` with the React Compiler canary enabled. |
 | `pnpm verify:task` | Task-level verification runner with timestamped logs under `test-results/task-verification/`. |
 | `pnpm format:changed` | Format changed files only. |
 | `pnpm check:migrations` | Guard against invalid manual migration edits. |
@@ -140,6 +141,7 @@ Use the cheapest test that proves the behavior:
 | Unit | `tests/unit/**/*.unit.{test,spec}.{ts,tsx}` |
 | Browser/component | `tests/browser/**/*.browser.{test,spec}.tsx` |
 | Integration | `tests/integration/**/*.integration.test.ts` |
+| Production-mode | `tests/production/**/*.{test,spec}.{ts,tsx}` |
 | Architecture/security | `tests/architecture/**/*.unit.spec.ts`, `tests/security/**/*.unit.spec.ts` |
 | E2E | `tests/e2e/*.spec.ts` |
 | Fixtures/support | `tests/support`, `tests/server`, nearest `*.fixture.tsx` when useful |

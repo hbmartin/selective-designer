@@ -6,6 +6,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   type AffectedTestsResult,
   buildVitestCommand,
+  buildVitestCommands,
   classifyChangedFiles,
   collectChangedFilesFromGit,
   computeMirrorTestPaths,
@@ -20,6 +21,7 @@ import {
   parseCliArguments,
   parseNullDelimitedPaths,
   runStrategyB,
+  runVitest,
 } from '../../../scripts/affected-tests';
 
 const tempDirectories: string[] = [];
@@ -160,10 +162,12 @@ describe('changed file classification', () => {
     expect(
       classifyChangedFiles([
         'vitest.config.ts',
+        'vitest.production.config.ts',
         'src/modules/design/domain/design.ts',
         'scripts/affected-tests.ts',
         'tests/unit/modules/design/domain/design.unit.spec.ts',
         'tests/browser/platform/components/form/form.browser.spec.tsx',
+        'tests/production/bridge-link.production.spec.tsx',
         'tests/integration/modules/design/infrastructure/__tests__/design-repository-drizzle.postgres.integration.test.ts',
         'tests/e2e/login.spec.ts',
         'tests/server/test-utils.ts',
@@ -172,6 +176,7 @@ describe('changed file classification', () => {
     ).toEqual({
       directTestFiles: [
         'tests/browser/platform/components/form/form.browser.spec.tsx',
+        'tests/production/bridge-link.production.spec.tsx',
         'tests/unit/modules/design/domain/design.unit.spec.ts',
       ],
       excludedFiles: [
@@ -180,7 +185,7 @@ describe('changed file classification', () => {
         'tests/integration/modules/design/infrastructure/__tests__/design-repository-drizzle.postgres.integration.test.ts',
       ],
       globalConfigChanged: true,
-      globalConfigFiles: ['vitest.config.ts'],
+      globalConfigFiles: ['vitest.config.ts', 'vitest.production.config.ts'],
       sourceFiles: [
         'scripts/affected-tests.ts',
         'src/modules/design/domain/design.ts',
@@ -394,6 +399,58 @@ describe('output formatting', () => {
 });
 
 describe('Vitest runner command', () => {
+  const ordinary = 'tests/unit/a.unit.spec.ts';
+  const production = 'tests/production/bridge-link.production.spec.tsx';
+  const secondProduction = 'tests/production/bridge-link-destinations.spec.tsx';
+  const productionCommand = {
+    args: ['test:production', production],
+    command: 'pnpm',
+  };
+
+  it('dispatches ordinary and production tests to their own configurations', () => {
+    expect(buildVitestCommands([production, ordinary])).toEqual([
+      buildVitestCommand([ordinary]),
+      productionCommand,
+    ]);
+    expect(buildVitestCommands([ordinary])).toEqual([
+      buildVitestCommand([ordinary]),
+    ]);
+    expect(buildVitestCommands([production])).toEqual([productionCommand]);
+    expect(buildVitestCommands([secondProduction])).toEqual([
+      { command: 'pnpm', args: ['test:production', secondProduction] },
+    ]);
+    expect(
+      buildVitestCommands([production, ordinary, secondProduction])
+    ).toEqual([
+      buildVitestCommand([ordinary]),
+      {
+        command: 'pnpm',
+        args: ['test:production', production, secondProduction],
+      },
+    ]);
+    expect(buildVitestCommands([])).toEqual([]);
+  });
+
+  it.each([
+    { ordinaryStatus: 7, productionStatus: 0, expected: 7 },
+    { ordinaryStatus: 0, productionStatus: 9, expected: 9 },
+  ])(
+    'runs both suites and reports exit code $expected',
+    async ({ ordinaryStatus, productionStatus, expected }) => {
+      const execute = vi
+        .fn(async () => 0)
+        .mockResolvedValueOnce(ordinaryStatus)
+        .mockResolvedValueOnce(productionStatus);
+      await expect(runVitest([ordinary, production], execute)).resolves.toBe(
+        expected
+      );
+      expect(execute.mock.calls).toEqual([
+        [buildVitestCommand([ordinary])],
+        [productionCommand],
+      ]);
+    }
+  );
+
   it('builds the expected pnpm Vitest command', () => {
     expect(buildVitestCommand(['tests/unit/a.unit.spec.ts'])).toEqual({
       args: [

@@ -1,69 +1,76 @@
-import type { ComponentType } from 'react';
+import {
+  createMemoryHistory,
+  createRootRoute,
+  createRoute,
+  createRouter,
+  RouterContextProvider,
+} from '@tanstack/react-router';
+import { createElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
-import { assert, expect, it, vi } from 'vitest';
+import { beforeEach, expect, it, vi } from 'vitest';
 
-import { BridgeLink } from '../../src/platform/router/bridge-link';
-
-type LinkProps = {
-  children: string;
-  disabled?: boolean;
-  preload?: false | 'intent';
-  to: string;
-};
-
-type ForesightRegistration = {
-  callback: () => void;
-  enabled: boolean;
-};
+import { BridgeLink } from '@/platform/router';
 
 const mocks = vi.hoisted(() => ({
-  links: vi.fn<(props: LinkProps) => string>((props) => props.children),
-  register: vi.fn<(options: ForesightRegistration) => void>(),
-  preloadRoute: vi.fn(async () => []),
-}));
-
-vi.mock('@tanstack/react-router', () => ({
-  Link: mocks.links,
-  useRouter: () => ({ preloadRoute: mocks.preloadRoute }),
+  foresight: vi.fn(),
 }));
 
 vi.mock('@foresightjs/react', () => ({
-  Foresight: ({
-    as: Target,
-    callback,
-    enabled,
-    linkProps,
-  }: ForesightRegistration & {
-    as: ComponentType<{ linkProps: LinkProps }>;
-    linkProps: LinkProps;
-  }) => {
-    mocks.register({ callback, enabled });
-    return <Target linkProps={linkProps} />;
-  },
+  Foresight: mocks.foresight,
 }));
 
-it('disables protected navigation and preloading in production', () => {
+const root = createRootRoute();
+const routes = ['/app', '/login', '/logout'].map((path) =>
+  createRoute({ getParentRoute: () => root, path })
+);
+const router = createRouter({
+  history: createMemoryHistory({ initialEntries: ['/app'] }),
+  routeTree: root.addChildren(routes),
+  defaultPreload: 'intent',
+});
+
+beforeEach(async () => {
   expect(process.env.NODE_ENV).toBe('production');
   expect(import.meta.env.PROD).toBe(true);
+  vi.clearAllMocks();
+  await router.load();
+});
 
-  const markup = renderToStaticMarkup(
-    <BridgeLink to="/logout" preload="intent">
-      Logout
-    </BridgeLink>
-  );
+it.each([
+  { to: '/logout' },
+  { to: '/logout', preload: 'intent' },
+  { to: '/logout', mask: { to: '/login' } },
+  { to: '/login', mask: { to: '/logout' } },
+  { to: '../logout' },
+  { to: '/LOGOUT' },
+  { to: '/%6Cogout' },
+  { to: '/app/../logout' },
+  { to: '/app', href: '/login' },
+  { to: '/login', unsafeRelative: 'path' },
+  { to: 'https://example.test/', href: '/app' },
+])('renders an inactive, inert anchor for %j', (props) => {
+  const preload = vi.spyOn(router, 'preloadRoute');
+  try {
+    const markup = renderToStaticMarkup(
+      <RouterContextProvider router={router}>
+        {createElement(BridgeLink, {
+          ...props,
+          children: ({ isActive }: { isActive: boolean }) =>
+            isActive ? 'Active' : 'Inactive',
+          'aria-current': 'page',
+          'data-status': 'active',
+          className: 'link',
+        } as never)}
+      </RouterContextProvider>
+    );
 
-  expect(markup).toBe('Logout');
-  expect(mocks.links).toHaveBeenCalledOnce();
-  expect(mocks.links.mock.calls[0]?.[0]).toMatchObject({
-    to: '/logout',
-    disabled: true,
-    preload: false,
-  });
-  expect(mocks.register).toHaveBeenCalledExactlyOnceWith(
-    expect.objectContaining({ enabled: false })
-  );
-  const registration = mocks.register.mock.calls[0]?.[0];
-  assert(registration);
-  registration.callback();
-  expect(mocks.preloadRoute).not.toHaveBeenCalled();
+    expect(markup).toContain('aria-disabled="true"');
+    expect(markup).toContain('class="link"');
+    expect(markup).toContain('>Inactive</a>');
+    expect(markup).not.toMatch(/ (href|aria-current|data-status)=/);
+    expect(mocks.foresight).not.toHaveBeenCalled();
+    expect(preload).not.toHaveBeenCalled();
+  } finally {
+    preload.mockRestore();
+  }
 });
