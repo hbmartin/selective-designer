@@ -167,6 +167,26 @@ describe('demo seed command', () => {
     );
   });
 
+  it.each(['EHOSTUNREACH', 'ENETUNREACH', 'ECONNABORTED', 'EADDRNOTAVAIL'])(
+    'reports wrapped connection failure %s without private details',
+    async (code) => {
+      mocks.close.mockRejectedValueOnce(
+        new Error('private close failure', {
+          cause: Object.assign(new Error('private connection details'), {
+            code,
+          }),
+        })
+      );
+
+      await import('../../../drizzle/seed/index');
+
+      expect(process.exitCode).toBe(1);
+      expect(console.error).toHaveBeenCalledExactlyOnceWith(
+        `Closing the seed database connection failed. (${code})`
+      );
+    }
+  );
+
   it('omits unknown error codes', async () => {
     mocks.close.mockRejectedValueOnce(
       Object.assign(new Error('private connection details'), {

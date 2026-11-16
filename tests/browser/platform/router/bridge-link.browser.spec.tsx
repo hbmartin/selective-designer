@@ -99,3 +99,38 @@ it('preloads the current destination without rendering on Foresight state change
   expect(ref.current).toBeNull();
   expect(manager.registeredElements.has(anchor)).toBe(false);
 });
+
+it('keeps a callback ref attached until unmount and calls its cleanup', async () => {
+  const manager = ForesightManager.instance;
+  const cleanup = vi.fn();
+  const ref = vi.fn((node: HTMLAnchorElement | null) =>
+    node ? cleanup : undefined
+  );
+  const view = await render(
+    <BridgeLink to="/login" ref={ref}>
+      Login
+    </BridgeLink>
+  );
+  const anchor = view.container.querySelector('a');
+  assert(anchor, 'BridgeLink did not render an anchor');
+  expect(ref).toHaveBeenCalledExactlyOnceWith(anchor);
+  const initialRegistration = manager.registeredElements.get(anchor);
+  assert(initialRegistration, 'Foresight did not register the anchor');
+
+  await view.rerender(
+    <BridgeLink to="/manager" ref={ref}>
+      Manager
+    </BridgeLink>
+  );
+  expect(ref).toHaveBeenCalledExactlyOnceWith(anchor);
+  expect(cleanup).not.toHaveBeenCalled();
+  expect(manager.registeredElements.get(anchor)).toMatchObject({
+    id: initialRegistration.id,
+    meta: { to: '/manager' },
+  });
+
+  await view.unmount();
+  expect(cleanup).toHaveBeenCalledOnce();
+  expect(ref).toHaveBeenCalledExactlyOnceWith(anchor);
+  expect(manager.registeredElements.has(anchor)).toBe(false);
+});

@@ -373,6 +373,10 @@ jobs:
           mkdir -p test-results/build
           set -o pipefail
           pnpm build 2>&1 | tee test-results/build/build.log
+          pnpm test:react-compiler:production .output/public/assets
+
+      - name: Verify protected links in production
+        run: pnpm test:bridge-link:production
 
       - name: Verify production workflow diagnostics
         run: pnpm test:telemetry:production
@@ -386,6 +390,7 @@ jobs:
         run: |
           set -o pipefail
           pnpm build 2>&1 | tee test-results/build/build-vercel.log
+          pnpm test:react-compiler:production .vercel/output/static/assets
           pnpm test:telemetry:production
 
       - name: Upload build log

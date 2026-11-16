@@ -68,6 +68,8 @@
     "gen:icons": "svgr --config-file src/platform/components/icons/svgr.config.cjs src/platform/components/icons/svg-sources && oxfmt src/platform/components/icons/generated",
     "test": "vitest run",
     "test:telemetry:production": "node --test scripts/test-production-diagnostics.mjs",
+    "test:react-compiler:production": "node scripts/check-production-react-compiler.mjs",
+    "test:bridge-link:production": "cross-env NODE_ENV=production vitest run --project=unit tests/unit/platform/router/bridge-link.unit.spec.tsx -t \"disables protected links in production\"",
     "test:unit": "vitest run --project=unit",
     "test:property": "node scripts/run-property-tests.mjs",
     "test:browser": "vitest run --project=browser",
