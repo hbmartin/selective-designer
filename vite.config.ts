@@ -10,6 +10,7 @@ import { fileURLToPath } from 'node:url';
 import { defineConfig, loadEnv, type Plugin } from 'vite';
 import { workflow } from 'workflow/vite';
 
+import { verifyBackButtonCompiler } from './scripts/verify-back-button-compiler';
 import { CSP_NONCE_PLACEHOLDER } from './src/platform/http/csp-nonce';
 
 function srcJsonImportPlugin(): Plugin {
@@ -122,6 +123,15 @@ export default defineConfig(({ mode }) => {
       // react's vite plugin must come after start's vite plugin
       viteReact(),
       babel({ presets: [reactCompilerPreset()] }),
+      process.env.VERIFY_REACT_COMPILER === '1' &&
+        verifyBackButtonCompiler(
+          fileURLToPath(
+            new URL(
+              './src/platform/components/back-button.tsx',
+              import.meta.url
+            )
+          )
+        ),
       ...sentryPlugins,
     ],
   };

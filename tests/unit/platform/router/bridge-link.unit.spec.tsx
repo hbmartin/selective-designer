@@ -148,7 +148,23 @@ describe('BridgeLink', () => {
     void (<BridgeLink to="/manager/users/$id" params={{ userId: 'sample' }} />);
     // @ts-expect-error This relative destination does not exist.
     void (<BridgeLink from="/manager/users/$id/" to="./no-such-route" />);
+    // @ts-expect-error BridgeLink destinations use to, not href.
+    void (<BridgeLink to="/manager" href="/login" />);
+    // @ts-expect-error BridgeLink does not support path-relative resolution.
+    void (<BridgeLink to="/manager" unsafeRelative="path" />);
   });
+
+  it.each([{ href: '/manager' }, { unsafeRelative: 'path' as const }])(
+    'rejects unsupported destination options in development',
+    (options) => {
+      const untypedProps = { ...options, to: '/manager', children: 'Manager' };
+      expect(() =>
+        renderToStaticMarkup(createElement(BridgeLink, untypedProps as never))
+      ).toThrow('BridgeLink does not support href or unsafeRelative');
+      expect(foresightMocks.options).toEqual([]);
+      expect(linkMocks.props).toEqual([]);
+    }
+  );
 
   it('throws for protected side-effect routes in test mode', () => {
     expect(() =>

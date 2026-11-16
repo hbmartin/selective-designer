@@ -13,6 +13,7 @@ const GIT_COMMAND = 'git';
 const GLOBAL_CONFIG_FILES = new Set([
   'vitest.config.ts',
   'vitest.postgres.config.ts',
+  'vitest.production.config.ts',
   'tsconfig.json',
   'package.json',
   'pnpm-lock.yaml',
@@ -24,7 +25,7 @@ const GLOBAL_CONFIG_FILES = new Set([
 ]);
 
 const RUNNABLE_TEST_FILE_PATTERN =
-  /^tests\/(?:unit|browser|integration|architecture|security)\/.*\.(?:test|spec)\.[cm]?[jt]sx?$/;
+  /^tests\/(?:unit|browser|integration|architecture|security|production)\/.*\.(?:test|spec)\.[cm]?[jt]sx?$/;
 const POSTGRES_INTEGRATION_TEST_PATTERN =
   /\.postgres\.integration\.test\.[cm]?[jt]sx?$/;
 const SOURCE_FILE_PATTERN = /^(?:src|scripts)\/.*\.[cm]?[jt]sx?$/;
@@ -723,9 +724,27 @@ export const buildVitestCommand = (testFiles: string[]) => ({
   command: 'pnpm',
 });
 
-export const runVitest = (testFiles: string[]) =>
+export const buildVitestCommands = (testFiles: string[]) => {
+  const ordinary: string[] = [];
+  const production: string[] = [];
+  for (const file of testFiles) {
+    (file.startsWith('tests/production/') ? production : ordinary).push(file);
+  }
+  const commands = [];
+  if (ordinary.length > 0) commands.push(buildVitestCommand(ordinary));
+  if (production.length > 0) {
+    commands.push({
+      command: 'pnpm',
+      args: ['test:bridge-link:production', ...production],
+    });
+  }
+  return commands;
+};
+
+type VitestCommand = ReturnType<typeof buildVitestCommand>;
+
+const runVitestCommand = ({ args, command }: VitestCommand) =>
   new Promise<number>((resolve) => {
-    const { args, command } = buildVitestCommand(testFiles);
     const child = spawn(command, args, {
       shell: process.platform === 'win32',
       stdio: 'inherit',
@@ -740,6 +759,18 @@ export const runVitest = (testFiles: string[]) =>
       resolve(code ?? 1);
     });
   });
+
+export const runVitest = async (
+  testFiles: string[],
+  execute = runVitestCommand
+) => {
+  let status = 0;
+  for (const command of buildVitestCommands(testFiles)) {
+    const code = await execute(command);
+    if (status === 0) status = code;
+  }
+  return status;
+};
 
 const writeOutput = (output: string, write: (message: string) => void) => {
   if (!output) return;

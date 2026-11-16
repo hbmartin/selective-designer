@@ -3,7 +3,6 @@ import {
   type AnyRouter,
   type CreateLinkProps,
   Link,
-  type LinkComponent,
   type LinkComponentProps,
   type LinkProps,
   type RegisteredRouter,
@@ -19,7 +18,12 @@ import {
   normalizeNavigationPathname,
 } from './navigation-safety';
 
-export type BridgeLinkProps = LinkProps;
+type UnsupportedDestinationProps = {
+  href?: never;
+  unsafeRelative?: never;
+};
+
+export type BridgeLinkProps = LinkProps & UnsupportedDestinationProps;
 
 const PREDICTED_PRELOAD_REACTIVATE_AFTER_MS = 60_000;
 
@@ -27,6 +31,10 @@ const protectedNavigationErrorMessage = (target: string) =>
   `BridgeLink cannot navigate declaratively to protected side-effect route "${target}". Use an explicit command flow such as ConfirmSignOut instead.`;
 
 const isProductionBuild = () => import.meta.env?.PROD === true;
+
+const hasUnsupportedDestination = (
+  props: Pick<CreateLinkProps, 'href' | 'unsafeRelative'>
+) => props.href !== undefined || props.unsafeRelative !== undefined;
 
 const SCHEME_PATTERN = /^[A-Za-z][A-Za-z\d+.-]*:/;
 
@@ -71,9 +79,9 @@ const shouldUsePredictedPreload = (
     CreateLinkProps,
     'preload' | 'disabled' | 'reloadDocument' | 'target' | 'to'
   >,
-  protectedTarget: string | undefined
+  blocked: boolean
 ) =>
-  protectedTarget === undefined &&
+  !blocked &&
   props.preload === undefined &&
   props.disabled !== true &&
   props.reloadDocument !== true &&
@@ -127,18 +135,35 @@ function BridgeLinkImpl<
   const TTo extends string | undefined = undefined,
   const TMaskFrom extends string = TFrom,
   const TMaskTo extends string = '',
->(props: LinkComponentProps<'a', TRouter, TFrom, TTo, TMaskFrom, TMaskTo>) {
+>(
+  props: LinkComponentProps<'a', TRouter, TFrom, TTo, TMaskFrom, TMaskTo> &
+    UnsupportedDestinationProps
+) {
   const router = useRouter();
+  const unsupportedDestination = hasUnsupportedDestination(props);
   const protectedTarget = protectedNavigationTarget(props);
-  const usePredictedPreload = shouldUsePredictedPreload(props, protectedTarget);
-  if (protectedTarget && !isProductionBuild()) {
-    throw new Error(protectedNavigationErrorMessage(protectedTarget));
+  const blocked = unsupportedDestination || protectedTarget !== undefined;
+  const usePredictedPreload = shouldUsePredictedPreload(props, blocked);
+  if (!isProductionBuild()) {
+    if (unsupportedDestination) {
+      throw new Error(
+        'BridgeLink does not support href or unsafeRelative. Use to and from to specify the destination.'
+      );
+    }
+    if (protectedTarget) {
+      throw new Error(protectedNavigationErrorMessage(protectedTarget));
+    }
   }
 
   const linkProps = Object.assign({}, props, {
-    disabled: protectedTarget ? true : props.disabled,
-    preload:
-      usePredictedPreload || protectedTarget ? (false as const) : props.preload,
+    ...(unsupportedDestination && {
+      href: undefined,
+      unsafeRelative: undefined,
+      to: undefined,
+      from: undefined,
+    }),
+    disabled: blocked ? true : props.disabled,
+    preload: usePredictedPreload || blocked ? (false as const) : props.preload,
   });
   return (
     <Foresight
@@ -155,9 +180,11 @@ function BridgeLinkImpl<
           .catch(() => undefined);
       }}
       enabled={usePredictedPreload}
-      meta={{ to: props.to }}
+      meta={{ to: linkProps.to }}
       foresightName={
-        typeof props.to === 'string' ? `BridgeLink ${props.to}` : 'BridgeLink'
+        typeof linkProps.to === 'string'
+          ? `BridgeLink ${linkProps.to}`
+          : 'BridgeLink'
       }
       reactivateAfter={PREDICTED_PRELOAD_REACTIVATE_AFTER_MS}
     />
@@ -166,4 +193,4 @@ function BridgeLinkImpl<
 
 BridgeLinkImpl.displayName = 'BridgeLink';
 
-export const BridgeLink = BridgeLinkImpl satisfies LinkComponent<'a'>;
+export const BridgeLink = BridgeLinkImpl;

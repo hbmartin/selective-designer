@@ -22,7 +22,7 @@ Use these commands instead of invoking underlying tools directly.
 | `pnpm test:e2e:visual:manager-users` | Local Chromium visual regression check for manager user screens. |
 | `pnpm test:e2e:visual:update` | Update local visual baselines for review. |
 | `pnpm build` | Production build. |
-| `pnpm verify` | Full pre-merge gate: `check` + `test` + `build`. |
+| `pnpm verify` | Full pre-merge gate: `check`, `test`, `test:bridge-link:production`, and `build`. |
 | `pnpm verify:task` | Task-level verification runner with timestamped logs under `test-results/task-verification/`. |
 | `pnpm format:changed` | Format changed files only. |
 | `pnpm check:migrations` | Guard against invalid manual migration edits. |
