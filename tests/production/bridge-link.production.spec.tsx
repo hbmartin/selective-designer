@@ -1,6 +1,6 @@
 import type { ComponentType } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
-import { assert, expect, it, vi } from 'vitest';
+import { assert, beforeEach, expect, it, vi } from 'vitest';
 
 import { BridgeLink } from '../../src/platform/router/bridge-link';
 
@@ -42,12 +42,19 @@ vi.mock('@foresightjs/react', () => ({
   },
 }));
 
-it('disables protected navigation and preloading in production', () => {
+beforeEach(() => {
+  vi.clearAllMocks();
+});
+
+it.each([
+  { scenario: 'without an explicit preload', props: {} },
+  { scenario: 'with intent preload', props: { preload: 'intent' as const } },
+])('disables protected navigation and preloading $scenario', ({ props }) => {
   expect(process.env.NODE_ENV).toBe('production');
   expect(import.meta.env.PROD).toBe(true);
 
   const markup = renderToStaticMarkup(
-    <BridgeLink to="/logout" preload="intent">
+    <BridgeLink to="/logout" {...props}>
       Logout
     </BridgeLink>
   );

@@ -83,3 +83,25 @@ it('rejects memoization elsewhere in the same chunk', () => {
     'BackButton is missing the React Compiler memo cache'
   );
 });
+
+it.each([
+  { binding: 'parameter', args: 'runtime', setup: '' },
+  {
+    binding: 'destructured local',
+    args: 'props',
+    setup: 'const { runtime } = props;',
+  },
+])('rejects a compiler runtime shadowed by a $binding', ({ args, setup }) => {
+  const result = scanAssets(`
+    function BackButton(${args}) {
+      ${setup}
+      runtime.c(15);
+      return translate('${backButtonLabel}');
+    }
+  `);
+
+  expect(result.status).toBe(1);
+  expect(result.stderr).toContain(
+    'BackButton is missing the React Compiler memo cache'
+  );
+});

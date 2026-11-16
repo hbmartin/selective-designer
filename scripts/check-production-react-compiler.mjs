@@ -23,7 +23,7 @@ function callTarget(expression) {
   return target;
 }
 
-function findCompilerRuntimeBindings(syntax) {
+function findCompilerRuntimeBindings(syntax, checker) {
   const runtimeFactories = new Set();
   const runtimes = new Set();
   for (const node of syntax.statements) {
@@ -40,7 +40,8 @@ function findCompilerRuntimeBindings(syntax) {
     const bindings = node.importClause?.namedBindings;
     if (bindings && ts.isNamedImports(bindings)) {
       for (const binding of bindings.elements) {
-        runtimeFactories.add(binding.name.text);
+        const factory = checker.getSymbolAtLocation(binding.name);
+        if (factory) runtimeFactories.add(factory);
       }
     }
   }
@@ -53,40 +54,50 @@ function findCompilerRuntimeBindings(syntax) {
       const value = unwrapParentheses(initializer);
       if (!ts.isCallExpression(value) || value.arguments.length !== 0) continue;
       const target = callTarget(value.expression);
-      if (ts.isIdentifier(target) && runtimeFactories.has(target.text)) {
-        runtimes.add(name.text);
+      if (
+        ts.isIdentifier(target) &&
+        runtimeFactories.has(checker.getSymbolAtLocation(target))
+      ) {
+        const runtime = checker.getSymbolAtLocation(name);
+        if (runtime) runtimes.add(runtime);
       }
     }
   }
   return runtimes;
 }
 
-function isMemoCacheAllocation(node, runtimes) {
+function isMemoCacheAllocation(node, runtimes, checker) {
   if (!ts.isCallExpression(node)) return false;
   const target = callTarget(node.expression);
   const [size] = node.arguments;
   return (
     ts.isPropertyAccessExpression(target) &&
     ts.isIdentifier(target.expression) &&
-    runtimes.has(target.expression.text) &&
     target.name.text === 'c' &&
     node.arguments.length === 1 &&
     size !== undefined &&
     ts.isNumericLiteral(size) &&
-    Number(size.text) > 0
+    Number(size.text) > 0 &&
+    runtimes.has(checker.getSymbolAtLocation(target.expression))
   );
 }
 
 function findBackButtonFunctions(file, source) {
+  const fileName = path.resolve(file).split(path.sep).join('/');
   const syntax = ts.createSourceFile(
-    file,
+    fileName,
     source,
     ts.ScriptTarget.Latest,
     false,
     ts.ScriptKind.JS
   );
 
-  const runtimes = findCompilerRuntimeBindings(syntax);
+  // Local symbol resolution only needs this chunk, even for its import aliases.
+  const options = { allowJs: true, noLib: true, noResolve: true, types: [] };
+  const host = ts.createCompilerHost(options);
+  host.getSourceFile = (name) => (name === fileName ? syntax : undefined);
+  const checker = ts.createProgram([fileName], options, host).getTypeChecker();
+  const runtimes = findCompilerRuntimeBindings(syntax, checker);
   const functions = [];
   const pending = [{ node: syntax, enclosingFunction: undefined }];
   while (pending.length > 0) {
@@ -100,7 +111,8 @@ function findBackButtonFunctions(file, source) {
     if (current) {
       if (ts.isStringLiteralLike(node) && node.text === backButtonLabel)
         current.hasLabel = true;
-      if (isMemoCacheAllocation(node, runtimes)) current.hasMemoCache = true;
+      if (isMemoCacheAllocation(node, runtimes, checker))
+        current.hasMemoCache = true;
     }
 
     ts.forEachChild(node, (child) => {
