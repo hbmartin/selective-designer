@@ -35,10 +35,9 @@ const hasUnsupportedDestination = (
 ) => props.href !== undefined || props.unsafeRelative !== undefined;
 
 function matchProtectedRoute(router: AnyRouter, pathname: string) {
-  const [, , route] = router.getMatchedRoutes(pathname);
-  return route && isProtectedNavigationPath(route.fullPath)
-    ? route.fullPath
-    : undefined;
+  const [routes] = router.getMatchedRoutes(pathname);
+  return routes.find((route) => isProtectedNavigationPath(route.fullPath))
+    ?.fullPath;
 }
 
 function parseUrl(href: string, base?: string) {
@@ -109,7 +108,8 @@ type RouterLinkProps = LinkComponentProps<
 function resolveLink(
   router: AnyRouter,
   location: ParsedLocation,
-  destination: Destination
+  destination: Destination,
+  historical: boolean
 ) {
   // A URL accepted without a base has a scheme and is handled directly by Link.
   const { to } = destination;
@@ -138,17 +138,23 @@ function resolveLink(
   // location during a route transition and could otherwise resolve a
   // relative path or inherited params against a different match.
   const maskOptions = destination.mask ?? next.maskedLocation;
+  const { maskedLocation } = next;
   const resolvedOptions = {
     ...destination,
     to: next.pathname,
     from: undefined,
     params: undefined,
-    mask: next.maskedLocation
+    // A freshly mounted native Link can inherit from the incoming location
+    // even though BridgeLink still presents the departing route's location.
+    search: historical ? next.search : destination.search,
+    hash: historical ? next.hash : destination.hash,
+    state: historical ? next.state : destination.state,
+    mask: maskedLocation
       ? {
-          to: next.maskedLocation.pathname,
-          search: maskOptions?.search,
-          hash: maskOptions?.hash,
-          state: maskOptions?.state,
+          to: maskedLocation.pathname,
+          search: historical ? maskedLocation.search : maskOptions?.search,
+          hash: historical ? maskedLocation.hash : maskOptions?.hash,
+          state: historical ? maskedLocation.state : maskOptions?.state,
           unmaskOnReload: maskOptions?.unmaskOnReload,
         }
       : undefined,
@@ -231,6 +237,7 @@ function BridgeLinkImpl<
 ) {
   const router = useRouter<AnyRouter>();
   const location = useBridgeLinkLocation(router);
+  const historical = location !== router.stores.location.get();
   // The public generic props validate route inputs. Once inside the
   // adapter, the router resolves them to concrete paths.
   const routerProps = props as RouterLinkProps;
@@ -240,16 +247,25 @@ function BridgeLinkImpl<
     () =>
       unsupported
         ? undefined
-        : resolveLink(router, location, {
-            from,
-            hash,
-            mask,
-            params,
-            search,
-            state,
-            to,
-          }),
-    [from, hash, location, mask, params, router, search, state, to, unsupported]
+        : resolveLink(
+            router,
+            location,
+            { from, hash, mask, params, search, state, to },
+            historical
+          ),
+    [
+      from,
+      hash,
+      historical,
+      location,
+      mask,
+      params,
+      router,
+      search,
+      state,
+      to,
+      unsupported,
+    ]
   );
   const {
     to: maskTo,

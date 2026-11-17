@@ -5,16 +5,18 @@ import {
   createRoute,
   createRouter,
   Link,
+  NotFoundRoute,
   Outlet,
   RouterContextProvider,
   RouterProvider,
 } from '@tanstack/react-router';
-import { act, createRef, type ReactNode } from 'react';
+import { act, createRef, type ReactNode, useState } from 'react';
 import { ErrorBoundary } from 'react-error-boundary';
 import { afterEach, assert, expect, it, vi } from 'vitest';
 import { render } from 'vitest-browser-react';
 
 import { BridgeLink } from '@/platform/router';
+import { attachBridgeLinkLocationTracking } from '@/platform/router/bridge-link-location';
 
 async function setupRouter(initialLocation = '/login') {
   const root = createRootRoute();
@@ -31,6 +33,7 @@ async function setupRouter(initialLocation = '/login') {
     history: createMemoryHistory({ initialEntries: [initialLocation] }),
     routeTree: root.addChildren(routes),
   });
+  attachBridgeLinkLocationTracking(router);
   await router.load();
   const wrapper = ({ children }: { children: ReactNode }) => (
     <RouterContextProvider router={router}>
@@ -290,6 +293,7 @@ it('follows native Link through a retained navigation superseded by a departure'
     routeTree: root.addChildren([profile, edit, other]),
     defaultPendingMs: 10_000,
   });
+  attachBridgeLinkLocationTracking(router);
   await router.load();
 
   const manager = ForesightManager.instance;
@@ -354,6 +358,196 @@ it('follows native Link through a retained navigation superseded by a departure'
     expect(router.state.location.href).toBe('/people/2/edit#retained');
   } finally {
     pending.resolve();
+  }
+});
+
+it('remounts the last link with the latest retained destination while its route departs', async () => {
+  const pending = Promise.withResolvers<void>();
+  const root = createRootRoute({ component: Outlet });
+  const remountedLink = createRef<HTMLAnchorElement>();
+  const attachedHrefs: (string | null)[] = [];
+  const linkRef = (anchor: HTMLAnchorElement | null) => {
+    remountedLink.current = anchor;
+    if (anchor) attachedHrefs.push(anchor.getAttribute('href'));
+  };
+  const profile = createRoute({
+    getParentRoute: () => root,
+    path: '/people/$id',
+    loader: ({ params }) => (params.id === '2' ? pending.promise : undefined),
+    component: function Profile() {
+      const [visible, setVisible] = useState(true);
+      return (
+        <>
+          <button type="button" onClick={() => setVisible(!visible)}>
+            Toggle link
+          </button>
+          {visible && (
+            <BridgeLink
+              from={'/people/$id' as never}
+              to={'./edit' as never}
+              params
+              search
+              hash
+              state
+              mask={
+                {
+                  to: '/preview/$id',
+                  params: true,
+                  search: true,
+                  hash: true,
+                  state: true,
+                  unmaskOnReload: true,
+                } as never
+              }
+              ref={linkRef}
+            >
+              Edit profile
+            </BridgeLink>
+          )}
+        </>
+      );
+    },
+  });
+  const edit = createRoute({
+    getParentRoute: () => root,
+    path: '/people/$id/edit',
+    component: () => <p>Edit ready</p>,
+  });
+  const other = createRoute({
+    getParentRoute: () => root,
+    path: '/other',
+    loader: () => pending.promise,
+  });
+  const preview = createRoute({
+    getParentRoute: () => root,
+    path: '/preview/$id',
+  });
+  const history = createMemoryHistory({
+    initialEntries: ['/people/1?tab=initial#initial'],
+  });
+  const router = createRouter({
+    history,
+    routeTree: root.addChildren([profile, edit, other, preview]),
+    defaultPendingMs: 10_000,
+  });
+  attachBridgeLinkLocationTracking(router);
+  await router.load();
+
+  const manager = ForesightManager.instance;
+  const register = vi.spyOn(manager, 'register');
+  const preload = vi.spyOn(router, 'preloadRoute');
+  const navigate = vi.spyOn(router, 'navigate');
+  const view = await render(<RouterProvider router={router} />);
+  const toggle = view.getByRole('button', { name: 'Toggle link' });
+  const link = view.getByRole('link', { name: 'Edit profile' });
+
+  try {
+    await expect
+      .element(link)
+      .toHaveAttribute('href', '/preview/1?tab=initial#initial');
+    await toggle.click();
+    await expect.element(link).not.toBeInTheDocument();
+    vi.stubGlobal('IS_REACT_ACT_ENVIRONMENT', true);
+    await act(() => {
+      history.push('/people/2?tab=retained#retained', { stamp: 'retained' });
+      history.push('/other?tab=incoming#incoming', { stamp: 'incoming' });
+    });
+    expect(router.state.location.pathname).toBe('/other');
+    await toggle.click();
+
+    const publicHref = '/preview/2?tab=retained#retained';
+    const editHref = '/people/2/edit?tab=retained#retained';
+    expect(attachedHrefs).toEqual([
+      '/preview/1?tab=initial#initial',
+      publicHref,
+    ]);
+    await expect.element(link).toHaveAttribute('href', publicHref);
+    const anchor = remountedLink.current;
+    assert(anchor);
+    const registration = register.mock.calls.find(
+      ([options]) => options.element === anchor
+    )?.[0];
+    const foresightState = manager.registeredElements.get(anchor);
+    assert(registration && foresightState);
+    registration.callback(foresightState);
+    const options = preload.mock.calls.at(-1)?.[0];
+    assert(options);
+    expect(options.mask).toMatchObject({ unmaskOnReload: true });
+    const destination = {
+      href: editHref,
+      state: { stamp: 'retained' },
+      maskedLocation: { href: publicHref, state: { stamp: 'retained' } },
+    };
+    expect(router.buildLocation(options as never)).toMatchObject(destination);
+    await link.click();
+    await expect.element(view.getByText('Edit ready')).toBeVisible();
+    const clickOptions = navigate.mock.calls.at(-1)?.[0];
+    assert(clickOptions);
+    expect(router.buildLocation(clickOptions)).toMatchObject(destination);
+    // TanStack reparses the underlying hash separately when it unmasks history.
+    expect(router.state.location).toMatchObject({
+      pathname: '/people/2/edit',
+      search: { tab: 'retained' },
+      state: { stamp: 'retained' },
+      maskedLocation: { href: publicHref, state: { stamp: 'retained' } },
+    });
+
+    await act(() => {
+      history.push('/people/3?tab=reentered#reentered');
+    });
+    await expect
+      .element(link)
+      .toHaveAttribute('href', '/preview/3?tab=reentered#reentered');
+  } finally {
+    pending.resolve();
+  }
+});
+
+it('keeps a legacy not-found route in scope across missing locations', async () => {
+  const root = createRootRoute();
+  const notFoundRoute = new NotFoundRoute({
+    getParentRoute: () => root,
+    component: () => (
+      <>
+        <Link to="/" search hash>
+          Native recovery
+        </Link>
+        <BridgeLink to="/" search hash>
+          Bridge recovery
+        </BridgeLink>
+      </>
+    ),
+  });
+  const history = createMemoryHistory({
+    initialEntries: ['/missing-first?tab=first#first'],
+  });
+  const router = createRouter({ history, routeTree: root, notFoundRoute });
+  attachBridgeLinkLocationTracking(router);
+  await router.load();
+  const view = await render(
+    <RouterContextProvider router={router}>
+      <RouterProvider router={router} />
+      <BridgeLink to="/" search hash>
+        Outside recovery
+      </BridgeLink>
+    </RouterContextProvider>
+  );
+  const link = (name: string) => view.getByRole('link', { name });
+  await expect
+    .element(link('Bridge recovery'))
+    .toHaveAttribute('href', '/?tab=first#first');
+  vi.stubGlobal('IS_REACT_ACT_ENVIRONMENT', true);
+  await act(() => {
+    history.push('/missing-second?tab=second#second');
+  });
+  for (const name of [
+    'Native recovery',
+    'Bridge recovery',
+    'Outside recovery',
+  ]) {
+    await expect
+      .element(link(name))
+      .toHaveAttribute('href', '/?tab=second#second');
   }
 });
 

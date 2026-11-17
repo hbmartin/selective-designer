@@ -1,5 +1,3 @@
-/// <reference lib="es2025.regexp" />
-
 import type { Node, Symbol } from 'typescript';
 import { normalizePath, type Plugin } from 'vite';
 
@@ -163,7 +161,10 @@ export async function backButtonUsesCompilerCache(file: string, code: string) {
 
 export function verifyBackButtonCompiler(backButtonFile: string): Plugin {
   const file = normalizePath(backButtonFile);
-  const exactId = new RegExp(`^${RegExp.escape(file)}$`);
+  const nodeRegExp = RegExp as typeof RegExp & {
+    escape(value: string): string;
+  };
+  const exactId = new RegExp(`^${nodeRegExp.escape(file)}$`);
   let hasCache = false;
   return {
     name: 'selective-designer:verify-back-button-compiler',
@@ -175,7 +176,8 @@ export function verifyBackButtonCompiler(backButtonFile: string): Plugin {
     },
     transform: {
       filter: { id: exactId },
-      async handler(code) {
+      async handler(code, id) {
+        if (normalizePath(id) !== file) return;
         hasCache = await backButtonUsesCompilerCache(file, code);
       },
     },

@@ -47,6 +47,7 @@ const makeResult = (
   dependencyCruiserFailed: false,
   directTestFiles: [],
   excludedChangedFiles: [],
+  productionConfigTestFiles: [],
   rootsCruised: [],
   runAll: false,
   strategyAFiles: [],
@@ -206,6 +207,7 @@ describe('global config fallback', () => {
       allTestFiles: [
         'tests/unit/a.unit.spec.ts',
         'tests/browser/a.browser.spec.tsx',
+        './tests/production/a.spec.tsx',
       ],
       changedFiles: ['vitest.config.ts', 'vitest.production.config.ts'],
       dependencyCruiser,
@@ -213,10 +215,32 @@ describe('global config fallback', () => {
 
     expect(result.runAll).toBe(true);
     expect(result.runAllReason).toBe('global config file changed');
-    expect(result.testFiles).toEqual([
-      'tests/unit/a.unit.spec.ts',
-      'tests/browser/a.browser.spec.tsx',
+    expect(result.productionConfigTestFiles).toEqual([
+      'tests/production/a.spec.tsx',
     ]);
+    expect(result.testFiles).toEqual([
+      'tests/browser/a.browser.spec.tsx',
+      'tests/production/a.spec.tsx',
+      'tests/unit/a.unit.spec.ts',
+    ]);
+    expect(dependencyCruiser).not.toHaveBeenCalled();
+  });
+
+  it('does not select affected Vitest tests for a PostgreSQL config-only edit', async () => {
+    const dependencyCruiser = vi.fn();
+    const config = 'vitest.postgres.config.ts';
+    const result = await findAffectedTests({
+      changedFiles: [config],
+      allTestFiles: [
+        'tests/unit/a.unit.spec.ts',
+        'tests/integration/a.postgres.integration.test.ts',
+      ],
+      dependencyCruiser,
+    });
+
+    expect(result.runAll).toBe(false);
+    expect(result.excludedChangedFiles).toEqual([config]);
+    expect(result.testFiles).toEqual([]);
     expect(dependencyCruiser).not.toHaveBeenCalled();
   });
 });
@@ -239,11 +263,39 @@ describe('production config changes', () => {
 
     expect(result.runAll).toBe(false);
     expect(result.excludedChangedFiles).toEqual([]);
+    expect(result.productionConfigTestFiles).toEqual(productionTests);
     expect(result.testFiles).toEqual(productionTests);
     expect(buildVitestCommands(result.testFiles)).toEqual([
       { command: 'pnpm', args: ['test:production', ...productionTests] },
     ]);
     expect(dependencyCruiser).not.toHaveBeenCalled();
+  });
+
+  it('normalizes injected paths before filtering and explains production config selections', async () => {
+    const result = await findAffectedTests({
+      changedFiles: [config],
+      allTestFiles: [
+        './tests/production/a.spec.tsx',
+        'tests/production/a.spec.tsx',
+        'tests\\production\\nested\\b.test.mts',
+        'tests/production/README.md',
+        'tests/production/a.postgres.integration.test.ts',
+        'tests/production-other/a.spec.tsx',
+        'tests/unit/a.unit.spec.ts',
+      ],
+    });
+
+    expect(result.testFiles).toEqual(productionTests);
+    const options = { json: false, summary: false, verbose: false };
+    expect(
+      JSON.parse(formatOutput(result, { ...options, json: true }))
+    ).toHaveProperty('productionConfigTestFiles', productionTests);
+    expect(formatOutput(result, { ...options, summary: true })).toContain(
+      'Production config tests: 2'
+    );
+    expect(formatOutput(result, { ...options, verbose: true })).toContain(
+      '# Production config tests (2):\n#   tests/production/a.spec.tsx\n#   tests/production/nested/b.test.mts'
+    );
   });
 
   it('adds production specs to the direct and graph-selected ordinary specs', async () => {
@@ -258,7 +310,7 @@ describe('production config changes', () => {
       'tests/unit/unused.unit.spec.ts',
     ]);
     const result = await findAffectedTests({
-      changedFiles: [config, source, directTest],
+      changedFiles: [config, source, directTest, productionTests[0]!],
       cwd,
       dependencyCruiser: async () => ({
         modules: [
@@ -269,6 +321,7 @@ describe('production config changes', () => {
     });
 
     expect(result.runAll).toBe(false);
+    expect(result.productionConfigTestFiles).toEqual(productionTests);
     expect(result.testFiles).toEqual([
       ...productionTests,
       directTest,
