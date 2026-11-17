@@ -14,7 +14,6 @@ const PRODUCTION_TEST_ROOT = 'tests/production';
 
 const GLOBAL_CONFIG_FILES = new Set([
   'vitest.config.ts',
-  'vitest.postgres.config.ts',
   'tsconfig.json',
   'package.json',
   'pnpm-lock.yaml',
@@ -100,6 +99,7 @@ export type AffectedTestsResult = {
   dependencyCruiserFailed: boolean;
   directTestFiles: string[];
   excludedChangedFiles: string[];
+  productionConfigTestFiles: string[];
   rootsCruised: string[];
   runAll: boolean;
   runAllReason?: string;
@@ -570,10 +570,18 @@ export const findAffectedTests = async ({
     changedFiles ?? collectChangedFilesFromGit({ base, cwd })
   );
   const classified = classifyChangedFiles(normalizedChangedFiles);
+  const injectedTestFiles = allTestFiles
+    ? deduplicateAndSort(allTestFiles).filter(isRunnableVitestTestFile)
+    : undefined;
+  const productionConfigTestFiles = (runnableFiles?: string[]) =>
+    classified.productionConfigChanged
+      ? (runnableFiles?.filter(isProductionTestFile) ??
+        collectAllRunnableVitestTestFiles(cwd, PRODUCTION_TEST_ROOT))
+      : [];
 
   if (classified.globalConfigChanged) {
     const runnableTestFiles =
-      allTestFiles ?? collectAllRunnableVitestTestFiles(cwd);
+      injectedTestFiles ?? collectAllRunnableVitestTestFiles(cwd);
 
     return {
       changedFiles: normalizedChangedFiles,
@@ -581,6 +589,7 @@ export const findAffectedTests = async ({
       dependencyCruiserFailed: false,
       directTestFiles: filterExistingFiles(classified.directTestFiles, cwd),
       excludedChangedFiles: classified.excludedFiles,
+      productionConfigTestFiles: productionConfigTestFiles(runnableTestFiles),
       rootsCruised: [],
       runAll: true,
       runAllReason: 'global config file changed',
@@ -618,18 +627,21 @@ export const findAffectedTests = async ({
   }
 
   if (dependencyCruiserFailed && classified.testSupportFiles.length > 0) {
+    const runnableTestFiles =
+      injectedTestFiles ?? collectAllRunnableVitestTestFiles(cwd);
     return {
       changedFiles: normalizedChangedFiles,
       consideredSourceFiles: [],
       dependencyCruiserFailed,
       directTestFiles: filterExistingFiles(classified.directTestFiles, cwd),
       excludedChangedFiles: classified.excludedFiles,
+      productionConfigTestFiles: productionConfigTestFiles(runnableTestFiles),
       rootsCruised,
       runAll: true,
       runAllReason: 'dependency-cruiser failed for test support changes',
       strategyAFiles: [],
       strategyBFiles: [],
-      testFiles: allTestFiles ?? collectAllRunnableVitestTestFiles(cwd),
+      testFiles: runnableTestFiles,
       warnings,
     };
   }
@@ -643,10 +655,7 @@ export const findAffectedTests = async ({
     ...classified.excludedFiles,
     ...graphSeedFilesMissingFromGraph,
   ]);
-  const productionConfigTests = classified.productionConfigChanged
-    ? (allTestFiles?.filter(isProductionTestFile) ??
-      collectAllRunnableVitestTestFiles(cwd, PRODUCTION_TEST_ROOT))
-    : [];
+  const productionConfigTests = productionConfigTestFiles(injectedTestFiles);
   const testFiles = deduplicateAndSort([
     ...filterExistingFiles(
       [...directTestFiles, ...strategyAFiles, ...strategyBFiles],
@@ -661,6 +670,7 @@ export const findAffectedTests = async ({
     dependencyCruiserFailed,
     directTestFiles,
     excludedChangedFiles,
+    productionConfigTestFiles: productionConfigTests,
     rootsCruised,
     runAll: false,
     strategyAFiles,
@@ -692,6 +702,7 @@ export const formatSummary = (result: AffectedTestsResult) => {
     `Direct test changes: ${result.directTestFiles.length}`,
     `Strategy A tests: ${result.strategyAFiles.length}`,
     `Strategy B tests: ${result.strategyBFiles.length}`,
+    `Production config tests: ${result.productionConfigTestFiles.length}`,
     `Total affected tests: ${result.testFiles.length}`,
     'Affected test paths:',
     ...result.testFiles.map((filePath) => `  ${filePath}`),
@@ -730,6 +741,10 @@ export const formatOutput = (
       result.strategyAFiles
     ),
     ...formatVerboseSection('Strategy B - mirror paths', result.strategyBFiles),
+    ...formatVerboseSection(
+      'Production config tests',
+      result.productionConfigTestFiles
+    ),
     ...result.testFiles,
   ].join('\n');
 };

@@ -3,7 +3,7 @@ import react, { reactCompilerPreset } from '@vitejs/plugin-react';
 import assert from 'node:assert/strict';
 import { fileURLToPath } from 'node:url';
 import { build, normalizePath, type Plugin } from 'vite';
-import { expect, it } from 'vitest';
+import { expect, expectTypeOf, it } from 'vitest';
 
 import {
   backButtonUsesCompilerCache,
@@ -125,6 +125,41 @@ it('fails separately when the rendered client export is absent', async () => {
 });
 
 const cacheImport = "import { c as cache } from 'react/compiler-runtime';";
+
+it('ignores other module IDs without broadening browser RegExp types', async () => {
+  expectTypeOf<RegExpConstructor>().not.toHaveProperty('escape');
+  const verifier = verifyBackButtonCompiler(entry);
+  const transform = verifier.transform;
+  assert(transform && typeof transform === 'object');
+  const handler = transform.handler.bind(
+    {} as ThisParameterType<typeof transform.handler>
+  );
+  const unrelated = `${entry}?unrelated`;
+  const compiled = `${cacheImport} export const BackButton = () => cache(16);`;
+
+  // Simulate a host calling the handler directly without applying its filter.
+  await handler(compiled, entry);
+  await expect(
+    handler('export const BackButton = () => null;', unrelated)
+  ).resolves.toBeUndefined();
+  const generate = verifier.generateBundle;
+  assert(typeof generate === 'function');
+  const context = {
+    error: (message: unknown) => {
+      throw new Error(String(message));
+    },
+    info: () => {},
+  };
+  const bundle = {
+    'entry.js': {
+      type: 'chunk',
+      modules: { [normalizePath(entry)]: { renderedExports: ['BackButton'] } },
+    },
+  };
+  expect(() =>
+    Reflect.apply(generate, context, [{}, bundle, false])
+  ).not.toThrow();
+});
 
 it.each([
   'export function BackButton() { return cache(16); }',

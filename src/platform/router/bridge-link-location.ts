@@ -3,68 +3,104 @@ import {
   type ParsedLocation,
   useMatch,
 } from '@tanstack/react-router';
+import { _isRouteDeparting } from '@tanstack/router-core';
 import { useCallback, useState, useSyncExternalStore } from 'react';
 
 type RouteId = string | undefined;
 type Listener = () => void;
-type RouteScope = { location: ParsedLocation; listeners: Set<Listener> };
-type LocationStore = AnyRouter['stores']['location'] & {
-  subscribe?: (listener: (location: ParsedLocation) => void) => {
-    unsubscribe: Listener;
-  };
+type RouteScope = {
+  location: ParsedLocation;
+  listeners: Set<Listener>;
+  presented: boolean;
+};
+type ReadableStore<Value> = {
+  get: () => Value;
+  subscribe?: (listener: (value: Value) => void) => unknown;
 };
 
 function createLocationStore(router: AnyRouter) {
-  // The React router supplies a subscribable atom on the client. The core
-  // store type also covers SSR, where the location is a plain snapshot.
-  const location: LocationStore = router.stores.location;
-  const { status } = router.stores;
-  const scopes = new Map<RouteId, RouteScope>();
-  let unsubscribe: (() => void) | undefined;
+  const location: ReadableStore<ParsedLocation> = router.stores.location;
+  const ids: ReadableStore<string[]> = router.stores.ids;
+  const scopes = new Map<string, RouteScope>();
+  const outsideListeners = new Set<Listener>();
+  let started = false;
 
-  // TanStack publishes the incoming location before replacing the rendered
-  // route. Observe each publication even if React batches the rerenders.
   const publish = (next: ParsedLocation) => {
-    const retainedRoutes =
-      status.get() === 'pending'
-        ? new Set(
-            router.getMatchedRoutes(next.pathname)[0].map((route) => route.id)
-          )
-        : undefined;
     for (const [routeId, scope] of scopes) {
       if (
-        routeId !== undefined &&
-        retainedRoutes &&
-        !retainedRoutes.has(routeId)
+        scope.presented &&
+        scope.location !== next &&
+        // TanStack's transaction matches are valid during this publication.
+        !_isRouteDeparting(router, routeId, next)
       )
-        continue;
-      if (scope.location === next) continue;
-      scope.location = next;
-      scope.listeners.forEach((listener) => listener());
+        updateScope(scope, next);
+    }
+    outsideListeners.forEach((listener) => listener());
+  };
+
+  const updateScope = (scope: RouteScope, next: ParsedLocation) => {
+    if (scope.location === next) return;
+    scope.location = next;
+    scope.listeners.forEach((listener) => listener());
+  };
+
+  const removeDepartedScope = (routeId: string, scope: RouteScope) => {
+    if (!scope.presented && scope.listeners.size === 0) scopes.delete(routeId);
+  };
+
+  const updatePresentation = (routeIds: string[]) => {
+    const presented = new Set(routeIds);
+    for (const [routeId, scope] of scopes) {
+      if (presented.has(routeId)) continue;
+      scope.presented = false;
+      removeDepartedScope(routeId, scope);
+    }
+    for (const routeId of presented) {
+      const scope = scopes.get(routeId);
+      if (!scope) {
+        scopes.set(routeId, {
+          location: location.get(),
+          listeners: new Set(),
+          presented: true,
+        });
+      } else if (!scope.presented) {
+        scope.presented = true;
+        updateScope(scope, location.get());
+      }
     }
   };
 
+  const start = () => {
+    if (started || !location.subscribe || !ids.subscribe) return;
+    started = true;
+    updatePresentation(ids.get());
+    // These subscriptions live on this router's atoms. Keep tracking between
+    // link mounts so remounts can read every accepted location publication.
+    location.subscribe(publish);
+    ids.subscribe(updatePresentation);
+  };
+
   return {
+    start,
     getSnapshot: (routeId: RouteId) =>
-      scopes.get(routeId)?.location ?? location.get(),
+      (routeId === undefined ? undefined : scopes.get(routeId)?.location) ??
+      location.get(),
     getServerSnapshot: () => location.get(),
     subscribe(routeId: RouteId, listener: Listener) {
-      let scope = scopes.get(routeId);
-      if (!scope) {
-        scope = { location: location.get(), listeners: new Set() };
-        scopes.set(routeId, scope);
-      }
-      const { listeners } = scope;
-      listeners.add(listener);
-      unsubscribe ??= location.subscribe?.(publish).unsubscribe;
-
-      return () => {
-        listeners.delete(listener);
-        if (listeners.size === 0) scopes.delete(routeId);
-        if (scopes.size === 0) {
-          unsubscribe?.();
-          unsubscribe = undefined;
+      start();
+      if (routeId !== undefined) {
+        const scope = scopes.get(routeId);
+        if (scope) {
+          scope.listeners.add(listener);
+          return () => {
+            scope.listeners.delete(listener);
+            removeDepartedScope(routeId, scope);
+          };
         }
+      }
+      outsideListeners.add(listener);
+      return () => {
+        outsideListeners.delete(listener);
       };
     },
   };
@@ -74,6 +110,19 @@ const locationStores = new WeakMap<
   AnyRouter,
   ReturnType<typeof createLocationStore>
 >();
+
+function getLocationStore(router: AnyRouter) {
+  let store = locationStores.get(router);
+  if (!store) {
+    store = createLocationStore(router);
+    locationStores.set(router, store);
+  }
+  return store;
+}
+
+export function attachBridgeLinkLocationTracking(router: AnyRouter) {
+  getLocationStore(router).start();
+}
 
 export function useBridgeLinkLocation(router: AnyRouter) {
   const routeId = useMatch({
@@ -93,12 +142,8 @@ export function useBridgeLinkLocation(router: AnyRouter) {
     routeId ??
     (previousMatch.router === router ? previousMatch.routeId : undefined);
 
-  let store = locationStores.get(router);
-  if (!store) {
-    store = createLocationStore(router);
-    locationStores.set(router, store);
-  }
-  const { subscribe, getSnapshot, getServerSnapshot } = store;
+  const { subscribe, getSnapshot, getServerSnapshot } =
+    getLocationStore(router);
   return useSyncExternalStore(
     useCallback(
       (listener) => subscribe(scopeId, listener),
