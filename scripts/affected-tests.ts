@@ -10,6 +10,7 @@ import { resolveTrustedTool } from './trusted-tool';
 const DEPENDENCY_CRUISE_ROOT_CANDIDATES = ['src', 'tests', 'scripts'] as const;
 const GIT_COMMAND = 'git';
 const PRODUCTION_CONFIG_FILE = 'vitest.production.config.ts';
+const POSTGRES_CONFIG_FILE = 'vitest.postgres.config.ts';
 const PRODUCTION_TEST_ROOT = 'tests/production';
 
 const GLOBAL_CONFIG_FILES = new Set([
@@ -573,6 +574,14 @@ export const findAffectedTests = async ({
   const injectedTestFiles = allTestFiles
     ? deduplicateAndSort(allTestFiles).filter(isRunnableVitestTestFile)
     : undefined;
+  const getAllRunnableTests = () =>
+    injectedTestFiles ?? collectAllRunnableVitestTestFiles(cwd);
+  const warnings: string[] = [];
+  if (normalizedChangedFiles.includes(POSTGRES_CONFIG_FILE)) {
+    warnings.push(
+      'PostgreSQL test config changed. Run pnpm test:integration:postgres to verify it.'
+    );
+  }
   const productionConfigTestFiles = (runnableFiles?: string[]) =>
     classified.productionConfigChanged
       ? (runnableFiles?.filter(isProductionTestFile) ??
@@ -580,8 +589,7 @@ export const findAffectedTests = async ({
       : [];
 
   if (classified.globalConfigChanged) {
-    const runnableTestFiles =
-      injectedTestFiles ?? collectAllRunnableVitestTestFiles(cwd);
+    const runnableTestFiles = getAllRunnableTests();
 
     return {
       changedFiles: normalizedChangedFiles,
@@ -596,7 +604,7 @@ export const findAffectedTests = async ({
       strategyAFiles: [],
       strategyBFiles: [],
       testFiles: runnableTestFiles,
-      warnings: [],
+      warnings,
     };
   }
 
@@ -609,7 +617,6 @@ export const findAffectedTests = async ({
   let strategyAFiles: string[] = [];
   let consideredSourceFiles: string[] = [];
   let workspaceModules = new Set<string>();
-  const warnings: string[] = [];
 
   if (rootsCruised.length > 0 && graphSeeds.length > 0) {
     try {
@@ -627,8 +634,7 @@ export const findAffectedTests = async ({
   }
 
   if (dependencyCruiserFailed && classified.testSupportFiles.length > 0) {
-    const runnableTestFiles =
-      injectedTestFiles ?? collectAllRunnableVitestTestFiles(cwd);
+    const runnableTestFiles = getAllRunnableTests();
     return {
       changedFiles: normalizedChangedFiles,
       consideredSourceFiles: [],

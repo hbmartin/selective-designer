@@ -3,7 +3,7 @@ import react, { reactCompilerPreset } from '@vitejs/plugin-react';
 import assert from 'node:assert/strict';
 import { fileURLToPath } from 'node:url';
 import { build, normalizePath, type Plugin } from 'vite';
-import { expect, expectTypeOf, it } from 'vitest';
+import { expect, it } from 'vitest';
 
 import {
   backButtonUsesCompilerCache,
@@ -126,8 +126,7 @@ it('fails separately when the rendered client export is absent', async () => {
 
 const cacheImport = "import { c as cache } from 'react/compiler-runtime';";
 
-it('ignores other module IDs without broadening browser RegExp types', async () => {
-  expectTypeOf<RegExpConstructor>().not.toHaveProperty('escape');
+it('distinguishes an unrelated transform from the BackButton transform', async () => {
   const verifier = verifyBackButtonCompiler(entry);
   const transform = verifier.transform;
   assert(transform && typeof transform === 'object');
@@ -137,11 +136,6 @@ it('ignores other module IDs without broadening browser RegExp types', async () 
   const unrelated = `${entry}?unrelated`;
   const compiled = `${cacheImport} export const BackButton = () => cache(16);`;
 
-  // Simulate a host calling the handler directly without applying its filter.
-  await handler(compiled, entry);
-  await expect(
-    handler('export const BackButton = () => null;', unrelated)
-  ).resolves.toBeUndefined();
   const generate = verifier.generateBundle;
   assert(typeof generate === 'function');
   const context = {
@@ -156,9 +150,52 @@ it('ignores other module IDs without broadening browser RegExp types', async () 
       modules: { [normalizePath(entry)]: { renderedExports: ['BackButton'] } },
     },
   };
-  expect(() =>
-    Reflect.apply(generate, context, [{}, bundle, false])
-  ).not.toThrow();
+  const generateClientBundle = () =>
+    Reflect.apply(generate, context, [{}, bundle, false]);
+  const unrelatedCode = 'export const BackButton = () => null;';
+
+  // Simulate a host calling the handler directly without applying its filter.
+  await handler(unrelatedCode, unrelated);
+  expect(generateClientBundle).toThrow(
+    'The React Compiler verifier did not receive the BackButton transform.'
+  );
+  await handler(compiled, entry);
+  await handler(unrelatedCode, unrelated);
+  expect(generateClientBundle).not.toThrow();
+});
+
+it('preserves the ES2024 browser RegExp type when the verifier is present', async () => {
+  const { default: ts } = await import('typescript');
+  const verifier = fileURLToPath(
+    new URL('../../scripts/verify-back-button-compiler.ts', import.meta.url)
+  );
+  const browserCaller = normalizePath(verifier).replace(
+    'verify-back-button-compiler.ts',
+    'synthetic-browser-caller.ts'
+  );
+  const options = {
+    target: ts.ScriptTarget.ES2024,
+    lib: ['lib.es2024.d.ts'],
+    types: [],
+    noEmit: true,
+  };
+  const host = ts.createCompilerHost(options);
+  const getSourceFile = host.getSourceFile.bind(host);
+  host.getSourceFile = (file, ...args) =>
+    normalizePath(file) === browserCaller
+      ? ts.createSourceFile(file, 'RegExp.escape("a.b");', options.target)
+      : getSourceFile(file, ...args);
+  // Keep external declarations out of the fixture while resolving lib directives.
+  host.resolveModuleNames = (names) => names.map(() => undefined);
+  const program = ts.createProgram([verifier, browserCaller], options, host);
+  const caller = program.getSourceFile(browserCaller);
+  assert(caller);
+  expect(program.getSemanticDiagnostics(caller)).toEqual([
+    expect.objectContaining({
+      code: 2550,
+      messageText: expect.stringContaining("'escape'"),
+    }),
+  ]);
 });
 
 it.each([

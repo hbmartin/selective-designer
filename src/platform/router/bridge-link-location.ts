@@ -8,40 +8,70 @@ import { useCallback, useState, useSyncExternalStore } from 'react';
 
 type RouteId = string | undefined;
 type Listener = () => void;
-type RouteScope = {
+type LocationSnapshot = Readonly<{
   location: ParsedLocation;
+  historical: boolean;
+}>;
+type RouteScope = {
+  snapshot?: LocationSnapshot;
   listeners: Set<Listener>;
   presented: boolean;
 };
 type ReadableStore<Value> = {
   get: () => Value;
-  subscribe?: (listener: (value: Value) => void) => unknown;
+  subscribe?: (listener: (value: Value) => void) => { unsubscribe: Listener };
 };
 
-function createLocationStore(router: AnyRouter) {
+const liveSnapshots = new WeakMap<ParsedLocation, LocationSnapshot>();
+
+function getLiveSnapshot(location: ParsedLocation): LocationSnapshot {
+  const cached = liveSnapshots.get(location);
+  if (cached) return cached;
+  const snapshot = { location, historical: false };
+  liveSnapshots.set(location, snapshot);
+  return snapshot;
+}
+
+function createLocationStore(
+  router: AnyRouter,
+  retainedLocations?: ReadonlyMap<string, ParsedLocation>
+) {
   const location: ReadableStore<ParsedLocation> = router.stores.location;
   const ids: ReadableStore<string[]> = router.stores.ids;
   const scopes = new Map<string, RouteScope>();
   const outsideListeners = new Set<Listener>();
-  let started = false;
+  let live = getLiveSnapshot(location.get());
 
-  const publish = (next: ParsedLocation) => {
-    for (const [routeId, scope] of scopes) {
-      if (
-        scope.presented &&
-        scope.location !== next &&
-        // TanStack's transaction matches are valid during this publication.
-        !_isRouteDeparting(router, routeId, next)
-      )
-        updateScope(scope, next);
+  if (!location.subscribe || !ids.subscribe) {
+    throw new Error('BridgeLink requires subscribable client router stores.');
+  }
+
+  const getScope = (routeId: string) => {
+    let scope = scopes.get(routeId);
+    if (!scope) {
+      scope = { listeners: new Set(), presented: false };
+      scopes.set(routeId, scope);
     }
-    outsideListeners.forEach((listener) => listener());
+    return scope;
   };
 
-  const updateScope = (scope: RouteScope, next: ParsedLocation) => {
-    if (scope.location === next) return;
-    scope.location = next;
-    scope.listeners.forEach((listener) => listener());
+  const updateScope = (
+    scope: RouteScope,
+    retained: ParsedLocation | undefined,
+    previousLive = live
+  ) => {
+    const previous = scope.snapshot ?? previousLive;
+    scope.snapshot =
+      retained === undefined
+        ? undefined
+        : retained === live.location
+          ? live
+          : previous.location === retained && previous.historical
+            ? previous
+            : { location: retained, historical: true };
+    if ((scope.snapshot ?? live) !== previous) {
+      scope.listeners.forEach((listener) => listener());
+    }
   };
 
   const removeDepartedScope = (routeId: string, scope: RouteScope) => {
@@ -56,72 +86,126 @@ function createLocationStore(router: AnyRouter) {
       removeDepartedScope(routeId, scope);
     }
     for (const routeId of presented) {
-      const scope = scopes.get(routeId);
-      if (!scope) {
-        scopes.set(routeId, {
-          location: location.get(),
-          listeners: new Set(),
-          presented: true,
-        });
-      } else if (!scope.presented) {
-        scope.presented = true;
-        updateScope(scope, location.get());
-      }
+      const scope = getScope(routeId);
+      if (scope.presented) continue;
+      scope.presented = true;
+      updateScope(scope, live.location);
     }
   };
 
-  const start = () => {
-    if (started || !location.subscribe || !ids.subscribe) return;
-    started = true;
-    updatePresentation(ids.get());
-    // These subscriptions live on this router's atoms. Keep tracking between
-    // link mounts so remounts can read every accepted location publication.
-    location.subscribe(publish);
-    ids.subscribe(updatePresentation);
-  };
+  for (const routeId of ids.get()) {
+    const scope = getScope(routeId);
+    scope.presented = true;
+    updateScope(scope, retainedLocations?.get(routeId) ?? live.location);
+  }
+
+  const locationSubscription = location.subscribe((next) => {
+    const previousLive = live;
+    live = getLiveSnapshot(next);
+    if (live === previousLive) return;
+    for (const [routeId, scope] of scopes) {
+      // TanStack's transaction matches are valid during this publication.
+      const accepted =
+        scope.presented && !_isRouteDeparting(router, routeId, next);
+      updateScope(
+        scope,
+        accepted ? next : scope.snapshot?.location,
+        previousLive
+      );
+    }
+    outsideListeners.forEach((listener) => listener());
+  });
+  const presentationSubscription = ids.subscribe(updatePresentation);
 
   return {
-    start,
     getSnapshot: (routeId: RouteId) =>
-      (routeId === undefined ? undefined : scopes.get(routeId)?.location) ??
-      location.get(),
-    getServerSnapshot: () => location.get(),
+      (routeId === undefined ? undefined : scopes.get(routeId)?.snapshot) ??
+      live,
     subscribe(routeId: RouteId, listener: Listener) {
-      start();
-      if (routeId !== undefined) {
-        const scope = scopes.get(routeId);
-        if (scope) {
-          scope.listeners.add(listener);
-          return () => {
-            scope.listeners.delete(listener);
-            removeDepartedScope(routeId, scope);
-          };
-        }
+      if (routeId === undefined) {
+        outsideListeners.add(listener);
+        return () => outsideListeners.delete(listener);
       }
-      outsideListeners.add(listener);
+      const scope = getScope(routeId);
+      scope.listeners.add(listener);
       return () => {
-        outsideListeners.delete(listener);
+        scope.listeners.delete(listener);
+        removeDepartedScope(routeId, scope);
       };
+    },
+    dispose() {
+      locationSubscription.unsubscribe();
+      presentationSubscription.unsubscribe();
+      const retained = new Map<string, ParsedLocation>();
+      for (const [routeId, scope] of scopes) {
+        if (scope.presented && scope.snapshot) {
+          retained.set(routeId, scope.snapshot.location);
+        }
+        scope.listeners.clear();
+      }
+      scopes.clear();
+      outsideListeners.clear();
+      return retained;
     },
   };
 }
 
-const locationStores = new WeakMap<
-  AnyRouter,
-  ReturnType<typeof createLocationStore>
->();
+type HotRouters = {
+  router: WeakRef<AnyRouter>;
+  locations: ReadonlyMap<string, ParsedLocation>;
+}[];
 
-function getLocationStore(router: AnyRouter) {
-  let store = locationStores.get(router);
-  if (!store) {
-    store = createLocationStore(router);
-    locationStores.set(router, store);
+// Keep one tracker per client router. Vite transfers only locations and weak
+// references on replacement, so the new module installs fresh subscriptions.
+export function createBridgeLinkLocationTracking(
+  hot?: Pick<NonNullable<ImportMeta['hot']>, 'data' | 'dispose'>
+) {
+  const stores = new WeakMap<
+    AnyRouter,
+    ReturnType<typeof createLocationStore>
+  >();
+  const hotRouters = new Set<WeakRef<AnyRouter>>();
+
+  function attach(
+    router: AnyRouter,
+    retainedLocations?: ReadonlyMap<string, ParsedLocation>
+  ) {
+    if (router.isServer || stores.has(router)) return;
+    stores.set(router, createLocationStore(router, retainedLocations));
+    if (hot) {
+      for (const ref of hotRouters) {
+        if (!ref.deref()) hotRouters.delete(ref);
+      }
+      hotRouters.add(new WeakRef(router));
+    }
   }
-  return store;
+
+  if (hot) {
+    const restored = hot.data.bridgeLinkRouters as HotRouters | undefined;
+    delete hot.data.bridgeLinkRouters;
+    for (const { router, locations } of restored ?? []) {
+      const survivingRouter = router.deref();
+      if (survivingRouter) attach(survivingRouter, locations);
+    }
+    hot.dispose((data) => {
+      const retained: HotRouters = [];
+      for (const ref of hotRouters) {
+        const router = ref.deref();
+        const locations = router && stores.get(router)?.dispose();
+        if (locations) retained.push({ router: ref, locations });
+      }
+      hotRouters.clear();
+      data.bridgeLinkRouters = retained;
+    });
+  }
+
+  return { attach, get: (router: AnyRouter) => stores.get(router) };
 }
 
+const tracking = createBridgeLinkLocationTracking(import.meta.hot);
+
 export function attachBridgeLinkLocationTracking(router: AnyRouter) {
-  getLocationStore(router).start();
+  tracking.attach(router);
 }
 
 export function useBridgeLinkLocation(router: AnyRouter) {
@@ -142,14 +226,26 @@ export function useBridgeLinkLocation(router: AnyRouter) {
     routeId ??
     (previousMatch.router === router ? previousMatch.routeId : undefined);
 
-  const { subscribe, getSnapshot, getServerSnapshot } =
-    getLocationStore(router);
+  const store = tracking.get(router);
+  if (!store && !router.isServer) {
+    throw new Error(
+      'Call attachBridgeLinkLocationTracking before using BridgeLink with a client router.'
+    );
+  }
+  const getServerSnapshot = useCallback(
+    () => getLiveSnapshot(router.stores.location.get()),
+    [router]
+  );
+
   return useSyncExternalStore(
     useCallback(
-      (listener) => subscribe(scopeId, listener),
-      [scopeId, subscribe]
+      (listener) => store?.subscribe(scopeId, listener) ?? (() => {}),
+      [scopeId, store]
     ),
-    useCallback(() => getSnapshot(scopeId), [getSnapshot, scopeId]),
+    useCallback(
+      () => store?.getSnapshot(scopeId) ?? getServerSnapshot(),
+      [getServerSnapshot, scopeId, store]
+    ),
     getServerSnapshot
   );
 }

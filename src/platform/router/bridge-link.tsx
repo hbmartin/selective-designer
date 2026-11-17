@@ -236,8 +236,7 @@ function BridgeLinkImpl<
     UnsupportedDestinationProps
 ) {
   const router = useRouter<AnyRouter>();
-  const location = useBridgeLinkLocation(router);
-  const historical = location !== router.stores.location.get();
+  const { location, historical } = useBridgeLinkLocation(router);
   // The public generic props validate route inputs. Once inside the
   // adapter, the router resolves them to concrete paths.
   const routerProps = props as RouterLinkProps;

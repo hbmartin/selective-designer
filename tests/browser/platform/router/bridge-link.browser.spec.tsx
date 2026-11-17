@@ -15,6 +15,9 @@ import { ErrorBoundary } from 'react-error-boundary';
 import { afterEach, assert, expect, it, vi } from 'vitest';
 import { render } from 'vitest-browser-react';
 
+import buttonLinkFixtures from '@/platform/components/ui/button-link.fixture';
+import responsiveButtonLinkFixtures from '@/platform/components/ui/responsive-icon-button-link.fixture';
+
 import { BridgeLink } from '@/platform/router';
 import { attachBridgeLinkLocationTracking } from '@/platform/router/bridge-link-location';
 
@@ -48,6 +51,113 @@ afterEach(() => {
   vi.restoreAllMocks();
   vi.unstubAllGlobals();
 });
+
+it('applies search middleware once after a compiled link stays mounted across navigation', async () => {
+  const ref = createRef<HTMLAnchorElement>();
+  const root = createRootRoute({
+    component: () => (
+      <>
+        <BridgeLink
+          to={'/report' as never}
+          search={{ counter: 10 } as never}
+          ref={ref}
+        >
+          Open report
+        </BridgeLink>
+        <Outlet />
+      </>
+    ),
+  });
+  const report = createRoute({
+    getParentRoute: () => root,
+    path: '/report',
+    search: {
+      middlewares: [
+        ({ search, next }) => {
+          const result = next(search);
+          return {
+            ...result,
+            counter: Number(Reflect.get(result, 'counter')) + 1,
+          };
+        },
+      ],
+    },
+  });
+  const pages = ['/first', '/second'].map((path) =>
+    createRoute({
+      getParentRoute: () => root,
+      path,
+      component: () => <p>{path}</p>,
+    })
+  );
+  const router = createRouter({
+    routeTree: root.addChildren([...pages, report]),
+    history: createMemoryHistory({ initialEntries: ['/first'] }),
+  });
+  attachBridgeLinkLocationTracking(router);
+  await router.load();
+  const manager = ForesightManager.instance;
+  const register = vi.spyOn(manager, 'register');
+  const preload = vi.spyOn(router, 'preloadRoute');
+  const view = await render(<RouterProvider router={router} />);
+  const link = view.getByRole('link', { name: 'Open report' });
+  await expect.element(link).toHaveAttribute('href', '/report?counter=11');
+  const anchor = ref.current;
+  assert(anchor);
+
+  vi.stubGlobal('IS_REACT_ACT_ENVIRONMENT', true);
+  await act(() => router.navigate({ to: '/second' as never }));
+  await expect.element(view.getByText('/second')).toBeVisible();
+  expect(ref.current).toBe(anchor);
+  await expect.element(link).toHaveAttribute('href', '/report?counter=11');
+
+  const options = register.mock.calls.find(
+    ([entry]) => entry.element === anchor
+  )?.[0];
+  const state = manager.registeredElements.get(anchor);
+  assert(options && state);
+  options.callback(state);
+  const destination = preload.mock.calls.at(-1)?.[0];
+  assert(destination);
+  expect(router.buildLocation(destination as never).href).toBe(
+    '/report?counter=11'
+  );
+});
+
+it('reports missing client location tracking during BridgeLink setup', async () => {
+  const router = createRouter({
+    history: createMemoryHistory(),
+    routeTree: createRootRoute(),
+  });
+  const view = await render(
+    <ErrorBoundary fallbackRender={({ error }) => <p>{String(error)}</p>}>
+      <RouterContextProvider router={router}>
+        <BridgeLink to="/">Home</BridgeLink>
+      </RouterContextProvider>
+    </ErrorBoundary>
+  );
+  await expect
+    .element(
+      view.getByText(
+        'Call attachBridgeLinkLocationTracking before using BridgeLink with a client router.',
+        { exact: false }
+      )
+    )
+    .toBeVisible();
+});
+
+it.each([
+  { Fixture: buttonLinkFixtures.Default, name: 'Default' },
+  { Fixture: responsiveButtonLinkFixtures.Default, name: 'Add' },
+])(
+  'attaches the fixture router before rendering the $name link',
+  async ({ Fixture, name }) => {
+    const view = await render(<Fixture />);
+    await expect
+      .element(view.getByRole('link', { name }))
+      .toHaveAttribute('href', '/');
+  }
+);
 
 it('preloads the current destination without rendering on Foresight state changes', async () => {
   const { router, wrapper } = await setupRouter();
