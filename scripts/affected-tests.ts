@@ -9,11 +9,12 @@ import { resolveTrustedTool } from './trusted-tool';
 
 const DEPENDENCY_CRUISE_ROOT_CANDIDATES = ['src', 'tests', 'scripts'] as const;
 const GIT_COMMAND = 'git';
+const PRODUCTION_CONFIG_FILE = 'vitest.production.config.ts';
+const PRODUCTION_TEST_ROOT = 'tests/production';
 
 const GLOBAL_CONFIG_FILES = new Set([
   'vitest.config.ts',
   'vitest.postgres.config.ts',
-  'vitest.production.config.ts',
   'tsconfig.json',
   'package.json',
   'pnpm-lock.yaml',
@@ -69,6 +70,7 @@ export type ClassifiedChangedFiles = {
   excludedFiles: string[];
   globalConfigChanged: boolean;
   globalConfigFiles: string[];
+  productionConfigChanged: boolean;
   sourceFiles: string[];
   testSupportFiles: string[];
 };
@@ -300,6 +302,7 @@ export const classifyChangedFiles = (
     excludedFiles: [],
     globalConfigChanged: false,
     globalConfigFiles: [],
+    productionConfigChanged: false,
     sourceFiles: [],
     testSupportFiles: [],
   };
@@ -308,6 +311,8 @@ export const classifyChangedFiles = (
     if (GLOBAL_CONFIG_FILES.has(filePath)) {
       classified.globalConfigChanged = true;
       classified.globalConfigFiles.push(filePath);
+    } else if (filePath === PRODUCTION_CONFIG_FILE) {
+      classified.productionConfigChanged = true;
     } else if (isRunnableVitestTestFile(filePath)) {
       classified.directTestFiles.push(filePath);
     } else if (isSourceFile(filePath)) {
@@ -551,6 +556,9 @@ export const findRelatedTestsInGraph = (
 export const runStrategyB = (sourceFiles: string[], cwd = process.cwd()) =>
   filterExistingFiles(computeMirrorTestPaths(sourceFiles), cwd);
 
+const isProductionTestFile = (file: string) =>
+  file.startsWith(`${PRODUCTION_TEST_ROOT}/`);
+
 export const findAffectedTests = async ({
   allTestFiles,
   base,
@@ -635,10 +643,17 @@ export const findAffectedTests = async ({
     ...classified.excludedFiles,
     ...graphSeedFilesMissingFromGraph,
   ]);
-  const testFiles = filterExistingFiles(
-    [...directTestFiles, ...strategyAFiles, ...strategyBFiles],
-    cwd
-  );
+  const productionConfigTests = classified.productionConfigChanged
+    ? (allTestFiles?.filter(isProductionTestFile) ??
+      collectAllRunnableVitestTestFiles(cwd, PRODUCTION_TEST_ROOT))
+    : [];
+  const testFiles = deduplicateAndSort([
+    ...filterExistingFiles(
+      [...directTestFiles, ...strategyAFiles, ...strategyBFiles],
+      cwd
+    ),
+    ...productionConfigTests,
+  ]);
 
   return {
     changedFiles: normalizedChangedFiles,
@@ -728,7 +743,7 @@ export const buildVitestCommands = (testFiles: string[]) => {
   const ordinary: string[] = [];
   const production: string[] = [];
   for (const file of testFiles) {
-    (file.startsWith('tests/production/') ? production : ordinary).push(file);
+    (isProductionTestFile(file) ? production : ordinary).push(file);
   }
   const commands = [];
   if (ordinary.length > 0) commands.push(buildVitestCommand(ordinary));

@@ -20,12 +20,14 @@ vi.mock('@foresightjs/react', () => ({
 }));
 
 const root = createRootRoute();
-const routes = ['/app', '/login', '/logout'].map((path) =>
+const routes = ['/app', '/login'].map((path) =>
   createRoute({ getParentRoute: () => root, path })
 );
+const logout = createRoute({ getParentRoute: () => root, path: 'logout' });
+const logoutIndex = createRoute({ getParentRoute: () => logout, path: '/' });
 const router = createRouter({
   history: createMemoryHistory({ initialEntries: ['/app'] }),
-  routeTree: root.addChildren(routes),
+  routeTree: root.addChildren([...routes, logout.addChildren([logoutIndex])]),
   defaultPreload: 'intent',
 });
 
@@ -38,9 +40,11 @@ beforeEach(async () => {
 
 it.each([
   { to: '/logout' },
+  { to: '/logout/' },
   { to: '/logout', preload: 'intent' },
   { to: '/logout', mask: { to: '/login' } },
   { to: '/login', mask: { to: '/logout' } },
+  { to: '/login', mask: { to: '/logout/' } },
   { to: '../logout' },
   { to: '/LOGOUT' },
   { to: '/%6Cogout' },

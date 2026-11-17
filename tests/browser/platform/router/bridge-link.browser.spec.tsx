@@ -4,6 +4,8 @@ import {
   createRootRoute,
   createRoute,
   createRouter,
+  Link,
+  Outlet,
   RouterContextProvider,
   RouterProvider,
 } from '@tanstack/react-router';
@@ -221,4 +223,160 @@ it('rechecks a mounted implicit link when a new location changes its destination
     expect.anything()
   );
   expect(preloadRoute).not.toHaveBeenCalled();
+});
+
+it('follows native Link through a retained navigation superseded by a departure', async () => {
+  const pending = Promise.withResolvers<void>();
+  const root = createRootRoute({
+    component: () => (
+      <>
+        <Link to=".." hash preload={false}>
+          Native layout
+        </Link>
+        <BridgeLink to=".." hash preload={false}>
+          Bridge layout
+        </BridgeLink>
+        <Outlet />
+      </>
+    ),
+  });
+  const editRef = createRef<HTMLAnchorElement>();
+  const profile = createRoute({
+    getParentRoute: () => root,
+    path: '/people/$id',
+    loader: ({ params }) => (params.id === '2' ? pending.promise : undefined),
+    component: () => (
+      <>
+        <Link to=".." hash preload={false}>
+          Native profile
+        </Link>
+        <BridgeLink to=".." hash preload={false}>
+          Bridge profile
+        </BridgeLink>
+        <Link
+          from={'/people/$id' as never}
+          to={'./edit' as never}
+          params
+          hash
+          preload={false}
+        >
+          Native edit
+        </Link>
+        <BridgeLink
+          from={'/people/$id' as never}
+          to={'./edit' as never}
+          params
+          hash
+          ref={editRef}
+        >
+          Bridge edit
+        </BridgeLink>
+      </>
+    ),
+  });
+  const edit = createRoute({
+    getParentRoute: () => root,
+    path: '/people/$id/edit',
+    component: () => <p>Edit ready</p>,
+  });
+  const other = createRoute({
+    getParentRoute: () => root,
+    path: '/other',
+    loader: () => pending.promise,
+  });
+  const history = createMemoryHistory({ initialEntries: ['/people/1#old'] });
+  const router = createRouter({
+    history,
+    routeTree: root.addChildren([profile, edit, other]),
+    defaultPendingMs: 10_000,
+  });
+  await router.load();
+
+  const manager = ForesightManager.instance;
+  const register = vi.spyOn(manager, 'register');
+  const preload = vi.spyOn(router, 'preloadRoute');
+  const view = await render(
+    <RouterContextProvider router={router}>
+      <RouterProvider router={router} />
+      <Link to=".." hash preload={false}>
+        Native outside
+      </Link>
+      <BridgeLink to=".." hash preload={false}>
+        Bridge outside
+      </BridgeLink>
+    </RouterContextProvider>
+  );
+  const link = (name: string) => view.getByRole('link', { name });
+  try {
+    await expect
+      .element(link('Bridge edit'))
+      .toHaveAttribute('href', '/people/1/edit#old');
+    const anchor = editRef.current;
+    assert(anchor);
+    const registration = register.mock.calls.find(
+      ([options]) => options.element === anchor
+    )?.[0];
+    assert(registration);
+
+    vi.stubGlobal('IS_REACT_ACT_ENVIRONMENT', true);
+    await act(() => {
+      history.push('/people/2#retained');
+      expect(router.state.location.pathname).toBe('/people/2');
+      history.push('/other#departing');
+      expect(router.state.location.pathname).toBe('/other');
+    });
+
+    for (const [name, href] of [
+      ['profile', '/people#retained'],
+      ['edit', '/people/2/edit#retained'],
+      ['layout', '/#departing'],
+      ['outside', '/#departing'],
+    ] as const) {
+      await expect
+        .element(link(`Native ${name}`))
+        .toHaveAttribute('href', href);
+      await expect
+        .element(link(`Bridge ${name}`))
+        .toHaveAttribute('href', href);
+    }
+
+    const foresightState = manager.registeredElements.get(anchor);
+    assert(foresightState);
+    registration.callback(foresightState);
+    const preloadOptions = preload.mock.calls.at(-1)?.[0];
+    assert(preloadOptions);
+    expect(router.buildLocation(preloadOptions as never).href).toBe(
+      '/people/2/edit#retained'
+    );
+
+    await link('Bridge edit').click();
+    await expect.element(view.getByText('Edit ready')).toBeVisible();
+    expect(router.state.location.href).toBe('/people/2/edit#retained');
+  } finally {
+    pending.resolve();
+  }
+});
+
+it('renders ordinary and external links when URL.canParse is unavailable', async () => {
+  const { wrapper } = await setupRouter();
+  const canParse = Object.getOwnPropertyDescriptor(URL, 'canParse');
+  assert(canParse);
+  Reflect.deleteProperty(URL, 'canParse');
+  try {
+    const view = await render(
+      <>
+        <BridgeLink to="/manager">Manager</BridgeLink>
+        <BridgeLink to={'https://example.test/' as never}>External</BridgeLink>
+      </>,
+      { wrapper }
+    );
+    await expect
+      .element(view.getByRole('link', { name: 'Manager' }))
+      .toHaveAttribute('href', '/manager');
+    await expect
+      .element(view.getByRole('link', { name: 'External' }))
+      .toHaveAttribute('href', 'https://example.test/');
+  } finally {
+    Object.defineProperty(URL, 'canParse', canParse);
+  }
 });

@@ -80,6 +80,20 @@ it('accepts a translation refactor that still compiles BackButton', async () => 
   ).resolves.toBeDefined();
 });
 
+it.each(['memo', 'forwardRef'])(
+  'accepts a compiled BackButton wrapped in %s',
+  async (wrapper) => {
+    await expect(
+      compileBackButton({
+        transform: () => `import { ${wrapper} } from 'react';
+        export const BackButton = ${wrapper}(function BackButton({ to = '..' }) {
+          return <a href={to}>{to}</a>;
+        });`,
+      })
+    ).resolves.toBeDefined();
+  }
+);
+
 it.each([
   {
     name: 'function opt-out',
@@ -117,6 +131,9 @@ it.each([
   'export const BackButton = () => cache(16);',
   'const BackButton = () => cache(16); export { BackButton };',
   'const Button = function () { return cache(16); }; export { Button as BackButton };',
+  "import { memo as wrap } from 'react'; const Button = () => cache(16); export const BackButton = wrap(Button);",
+  "import React from 'react'; const Button = React.forwardRef(() => cache(16)); export const BackButton = React.memo(Button);",
+  "import * as React from 'react'; export const BackButton = React.memo(() => cache(16));",
 ])(
   'recognizes the local exported implementation in %s',
   async (declaration) => {
@@ -138,6 +155,22 @@ it.each([
   {
     name: 'a nested function',
     body: 'export function BackButton() { return () => cache(16); }',
+  },
+  {
+    name: 'a wrapper imported from another module',
+    body: "import { memo } from './other'; export const BackButton = memo(() => cache(16));",
+  },
+  {
+    name: 'a shadowed React wrapper',
+    body: "import { memo } from 'react'; const React = { memo }; const memoLike = (fn) => fn; const ReactAlias = { memo: memoLike }; export const BackButton = ReactAlias.memo(() => cache(16));",
+  },
+  {
+    name: 'an uncompiled wrapped function next to a compiled function',
+    body: "import { memo } from 'react'; export const Other = () => cache(16); export const BackButton = memo(() => null);",
+  },
+  {
+    name: 'a cycle of local wrappers',
+    body: "import { memo } from 'react'; const Button = memo(BackButton); export const BackButton = memo(Button);",
   },
   {
     name: 'a type-only export',

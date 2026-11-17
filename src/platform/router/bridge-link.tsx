@@ -7,14 +7,14 @@ import {
   type LinkProps,
   type ParsedLocation,
   type RegisteredRouter,
-  useLocation,
   useRouter,
 } from '@tanstack/react-router';
-import type { Ref } from 'react';
+import { type Ref, useMemo } from 'react';
 import { useMergeRefs } from 'react-merge-refs';
 import { omit, pick } from 'remeda';
 
-import { SIDE_EFFECT_ROUTE_PATHNAMES } from './navigation-safety';
+import { useBridgeLinkLocation } from './bridge-link-location';
+import { isProtectedNavigationPath } from './navigation-safety';
 
 type UnsupportedDestinationProps = {
   href?: never;
@@ -34,23 +34,23 @@ const hasUnsupportedDestination = (
   props: Pick<CreateLinkProps, 'href' | 'unsafeRelative'>
 ) => props.href !== undefined || props.unsafeRelative !== undefined;
 
-const protectedRoutePaths = new Set<string>(SIDE_EFFECT_ROUTE_PATHNAMES);
-
 function matchProtectedRoute(router: AnyRouter, pathname: string) {
-  const route = router.getMatchedRoutes(pathname)[2];
-  return route && protectedRoutePaths.has(route.fullPath)
+  const [, , route] = router.getMatchedRoutes(pathname);
+  return route && isProtectedNavigationPath(route.fullPath)
     ? route.fullPath
     : undefined;
 }
 
-function matchProtectedPublicHref(router: AnyRouter, href: string) {
-  let url: URL;
+function parseUrl(href: string, base?: string) {
   try {
-    url = new URL(href, router.origin);
+    return new URL(href, base);
   } catch {
     return undefined;
   }
-  if (url.origin !== router.origin) return undefined;
+}
+
+function matchProtectedPublicUrl(router: AnyRouter, url: URL | undefined) {
+  if (!url || url.origin !== router.origin) return undefined;
 
   // Use fresh history state so a masked entry resolves as a document request.
   const location = router.parseLocation({
@@ -92,6 +92,11 @@ const preloadRouteOptionKeys = [
   'viewTransition',
 ] as const;
 
+type Destination = Pick<
+  RouterLinkProps,
+  'from' | 'hash' | 'mask' | 'params' | 'search' | 'state' | 'to'
+>;
+
 type RouterLinkProps = LinkComponentProps<
   'a',
   AnyRouter,
@@ -104,44 +109,47 @@ type RouterLinkProps = LinkComponentProps<
 function resolveLink(
   router: AnyRouter,
   location: ParsedLocation,
-  props: RouterLinkProps
+  destination: Destination
 ) {
   // A URL accepted without a base has a scheme and is handled directly by Link.
-  if (typeof props.to === 'string' && URL.canParse(props.to)) {
+  const { to } = destination;
+  const directUrl =
+    typeof to === 'string' && to.includes(':') ? parseUrl(to) : undefined;
+  if (directUrl) {
     return {
-      target: matchProtectedPublicHref(router, props.to),
-      options: pick(props, preloadRouteOptionKeys),
+      target: matchProtectedPublicUrl(router, directUrl),
+      options: destination,
       direct: true,
     };
   }
 
-  const options = pick(props, preloadRouteOptionKeys);
-  const next = router.buildLocation({ ...options, _fromLocation: location });
+  const next = router.buildLocation({
+    ...destination,
+    _fromLocation: location,
+  });
   const target =
     matchProtectedRoute(router, next.pathname) ??
-    matchProtectedPublicHref(router, (next.maskedLocation ?? next).publicHref);
+    matchProtectedPublicUrl(
+      router,
+      parseUrl((next.maskedLocation ?? next).publicHref, router.origin)
+    );
 
   // Use concrete destinations for both consumers. Link chooses its own
   // location during a route transition and could otherwise resolve a
   // relative path or inherited params against a different match.
+  const maskOptions = destination.mask ?? next.maskedLocation;
   const resolvedOptions = {
-    ...options,
+    ...destination,
     to: next.pathname,
     from: undefined,
     params: undefined,
     mask: next.maskedLocation
       ? {
-          ...(options.mask ?? {
-            search: next.maskedLocation.search,
-            hash: next.maskedLocation.hash,
-            state: next.maskedLocation.state,
-            unmaskOnReload: next.maskedLocation.unmaskOnReload,
-          }),
           to: next.maskedLocation.pathname,
-          from: undefined,
-          href: undefined,
-          unsafeRelative: undefined,
-          params: undefined,
+          search: maskOptions?.search,
+          hash: maskOptions?.hash,
+          state: maskOptions?.state,
+          unmaskOnReload: maskOptions?.unmaskOnReload,
         }
       : undefined,
   };
@@ -222,11 +230,48 @@ function BridgeLinkImpl<
     UnsupportedDestinationProps
 ) {
   const router = useRouter<AnyRouter>();
-  const location = useLocation();
+  const location = useBridgeLinkLocation(router);
   // The public generic props validate route inputs. Once inside the
   // adapter, the router resolves them to concrete paths.
   const routerProps = props as RouterLinkProps;
-  if (hasUnsupportedDestination(props)) {
+  const { from, hash, mask, params, search, state, to } = routerProps;
+  const unsupported = hasUnsupportedDestination(props);
+  const resolved = useMemo(
+    () =>
+      unsupported
+        ? undefined
+        : resolveLink(router, location, {
+            from,
+            hash,
+            mask,
+            params,
+            search,
+            state,
+            to,
+          }),
+    [from, hash, location, mask, params, router, search, state, to, unsupported]
+  );
+  const {
+    to: maskTo,
+    search: maskSearch,
+    hash: maskHash,
+    state: maskState,
+    unmaskOnReload,
+  } = resolved?.options.mask ?? {};
+  const resolvedMask = useMemo(
+    () =>
+      maskTo === undefined
+        ? undefined
+        : {
+            to: maskTo,
+            search: maskSearch,
+            hash: maskHash,
+            state: maskState,
+            unmaskOnReload,
+          },
+    [maskHash, maskSearch, maskState, maskTo, unmaskOnReload]
+  );
+  if (!resolved) {
     if (!isProductionBuild()) {
       throw new Error(
         'BridgeLink does not support href or unsafeRelative. Use to and from to specify the destination.'
@@ -235,11 +280,7 @@ function BridgeLinkImpl<
     return renderInertLink(routerProps);
   }
 
-  const { target, options, direct } = resolveLink(
-    router,
-    location,
-    routerProps
-  );
+  const { target, direct } = resolved;
   if (target) {
     if (!isProductionBuild()) {
       throw new Error(protectedNavigationErrorMessage(target));
@@ -248,6 +289,11 @@ function BridgeLinkImpl<
   }
 
   const usePredictedPreload = !direct && shouldUsePredictedPreload(routerProps);
+  const options = {
+    ...pick(routerProps, preloadRouteOptionKeys),
+    ...resolved.options,
+    mask: direct ? mask : resolvedMask,
+  };
   const linkProps = {
     ...omit(routerProps, ['_fromLocation']),
     ...options,
