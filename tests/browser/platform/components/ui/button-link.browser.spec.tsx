@@ -3,21 +3,27 @@ import {
   createRootRoute,
   createRoute,
   createRouter,
-  RouterContextProvider,
-  RouterProvider,
+  useMatch,
   useRouter,
 } from '@tanstack/react-router';
+import {
+  ButtonLinkFixtureRouter,
+  ButtonLinkRouteChildren,
+  ButtonLinkRouterProvider,
+} from '@tests/support/button-link-router';
 import { act, createRef, type ReactNode } from 'react';
 import { afterEach, assert, expect, it, vi } from 'vitest';
+import { page, userEvent } from 'vitest/browser';
 import { render } from 'vitest-browser-react';
 
-import { ButtonLink } from '@/platform/components/ui/button-link';
-import { ButtonLinkFixtureRouter } from '@/platform/components/ui/button-link-fixture-router';
+import { BackButton } from '@/platform/components/back-button';
 import buttonLinkFixtures from '@/platform/components/ui/button-link.fixture';
+import { ButtonLink } from '@/platform/components/ui/button-link';
 import responsiveButtonLinkFixtures from '@/platform/components/ui/responsive-icon-button-link.fixture';
+import { ResponsiveIconButtonLink } from '@/platform/components/ui/responsive-icon-button-link';
 
 async function setupRouter(initialLocation = '/login') {
-  const root = createRootRoute();
+  const root = createRootRoute({ component: ButtonLinkRouteChildren });
   const router = createRouter({
     defaultPreload: 'intent',
     defaultPreloadDelay: 0,
@@ -26,6 +32,7 @@ async function setupRouter(initialLocation = '/login') {
       ...[
         '/login',
         '/manager',
+        '/manager/users',
         '/manager/users/$id',
         '/manager/users/$id/update',
       ].map((path) =>
@@ -50,10 +57,9 @@ async function setupRouter(initialLocation = '/login') {
   });
   await router.load();
   const wrapper = ({ children }: { children: ReactNode }) => (
-    <RouterContextProvider router={router}>
-      <RouterProvider router={router} />
+    <ButtonLinkRouterProvider router={router}>
       {children}
-    </RouterContextProvider>
+    </ButtonLinkRouterProvider>
   );
   return { router, wrapper };
 }
@@ -142,6 +148,118 @@ it('uses current native preload options and respects explicit preload=false and 
   expect(preload).not.toHaveBeenCalled();
 });
 
+it.each(['internal', 'untyped external'] as const)(
+  'keeps a disabled %s link inert for keyboard and auxiliary activation',
+  async (destination) => {
+    const { router, wrapper } = await setupRouter();
+    const click = vi.fn();
+    const auxiliaryClick = vi.fn();
+    const parentClick = vi.fn();
+    const preload = vi.spyOn(router, 'preloadRoute');
+    const ref = createRef<HTMLAnchorElement>();
+    const props = {
+      disabled: true,
+      tabIndex: 0,
+      ref,
+      onClick: click,
+      onAuxClick: auxiliaryClick,
+    };
+    const link =
+      destination === 'internal' ? (
+        <ButtonLink to="/manager" {...props}>
+          Disabled
+        </ButtonLink>
+      ) : (
+        // @ts-expect-error Defensive coverage for JavaScript callers; external routes are not public API.
+        <ButtonLink to="https://example.com" {...props}>
+          Disabled
+        </ButtonLink>
+      );
+    const view = await render(
+      <div onClick={parentClick}>
+        <button>Before</button>
+        {link}
+        <button>After</button>
+      </div>,
+      { wrapper }
+    );
+    const anchor = ref.current;
+    assert(anchor);
+    expect(anchor.hasAttribute('href')).toBe(false);
+    expect(anchor.getAttribute('aria-disabled')).toBe('true');
+    expect(anchor.getAttribute('role')).toBe('link');
+    expect(anchor.tabIndex).toBe(-1);
+    expect(anchor.hasAttribute('data-disabled')).toBe(true);
+    const user = userEvent.setup();
+    await view.getByRole('button', { name: 'Before' }).click();
+    parentClick.mockClear();
+    await user.tab();
+    await expect
+      .element(view.getByRole('button', { name: 'After' }))
+      .toHaveFocus();
+    anchor.focus();
+    await user.keyboard('{Enter}');
+    for (const event of [
+      new MouseEvent('click', { bubbles: true, cancelable: true }),
+      new MouseEvent('auxclick', {
+        bubbles: true,
+        cancelable: true,
+        button: 1,
+      }),
+    ]) {
+      expect(anchor.dispatchEvent(event)).toBe(false);
+      expect(event.defaultPrevented).toBe(true);
+    }
+    anchor.dispatchEvent(new FocusEvent('focusin', { bubbles: true }));
+    expect(click).not.toHaveBeenCalled();
+    expect(auxiliaryClick).not.toHaveBeenCalled();
+    expect(parentClick).not.toHaveBeenCalled();
+    expect(preload).not.toHaveBeenCalled();
+    expect(router.state.location.pathname).toBe('/login');
+  }
+);
+
+it('preserves responsive styling and render children at desktop and mobile widths', async () => {
+  const { wrapper } = await setupRouter('/manager');
+  await page.viewport(1100, 800);
+  const view = await render(
+    <ResponsiveIconButtonLink to="/manager" label="Manager" size="lg">
+      {({ isActive }) => <span>{String(isActive)}</span>}
+    </ResponsiveIconButtonLink>,
+    { wrapper }
+  );
+  const link = view.getByRole('link', { name: 'true Manager' });
+  await expect.element(link).toHaveClass('h-10');
+  await expect
+    .element(view.getByText('Manager', { exact: true }))
+    .not.toHaveClass('sr-only');
+  await page.viewport(390, 844);
+  await expect.element(link).toHaveClass('size-10');
+  await expect
+    .element(view.getByText('Manager', { exact: true }))
+    .toHaveClass('sr-only');
+  await page.viewport(1280, 720);
+});
+
+it('uses BackButton fallback and native history back', async () => {
+  const { router, wrapper } = await setupRouter('/manager/users/sample');
+  const view = await render(<BackButton>Back</BackButton>, { wrapper });
+  const link = view.getByRole('link', { name: 'Back' });
+  await expect.element(link).toHaveAttribute('href', '/manager/users');
+  await link.click();
+  await expect
+    .poll(() => router.state.location.pathname)
+    .toBe('/manager/users');
+  vi.stubGlobal('IS_REACT_ACT_ENVIRONMENT', true);
+  await act(() => router.navigate({ to: '/manager' }));
+  const back = vi.spyOn(router.history, 'back');
+  await link.click();
+  expect(back).toHaveBeenCalledExactlyOnceWith({ ignoreBlocker: undefined });
+  await expect
+    .poll(() => router.state.location.pathname)
+    .toBe('/manager/users');
+});
+
 it('navigates and preloads a safe masked relative destination', async () => {
   const { router, wrapper } = await setupRouter('/manager/users/sample');
   const preload = vi.spyOn(router, 'preloadRoute');
@@ -205,8 +323,10 @@ it('applies search middleware once per href and preload build across navigation'
 
 it('keeps the fixture router and anchor while rendering updated children', async () => {
   const routers: unknown[] = [];
+  const routeIds: string[] = [];
   function Child({ label }: { label: string }) {
     routers.push(useRouter());
+    routeIds.push(useMatch({ strict: false }).routeId);
     return <ButtonLink to="/">{label}</ButtonLink>;
   }
   const content = (label: string) => (
@@ -220,6 +340,7 @@ it('keeps the fixture router and anchor while rendering updated children', async
   expect(view.getByRole('link', { name: 'After' }).element()).toBe(anchor);
   expect(routers.length).toBeGreaterThan(1);
   expect(routers.every((router) => router === routers[0])).toBe(true);
+  expect(routeIds.every((routeId) => routeId === '__root__')).toBe(true);
 });
 
 it.each([buttonLinkFixtures.Default, responsiveButtonLinkFixtures.Default])(

@@ -10,6 +10,14 @@ import { resolveTrustedTool } from './trusted-tool';
 const DEPENDENCY_CRUISE_ROOT_CANDIDATES = ['src', 'tests', 'scripts'] as const;
 const GIT_COMMAND = 'git';
 const POSTGRES_CONFIG_FILE = 'vitest.postgres.config.ts';
+const POSTGRES_CONFIG_FILES = new Set([
+  POSTGRES_CONFIG_FILE,
+  'tsconfig.json',
+  'package.json',
+  'pnpm-lock.yaml',
+  'pnpm-workspace.yaml',
+  'tests/setup.base.ts',
+]);
 
 const GLOBAL_CONFIG_FILES = new Set([
   'vitest.config.ts',
@@ -92,12 +100,20 @@ export type GraphDiscoveryResult = {
   testFiles: string[];
 };
 
+export type PostgresImpactReason =
+  | 'direct_test'
+  | 'configuration'
+  | 'dependency'
+  | 'graph_unavailable';
+
 export type AffectedTestsResult = {
   changedFiles: string[];
   consideredSourceFiles: string[];
   dependencyCruiserFailed: boolean;
   directTestFiles: string[];
   excludedChangedFiles: string[];
+  postgresTestFiles: string[];
+  postgresImpactReasons: PostgresImpactReason[];
   rootsCruised: string[];
   runAll: boolean;
   runAllReason?: string;
@@ -561,6 +577,44 @@ const isPostgresTestFile = (file: string) =>
 const POSTGRES_WARNING =
   'PostgreSQL checks may be affected. Run pnpm test:integration:postgres to verify them.';
 
+const POSTGRES_REASON_DESCRIPTIONS = {
+  direct_test: 'a PostgreSQL spec changed',
+  configuration: 'PostgreSQL configuration changed',
+  dependency: 'changed code is used by PostgreSQL specs',
+  graph_unavailable: 'dependency analysis failed for source or support changes',
+} satisfies Record<PostgresImpactReason, string>;
+
+const findPostgresImpact = (
+  changedFiles: string[],
+  graphTestFiles: string[],
+  graphUnavailable: boolean
+) => {
+  const directTestFiles = changedFiles.filter(isPostgresTestFile);
+  const postgresImpactReasons: PostgresImpactReason[] = [];
+  if (directTestFiles.length > 0) postgresImpactReasons.push('direct_test');
+  if (changedFiles.some((file) => POSTGRES_CONFIG_FILES.has(file))) {
+    postgresImpactReasons.push('configuration');
+  }
+  if (graphTestFiles.length > 0) postgresImpactReasons.push('dependency');
+  if (graphUnavailable) postgresImpactReasons.push('graph_unavailable');
+
+  return {
+    postgresTestFiles: deduplicateAndSort([
+      ...directTestFiles,
+      ...graphTestFiles,
+    ]),
+    postgresImpactReasons,
+    warnings:
+      postgresImpactReasons.length > 0
+        ? [
+            `${POSTGRES_WARNING} Reason: ${postgresImpactReasons
+              .map((reason) => POSTGRES_REASON_DESCRIPTIONS[reason])
+              .join('; ')}.`,
+          ]
+        : [],
+  };
+};
+
 export const findAffectedTests = async ({
   allTestFiles,
   base,
@@ -578,44 +632,15 @@ export const findAffectedTests = async ({
   const getAllRunnableTests = () =>
     injectedTestFiles ?? collectAllRunnableVitestTestFiles(cwd);
   const warnings: string[] = [];
-  const warnPostgres = () => {
-    if (!warnings.includes(POSTGRES_WARNING)) warnings.push(POSTGRES_WARNING);
-  };
-  if (
-    normalizedChangedFiles.some(
-      (file) => file === POSTGRES_CONFIG_FILE || isPostgresTestFile(file)
-    )
-  ) {
-    warnPostgres();
-  }
-
-  if (classified.globalConfigChanged) {
-    warnPostgres();
-    const runnableTestFiles = getAllRunnableTests();
-
-    return {
-      changedFiles: normalizedChangedFiles,
-      consideredSourceFiles: [],
-      dependencyCruiserFailed: false,
-      directTestFiles: filterExistingFiles(classified.directTestFiles, cwd),
-      excludedChangedFiles: classified.excludedFiles,
-      rootsCruised: [],
-      runAll: true,
-      runAllReason: 'global config file changed',
-      strategyAFiles: [],
-      strategyBFiles: [],
-      testFiles: runnableTestFiles,
-      warnings,
-    };
-  }
-
-  const rootsCruised = collectExistingCruiseRoots(cwd);
   const graphSeeds = deduplicateAndSort([
     ...classified.sourceFiles,
     ...classified.testSupportFiles,
   ]);
+  const rootsCruised =
+    graphSeeds.length > 0 ? collectExistingCruiseRoots(cwd) : [];
   let dependencyCruiserFailed = false;
   let strategyAFiles: string[] = [];
+  let graphPostgresTestFiles: string[] = [];
   let consideredSourceFiles: string[] = [];
   let workspaceModules = new Set<string>();
 
@@ -624,37 +649,32 @@ export const findAffectedTests = async ({
       const report = await dependencyCruiser(rootsCruised, cwd);
       workspaceModules = collectWorkspaceModules(report);
       const graphResult = findRelatedTestsInGraph(graphSeeds, report);
-      if (graphResult.postgresTestFiles.length > 0) warnPostgres();
+      graphPostgresTestFiles = graphResult.postgresTestFiles;
       strategyAFiles = graphResult.testFiles;
       consideredSourceFiles = graphResult.consideredSourceFiles;
     } catch {
       dependencyCruiserFailed = true;
       warnings.push(
-        'Warning: dependency-cruiser failed, continuing with mirror-path strategy only'
+        'Warning: dependency-cruiser failed; dependency-based test discovery is unavailable.'
       );
     }
   }
 
-  if (dependencyCruiserFailed && classified.testSupportFiles.length > 0) {
-    warnPostgres();
-    const runnableTestFiles = getAllRunnableTests();
-    return {
-      changedFiles: normalizedChangedFiles,
-      consideredSourceFiles: [],
-      dependencyCruiserFailed,
-      directTestFiles: filterExistingFiles(classified.directTestFiles, cwd),
-      excludedChangedFiles: classified.excludedFiles,
-      rootsCruised,
-      runAll: true,
-      runAllReason: 'dependency-cruiser failed for test support changes',
-      strategyAFiles: [],
-      strategyBFiles: [],
-      testFiles: runnableTestFiles,
-      warnings,
-    };
-  }
-
-  const strategyBFiles = runStrategyB(classified.sourceFiles, cwd);
+  const postgresImpact = findPostgresImpact(
+    normalizedChangedFiles,
+    graphPostgresTestFiles,
+    dependencyCruiserFailed
+  );
+  warnings.push(...postgresImpact.warnings);
+  const runAllReason = classified.globalConfigChanged
+    ? 'global config file changed'
+    : dependencyCruiserFailed && classified.testSupportFiles.length > 0
+      ? 'dependency-cruiser failed for test support changes'
+      : undefined;
+  const runAll = runAllReason !== undefined;
+  const strategyBFiles = runAll
+    ? []
+    : runStrategyB(classified.sourceFiles, cwd);
   const directTestFiles = filterExistingFiles(classified.directTestFiles, cwd);
   const graphSeedFilesMissingFromGraph = graphSeeds.filter(
     (filePath) => !workspaceModules.has(filePath)
@@ -663,10 +683,12 @@ export const findAffectedTests = async ({
     ...classified.excludedFiles,
     ...graphSeedFilesMissingFromGraph,
   ]);
-  const testFiles = filterExistingFiles(
-    [...directTestFiles, ...strategyAFiles, ...strategyBFiles],
-    cwd
-  );
+  const testFiles = runAll
+    ? getAllRunnableTests()
+    : filterExistingFiles(
+        [...directTestFiles, ...strategyAFiles, ...strategyBFiles],
+        cwd
+      );
 
   return {
     changedFiles: normalizedChangedFiles,
@@ -674,8 +696,11 @@ export const findAffectedTests = async ({
     dependencyCruiserFailed,
     directTestFiles,
     excludedChangedFiles,
+    postgresTestFiles: postgresImpact.postgresTestFiles,
+    postgresImpactReasons: postgresImpact.postgresImpactReasons,
     rootsCruised,
-    runAll: false,
+    runAll,
+    ...(runAllReason ? { runAllReason } : {}),
     strategyAFiles,
     strategyBFiles,
     testFiles,
@@ -705,11 +730,23 @@ export const formatSummary = (result: AffectedTestsResult) => {
     `Direct test changes: ${result.directTestFiles.length}`,
     `Strategy A tests: ${result.strategyAFiles.length}`,
     `Strategy B tests: ${result.strategyBFiles.length}`,
+    `PostgreSQL specs (dedicated command): ${result.postgresTestFiles.length}`,
+    `PostgreSQL impact: ${
+      result.postgresImpactReasons
+        .map((reason) => POSTGRES_REASON_DESCRIPTIONS[reason])
+        .join('; ') || 'none'
+    }`,
     `Total affected tests: ${result.testFiles.length}`,
     'Affected test paths:',
     ...result.testFiles.map((filePath) => `  ${filePath}`),
   ];
 
+  if (result.postgresTestFiles.length > 0) {
+    lines.push(
+      'PostgreSQL spec paths:',
+      ...result.postgresTestFiles.map((file) => `  ${file}`)
+    );
+  }
   if (result.excludedChangedFiles.length > 0) {
     lines.push(
       'Excluded changed paths:',
@@ -743,6 +780,16 @@ export const formatOutput = (
       result.strategyAFiles
     ),
     ...formatVerboseSection('Strategy B - mirror paths', result.strategyBFiles),
+    ...formatVerboseSection(
+      'PostgreSQL specs - dedicated command',
+      result.postgresTestFiles
+    ),
+    ...formatVerboseSection(
+      'PostgreSQL impact reasons',
+      result.postgresImpactReasons.map(
+        (reason) => POSTGRES_REASON_DESCRIPTIONS[reason]
+      )
+    ),
     ...result.testFiles,
   ].join('\n');
 };

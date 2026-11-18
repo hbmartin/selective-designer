@@ -1,9 +1,8 @@
+import { ButtonLinkFixtureRouter } from '@tests/support/button-link-router';
 import { MailIcon } from 'lucide-react';
 import { type ReactNode } from 'react';
 
 import { ButtonLink } from '@/platform/components/ui/button-link';
-
-import { ButtonLinkFixtureRouter } from './button-link-fixture-router';
 
 const Default = () => {
   return <ButtonLink to="/">Default</ButtonLink>;
