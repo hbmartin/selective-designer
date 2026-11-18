@@ -261,7 +261,7 @@
     "babel-plugin-react-compiler": "1.0.0",
     "catching-jit-tests-vitest": "^0.4.0",
     "cross-env": "10.1.0",
-    "dependency-cruiser": "^17.4.3",
+    "dependency-cruiser": "^18.7.2",
     "drizzle-kit": "^0.31.11",
     "eslint": "^10.15.0",
     "eslint-plugin-playwright": "^2.12.2",
