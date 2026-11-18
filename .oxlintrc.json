@@ -29,7 +29,8 @@
     "react/only-export-components": [
       "warn",
       {
-        "allowConstantExport": true
+        "allowConstantExport": true,
+        "customHOCs": ["createLink"]
       }
     ],
     "promise/always-return": "warn",
@@ -104,7 +105,8 @@
         "react/only-export-components": [
           "error",
           {
-            "allowConstantExport": true
+            "allowConstantExport": true,
+            "customHOCs": ["createLink"]
           }
         ],
         "promise/always-return": "error",

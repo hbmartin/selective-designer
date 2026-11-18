@@ -10,7 +10,6 @@ import { telemetryProxy } from '@/composition/telemetry';
 import { authQueries } from '@/modules/auth/client';
 import { createNoOpFlags } from '@/platform/flags';
 import { readCspNonceFromMeta } from '@/platform/http/csp-nonce';
-import { attachBridgeLinkLocationTracking } from '@/platform/router/bridge-link-location';
 import type {
   CurrentSessionLike,
   RouterContext,
@@ -110,7 +109,6 @@ export function getRouter() {
   });
 
   if (!import.meta.env.SSR) {
-    attachBridgeLinkLocationTracking(router);
     attachRouterObservability(router);
   }
 

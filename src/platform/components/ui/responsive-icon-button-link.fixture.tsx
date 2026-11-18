@@ -1,32 +1,10 @@
-import {
-  createMemoryHistory,
-  createRootRoute,
-  createRouter,
-  RouterProvider,
-} from '@tanstack/react-router';
 import { PlusIcon } from 'lucide-react';
-import { ReactNode, useMemo } from 'react';
+import { type ReactNode } from 'react';
 
 import { ResponsiveIconButtonLink } from '@/platform/components/ui/responsive-icon-button-link';
 
-import { attachBridgeLinkLocationTracking } from '@/platform/router/bridge-link-location';
+import { ButtonLinkFixtureRouter } from './button-link-fixture-router';
 
-const RouterWrapper = ({ children }: { children: ReactNode }) => {
-  const router = useMemo(() => {
-    const rootRoute = createRootRoute({
-      component: () => <>{children}</>,
-    });
-    const routeTree = rootRoute.addChildren([]);
-    const router = createRouter({
-      routeTree,
-      history: createMemoryHistory({ initialEntries: ['/'] }),
-    });
-    attachBridgeLinkLocationTracking(router);
-    return router;
-  }, [children]);
-
-  return <RouterProvider router={router} />;
-};
 function Default() {
   return (
     <ResponsiveIconButtonLink to="/" label="Add">
@@ -83,9 +61,9 @@ function Variants() {
 const withRouter = (Fixture: () => ReactNode) =>
   function RouterFixture() {
     return (
-      <RouterWrapper>
+      <ButtonLinkFixtureRouter>
         <Fixture />
-      </RouterWrapper>
+      </ButtonLinkFixtureRouter>
     );
   };
 

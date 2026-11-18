@@ -39,7 +39,7 @@ const protectedRouteGuardSpecs = [
 ];
 const portOutcomeOffenderOrder = ['nullable', 'optional', 'boolean'] as const;
 const declarativeLinkComponentNames = new Set([
-  'BridgeLink',
+  'BackButton',
   'ButtonLink',
   'Link',
   'ResponsiveIconButtonLink',
@@ -666,16 +666,6 @@ describe('strict modular monolith layout', () => {
 
   it('blocks direct declarative navigation to protected side-effect routes', () => {
     expect(findDirectProtectedNavigationViolations()).toEqual([]);
-  });
-
-  it('routes platform button links through BridgeLink', () => {
-    const buttonLink = readSource(
-      path.join(root, 'src', 'platform', 'components', 'ui', 'button-link.tsx')
-    );
-
-    expect(buttonLink).toContain('@/platform/router');
-    expect(buttonLink).toContain('BridgeLink');
-    expect(buttonLink).not.toContain('@tanstack/react-router');
   });
 
   it('keeps presentation schemas free of i18n imports', () => {

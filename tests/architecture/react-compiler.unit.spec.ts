@@ -155,12 +155,12 @@ it('distinguishes an unrelated transform from the BackButton transform', async (
   const unrelatedCode = 'export const BackButton = () => null;';
 
   // Simulate a host calling the handler directly without applying its filter.
-  await handler(unrelatedCode, unrelated);
+  await expect(handler(unrelatedCode, unrelated)).resolves.toBeUndefined();
   expect(generateClientBundle).toThrow(
     'The React Compiler verifier did not receive the BackButton transform.'
   );
   await handler(compiled, entry);
-  await handler(unrelatedCode, unrelated);
+  await expect(handler(unrelatedCode, unrelated)).resolves.toBeUndefined();
   expect(generateClientBundle).not.toThrow();
 });
 

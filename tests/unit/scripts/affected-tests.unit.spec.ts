@@ -6,7 +6,6 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   type AffectedTestsResult,
   buildVitestCommand,
-  buildVitestCommands,
   classifyChangedFiles,
   collectChangedFilesFromGit,
   computeMirrorTestPaths,
@@ -47,7 +46,6 @@ const makeResult = (
   dependencyCruiserFailed: false,
   directTestFiles: [],
   excludedChangedFiles: [],
-  productionConfigTestFiles: [],
   rootsCruised: [],
   runAll: false,
   strategyAFiles: [],
@@ -163,12 +161,10 @@ describe('changed file classification', () => {
     expect(
       classifyChangedFiles([
         'vitest.config.ts',
-        'vitest.production.config.ts',
         'src/modules/design/domain/design.ts',
         'scripts/affected-tests.ts',
         'tests/unit/modules/design/domain/design.unit.spec.ts',
         'tests/browser/platform/components/form/form.browser.spec.tsx',
-        'tests/production/bridge-link.production.spec.tsx',
         'tests/integration/modules/design/infrastructure/__tests__/design-repository-drizzle.postgres.integration.test.ts',
         'tests/e2e/login.spec.ts',
         'tests/server/test-utils.ts',
@@ -177,7 +173,6 @@ describe('changed file classification', () => {
     ).toEqual({
       directTestFiles: [
         'tests/browser/platform/components/form/form.browser.spec.tsx',
-        'tests/production/bridge-link.production.spec.tsx',
         'tests/unit/modules/design/domain/design.unit.spec.ts',
       ],
       excludedFiles: [
@@ -187,7 +182,6 @@ describe('changed file classification', () => {
       ],
       globalConfigChanged: true,
       globalConfigFiles: ['vitest.config.ts'],
-      productionConfigChanged: true,
       sourceFiles: [
         'scripts/affected-tests.ts',
         'src/modules/design/domain/design.ts',
@@ -207,20 +201,18 @@ describe('global config fallback', () => {
       allTestFiles: [
         'tests/unit/a.unit.spec.ts',
         'tests/browser/a.browser.spec.tsx',
-        './tests/production/a.spec.tsx',
+        './tests/unit/a.unit.spec.ts',
+        'tests\\browser\\a.browser.spec.tsx',
+        'tests/unit/README.md',
       ],
-      changedFiles: ['vitest.config.ts', 'vitest.production.config.ts'],
+      changedFiles: ['vitest.config.ts'],
       dependencyCruiser,
     });
 
     expect(result.runAll).toBe(true);
     expect(result.runAllReason).toBe('global config file changed');
-    expect(result.productionConfigTestFiles).toEqual([
-      'tests/production/a.spec.tsx',
-    ]);
     expect(result.testFiles).toEqual([
       'tests/browser/a.browser.spec.tsx',
-      'tests/production/a.spec.tsx',
       'tests/unit/a.unit.spec.ts',
     ]);
     expect(dependencyCruiser).not.toHaveBeenCalled();
@@ -242,7 +234,7 @@ describe('global config fallback', () => {
     expect(result.excludedChangedFiles).toEqual([config]);
     expect(result.testFiles).toEqual([]);
     expect(result.warnings).toEqual([
-      'PostgreSQL test config changed. Run pnpm test:integration:postgres to verify it.',
+      'PostgreSQL checks may be affected. Run pnpm test:integration:postgres to verify them.',
     ]);
     expect(
       JSON.parse(
@@ -257,88 +249,89 @@ describe('global config fallback', () => {
   });
 });
 
-describe('production config changes', () => {
-  const config = 'vitest.production.config.ts';
-  const productionTests = [
-    'tests/production/a.spec.tsx',
-    'tests/production/nested/b.test.mts',
-  ];
+describe('PostgreSQL guidance', () => {
+  const postgresTest =
+    'tests/integration/repository.postgres.integration.test.ts';
+  const source = 'src/repository.ts';
+  const unitTest = 'tests/unit/repository.unit.spec.ts';
+  const warning =
+    'PostgreSQL checks may be affected. Run pnpm test:integration:postgres to verify them.';
+  const report: DependencyCruiserReport = {
+    modules: [
+      { source },
+      { source: 'src/backend.ts', dependencies: [{ resolved: source }] },
+      { source: postgresTest, dependencies: [{ resolved: 'src/backend.ts' }] },
+      { source: unitTest, dependencies: [{ resolved: source }] },
+    ],
+  };
 
-  it('selects all production specs without cruising or selecting ordinary specs', async () => {
-    const cwd = makeTempCwd([...productionTests, 'tests/unit/a.unit.spec.ts']);
-    const dependencyCruiser = vi.fn();
+  it.each([
+    { name: 'a direct spec', changes: [postgresTest], tests: [] },
+    { name: 'a transitive source', changes: [source], tests: [unitTest] },
+    {
+      name: 'mixed config, spec, and source changes',
+      changes: ['vitest.postgres.config.ts', postgresTest, source],
+      tests: [unitTest],
+    },
+    {
+      name: 'a shared config fallback',
+      changes: ['vitest.config.ts', source],
+      tests: [unitTest],
+    },
+  ])(
+    'warns once for $name while selecting only ordinary tests',
+    async ({ changes, tests }) => {
+      const cwd = makeTempCwd([source, unitTest, postgresTest]);
+      const result = await findAffectedTests({
+        changedFiles: changes,
+        allTestFiles: [unitTest, postgresTest],
+        cwd,
+        dependencyCruiser: async () => report,
+      });
+      expect(result.testFiles).toEqual(tests);
+      expect(result.warnings).toEqual([warning]);
+      const stdout: string[] = [];
+      const stderr: string[] = [];
+      const dependencies = {
+        findAffectedTests: async () => result,
+        stdout: (message: string) => stdout.push(message),
+        stderr: (message: string) => stderr.push(message),
+      };
+      expect(await main([], dependencies)).toBe(0);
+      expect(stderr).toEqual([`${warning}\n`]);
+      stdout.length = 0;
+      stderr.length = 0;
+      expect(await main(['--json'], dependencies)).toBe(0);
+      expect(JSON.parse(stdout.join('')).warnings).toEqual([warning]);
+      expect(stderr).toEqual([]);
+    }
+  );
+
+  it('normalizes paths before matching direct specs and graph importers', async () => {
     const result = await findAffectedTests({
-      changedFiles: [config],
-      cwd,
-      dependencyCruiser,
-    });
-
-    expect(result.runAll).toBe(false);
-    expect(result.excludedChangedFiles).toEqual([]);
-    expect(result.productionConfigTestFiles).toEqual(productionTests);
-    expect(result.testFiles).toEqual(productionTests);
-    expect(buildVitestCommands(result.testFiles)).toEqual([
-      { command: 'pnpm', args: ['test:production', ...productionTests] },
-    ]);
-    expect(dependencyCruiser).not.toHaveBeenCalled();
-  });
-
-  it('normalizes injected paths before filtering and explains production config selections', async () => {
-    const result = await findAffectedTests({
-      changedFiles: [config],
-      allTestFiles: [
-        './tests/production/a.spec.tsx',
-        'tests/production/a.spec.tsx',
-        'tests\\production\\nested\\b.test.mts',
-        'tests/production/README.md',
-        'tests/production/a.postgres.integration.test.ts',
-        'tests/production-other/a.spec.tsx',
-        'tests/unit/a.unit.spec.ts',
+      changedFiles: [
+        `./${postgresTest}`,
+        postgresTest.replaceAll('/', '\\'),
+        `./${source}`,
       ],
+      cwd: makeTempCwd([source, postgresTest, unitTest]),
+      dependencyCruiser: async () => report,
     });
-
-    expect(result.testFiles).toEqual(productionTests);
-    const options = { json: false, summary: false, verbose: false };
-    expect(
-      JSON.parse(formatOutput(result, { ...options, json: true }))
-    ).toHaveProperty('productionConfigTestFiles', productionTests);
-    expect(formatOutput(result, { ...options, summary: true })).toContain(
-      'Production config tests: 2'
-    );
-    expect(formatOutput(result, { ...options, verbose: true })).toContain(
-      '# Production config tests (2):\n#   tests/production/a.spec.tsx\n#   tests/production/nested/b.test.mts'
-    );
+    expect(result.warnings).toEqual([warning]);
+    expect(result.testFiles).toEqual([unitTest]);
   });
 
-  it('adds production specs to the direct and graph-selected ordinary specs', async () => {
-    const source = 'src/shared.ts';
-    const directTest = 'tests/unit/direct.unit.spec.ts';
-    const graphTest = 'tests/unit/graph.unit.spec.ts';
-    const cwd = makeTempCwd([
-      ...productionTests,
-      source,
-      directTest,
-      graphTest,
-      'tests/unit/unused.unit.spec.ts',
-    ]);
+  it('does not warn when changed sources have no PostgreSQL importers', async () => {
     const result = await findAffectedTests({
-      changedFiles: [config, source, directTest, productionTests[0]!],
-      cwd,
+      changedFiles: [source],
+      cwd: makeTempCwd([source, unitTest]),
       dependencyCruiser: async () => ({
-        modules: [
-          { source },
-          { source: graphTest, dependencies: [{ resolved: source }] },
-        ],
+        modules: report.modules.filter(
+          (module) => module.source !== postgresTest
+        ),
       }),
     });
-
-    expect(result.runAll).toBe(false);
-    expect(result.productionConfigTestFiles).toEqual(productionTests);
-    expect(result.testFiles).toEqual([
-      ...productionTests,
-      directTest,
-      graphTest,
-    ]);
+    expect(result.warnings).toEqual([]);
   });
 });
 
@@ -399,6 +392,7 @@ describe('dependency graph strategy', () => {
       findRelatedTestsInGraph(['src/modules/user/domain/user.ts'], report)
     ).toEqual({
       consideredSourceFiles: ['src/modules/user/domain/user.ts'],
+      postgresTestFiles: [],
       testFiles: ['tests/unit/modules/user/domain/user.unit.spec.ts'],
     });
   });
@@ -473,6 +467,7 @@ describe('dependency graph strategy', () => {
     ]);
     expect(result.warnings).toEqual([
       'Warning: dependency-cruiser failed, continuing with mirror-path strategy only',
+      'PostgreSQL checks may be affected. Run pnpm test:integration:postgres to verify them.',
     ]);
   });
 });
@@ -522,56 +517,16 @@ describe('output formatting', () => {
 
 describe('Vitest runner command', () => {
   const ordinary = 'tests/unit/a.unit.spec.ts';
-  const production = 'tests/production/bridge-link.production.spec.tsx';
-  const secondProduction = 'tests/production/bridge-link-destinations.spec.tsx';
-  const productionCommand = {
-    args: ['test:production', production],
-    command: 'pnpm',
-  };
-
-  it('dispatches ordinary and production tests to their own configurations', () => {
-    expect(buildVitestCommands([production, ordinary])).toEqual([
-      buildVitestCommand([ordinary]),
-      productionCommand,
-    ]);
-    expect(buildVitestCommands([ordinary])).toEqual([
-      buildVitestCommand([ordinary]),
-    ]);
-    expect(buildVitestCommands([production])).toEqual([productionCommand]);
-    expect(buildVitestCommands([secondProduction])).toEqual([
-      { command: 'pnpm', args: ['test:production', secondProduction] },
-    ]);
-    expect(
-      buildVitestCommands([production, ordinary, secondProduction])
-    ).toEqual([
-      buildVitestCommand([ordinary]),
-      {
-        command: 'pnpm',
-        args: ['test:production', production, secondProduction],
-      },
-    ]);
-    expect(buildVitestCommands([])).toEqual([]);
+  it('executes one command and preserves its exit status', async () => {
+    const execute = vi.fn(async () => 7);
+    await expect(runVitest([ordinary], execute)).resolves.toBe(7);
+    expect(execute).toHaveBeenCalledExactlyOnceWith(
+      buildVitestCommand([ordinary])
+    );
+    execute.mockClear();
+    await expect(runVitest([], execute)).resolves.toBe(0);
+    expect(execute).not.toHaveBeenCalled();
   });
-
-  it.each([
-    { ordinaryStatus: 7, productionStatus: 0, expected: 7 },
-    { ordinaryStatus: 0, productionStatus: 9, expected: 9 },
-  ])(
-    'runs both suites and reports exit code $expected',
-    async ({ ordinaryStatus, productionStatus, expected }) => {
-      const execute = vi
-        .fn(async () => 0)
-        .mockResolvedValueOnce(ordinaryStatus)
-        .mockResolvedValueOnce(productionStatus);
-      await expect(runVitest([ordinary, production], execute)).resolves.toBe(
-        expected
-      );
-      expect(execute.mock.calls).toEqual([
-        [buildVitestCommand([ordinary])],
-        [productionCommand],
-      ]);
-    }
-  );
 
   it('builds the expected pnpm Vitest command', () => {
     expect(buildVitestCommand(['tests/unit/a.unit.spec.ts'])).toEqual({
