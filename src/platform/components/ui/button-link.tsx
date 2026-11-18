@@ -1,31 +1,31 @@
+import { createLink } from '@tanstack/react-router';
 import type { VariantProps } from 'class-variance-authority';
-import type { ComponentProps } from 'react';
+import type { ComponentPropsWithRef } from 'react';
 
 import { cn } from '@/platform/lib/tailwind/utils';
 
 import { buttonVariants } from '@/platform/components/ui/button-variants';
 
-import { BridgeLink, type BridgeLinkProps } from '@/platform/router';
-
-function ButtonLink({
+function ButtonAnchor({
   className,
   children,
   variant,
   size,
+  disabled,
   ...props
 }: VariantProps<typeof buttonVariants> &
-  ComponentProps<'a'> &
-  BridgeLinkProps & { className?: string }) {
+  ComponentPropsWithRef<'a'> & { disabled?: boolean }) {
   return (
-    <BridgeLink
+    <a
       {...props}
+      data-disabled={disabled ? '' : undefined}
       className={cn(buttonVariants({ variant, size, className }))}
     >
       <span className={'flex min-w-0 flex-1 items-center justify-center'}>
         {children}
       </span>
-    </BridgeLink>
+    </a>
   );
 }
 
-export { ButtonLink };
+export const ButtonLink = createLink(ButtonAnchor);

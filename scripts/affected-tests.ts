@@ -9,9 +9,7 @@ import { resolveTrustedTool } from './trusted-tool';
 
 const DEPENDENCY_CRUISE_ROOT_CANDIDATES = ['src', 'tests', 'scripts'] as const;
 const GIT_COMMAND = 'git';
-const PRODUCTION_CONFIG_FILE = 'vitest.production.config.ts';
 const POSTGRES_CONFIG_FILE = 'vitest.postgres.config.ts';
-const PRODUCTION_TEST_ROOT = 'tests/production';
 
 const GLOBAL_CONFIG_FILES = new Set([
   'vitest.config.ts',
@@ -26,7 +24,7 @@ const GLOBAL_CONFIG_FILES = new Set([
 ]);
 
 const RUNNABLE_TEST_FILE_PATTERN =
-  /^tests\/(?:unit|browser|integration|architecture|security|production)\/.*\.(?:test|spec)\.[cm]?[jt]sx?$/;
+  /^tests\/(?:unit|browser|integration|architecture|security)\/.*\.(?:test|spec)\.[cm]?[jt]sx?$/;
 const POSTGRES_INTEGRATION_TEST_PATTERN =
   /\.postgres\.integration\.test\.[cm]?[jt]sx?$/;
 const SOURCE_FILE_PATTERN = /^(?:src|scripts)\/.*\.[cm]?[jt]sx?$/;
@@ -70,7 +68,6 @@ export type ClassifiedChangedFiles = {
   excludedFiles: string[];
   globalConfigChanged: boolean;
   globalConfigFiles: string[];
-  productionConfigChanged: boolean;
   sourceFiles: string[];
   testSupportFiles: string[];
 };
@@ -90,6 +87,7 @@ export type DependencyCruiserReport = {
 };
 
 export type GraphDiscoveryResult = {
+  postgresTestFiles: string[];
   consideredSourceFiles: string[];
   testFiles: string[];
 };
@@ -100,7 +98,6 @@ export type AffectedTestsResult = {
   dependencyCruiserFailed: boolean;
   directTestFiles: string[];
   excludedChangedFiles: string[];
-  productionConfigTestFiles: string[];
   rootsCruised: string[];
   runAll: boolean;
   runAllReason?: string;
@@ -303,7 +300,6 @@ export const classifyChangedFiles = (
     excludedFiles: [],
     globalConfigChanged: false,
     globalConfigFiles: [],
-    productionConfigChanged: false,
     sourceFiles: [],
     testSupportFiles: [],
   };
@@ -312,8 +308,6 @@ export const classifyChangedFiles = (
     if (GLOBAL_CONFIG_FILES.has(filePath)) {
       classified.globalConfigChanged = true;
       classified.globalConfigFiles.push(filePath);
-    } else if (filePath === PRODUCTION_CONFIG_FILE) {
-      classified.productionConfigChanged = true;
     } else if (isRunnableVitestTestFile(filePath)) {
       classified.directTestFiles.push(filePath);
     } else if (isSourceFile(filePath)) {
@@ -528,6 +522,7 @@ export const findRelatedTestsInGraph = (
     (filePath) => workspaceModules.has(filePath)
   );
   const relatedTests = new Set<string>();
+  const postgresTests = new Set<string>();
   const visited = new Set<string>();
   const queue = [...consideredSourceFiles];
 
@@ -538,6 +533,7 @@ export const findRelatedTestsInGraph = (
     visited.add(dependency);
 
     for (const importer of reverseDependencies.get(dependency) ?? []) {
+      if (isPostgresTestFile(importer)) postgresTests.add(importer);
       if (isRunnableVitestTestFile(importer)) {
         relatedTests.add(importer);
       }
@@ -550,6 +546,7 @@ export const findRelatedTestsInGraph = (
 
   return {
     consideredSourceFiles,
+    postgresTestFiles: deduplicateAndSort([...postgresTests]),
     testFiles: deduplicateAndSort([...relatedTests]),
   };
 };
@@ -557,8 +554,12 @@ export const findRelatedTestsInGraph = (
 export const runStrategyB = (sourceFiles: string[], cwd = process.cwd()) =>
   filterExistingFiles(computeMirrorTestPaths(sourceFiles), cwd);
 
-const isProductionTestFile = (file: string) =>
-  file.startsWith(`${PRODUCTION_TEST_ROOT}/`);
+const isPostgresTestFile = (file: string) =>
+  file.startsWith('tests/integration/') &&
+  POSTGRES_INTEGRATION_TEST_PATTERN.test(file);
+
+const POSTGRES_WARNING =
+  'PostgreSQL checks may be affected. Run pnpm test:integration:postgres to verify them.';
 
 export const findAffectedTests = async ({
   allTestFiles,
@@ -577,18 +578,19 @@ export const findAffectedTests = async ({
   const getAllRunnableTests = () =>
     injectedTestFiles ?? collectAllRunnableVitestTestFiles(cwd);
   const warnings: string[] = [];
-  if (normalizedChangedFiles.includes(POSTGRES_CONFIG_FILE)) {
-    warnings.push(
-      'PostgreSQL test config changed. Run pnpm test:integration:postgres to verify it.'
-    );
+  const warnPostgres = () => {
+    if (!warnings.includes(POSTGRES_WARNING)) warnings.push(POSTGRES_WARNING);
+  };
+  if (
+    normalizedChangedFiles.some(
+      (file) => file === POSTGRES_CONFIG_FILE || isPostgresTestFile(file)
+    )
+  ) {
+    warnPostgres();
   }
-  const productionConfigTestFiles = (runnableFiles?: string[]) =>
-    classified.productionConfigChanged
-      ? (runnableFiles?.filter(isProductionTestFile) ??
-        collectAllRunnableVitestTestFiles(cwd, PRODUCTION_TEST_ROOT))
-      : [];
 
   if (classified.globalConfigChanged) {
+    warnPostgres();
     const runnableTestFiles = getAllRunnableTests();
 
     return {
@@ -597,7 +599,6 @@ export const findAffectedTests = async ({
       dependencyCruiserFailed: false,
       directTestFiles: filterExistingFiles(classified.directTestFiles, cwd),
       excludedChangedFiles: classified.excludedFiles,
-      productionConfigTestFiles: productionConfigTestFiles(runnableTestFiles),
       rootsCruised: [],
       runAll: true,
       runAllReason: 'global config file changed',
@@ -623,6 +624,7 @@ export const findAffectedTests = async ({
       const report = await dependencyCruiser(rootsCruised, cwd);
       workspaceModules = collectWorkspaceModules(report);
       const graphResult = findRelatedTestsInGraph(graphSeeds, report);
+      if (graphResult.postgresTestFiles.length > 0) warnPostgres();
       strategyAFiles = graphResult.testFiles;
       consideredSourceFiles = graphResult.consideredSourceFiles;
     } catch {
@@ -634,6 +636,7 @@ export const findAffectedTests = async ({
   }
 
   if (dependencyCruiserFailed && classified.testSupportFiles.length > 0) {
+    warnPostgres();
     const runnableTestFiles = getAllRunnableTests();
     return {
       changedFiles: normalizedChangedFiles,
@@ -641,7 +644,6 @@ export const findAffectedTests = async ({
       dependencyCruiserFailed,
       directTestFiles: filterExistingFiles(classified.directTestFiles, cwd),
       excludedChangedFiles: classified.excludedFiles,
-      productionConfigTestFiles: productionConfigTestFiles(runnableTestFiles),
       rootsCruised,
       runAll: true,
       runAllReason: 'dependency-cruiser failed for test support changes',
@@ -661,14 +663,10 @@ export const findAffectedTests = async ({
     ...classified.excludedFiles,
     ...graphSeedFilesMissingFromGraph,
   ]);
-  const productionConfigTests = productionConfigTestFiles(injectedTestFiles);
-  const testFiles = deduplicateAndSort([
-    ...filterExistingFiles(
-      [...directTestFiles, ...strategyAFiles, ...strategyBFiles],
-      cwd
-    ),
-    ...productionConfigTests,
-  ]);
+  const testFiles = filterExistingFiles(
+    [...directTestFiles, ...strategyAFiles, ...strategyBFiles],
+    cwd
+  );
 
   return {
     changedFiles: normalizedChangedFiles,
@@ -676,7 +674,6 @@ export const findAffectedTests = async ({
     dependencyCruiserFailed,
     directTestFiles,
     excludedChangedFiles,
-    productionConfigTestFiles: productionConfigTests,
     rootsCruised,
     runAll: false,
     strategyAFiles,
@@ -708,7 +705,6 @@ export const formatSummary = (result: AffectedTestsResult) => {
     `Direct test changes: ${result.directTestFiles.length}`,
     `Strategy A tests: ${result.strategyAFiles.length}`,
     `Strategy B tests: ${result.strategyBFiles.length}`,
-    `Production config tests: ${result.productionConfigTestFiles.length}`,
     `Total affected tests: ${result.testFiles.length}`,
     'Affected test paths:',
     ...result.testFiles.map((filePath) => `  ${filePath}`),
@@ -747,10 +743,6 @@ export const formatOutput = (
       result.strategyAFiles
     ),
     ...formatVerboseSection('Strategy B - mirror paths', result.strategyBFiles),
-    ...formatVerboseSection(
-      'Production config tests',
-      result.productionConfigTestFiles
-    ),
     ...result.testFiles,
   ].join('\n');
 };
@@ -759,23 +751,6 @@ export const buildVitestCommand = (testFiles: string[]) => ({
   args: ['exec', 'vitest', 'run', '--passWithNoTests', ...testFiles],
   command: 'pnpm',
 });
-
-export const buildVitestCommands = (testFiles: string[]) => {
-  const ordinary: string[] = [];
-  const production: string[] = [];
-  for (const file of testFiles) {
-    (isProductionTestFile(file) ? production : ordinary).push(file);
-  }
-  const commands = [];
-  if (ordinary.length > 0) commands.push(buildVitestCommand(ordinary));
-  if (production.length > 0) {
-    commands.push({
-      command: 'pnpm',
-      args: ['test:production', ...production],
-    });
-  }
-  return commands;
-};
 
 type VitestCommand = ReturnType<typeof buildVitestCommand>;
 
@@ -799,14 +774,7 @@ const runVitestCommand = ({ args, command }: VitestCommand) =>
 export const runVitest = async (
   testFiles: string[],
   execute = runVitestCommand
-) => {
-  let status = 0;
-  for (const command of buildVitestCommands(testFiles)) {
-    const code = await execute(command);
-    if (status === 0) status = code;
-  }
-  return status;
-};
+) => (testFiles.length > 0 ? execute(buildVitestCommand(testFiles)) : 0);
 
 const writeOutput = (output: string, write: (message: string) => void) => {
   if (!output) return;

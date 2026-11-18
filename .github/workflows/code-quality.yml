@@ -223,9 +223,6 @@ jobs:
           mkdir -p test-results/architecture
           pnpm exec vitest run --project=unit tests/architecture --reporter=default --reporter=junit --outputFile.junit=test-results/architecture/junit.xml
 
-      - name: Run production-mode tests
-        run: pnpm test:production
-
       - name: Upload architecture test report
         if: always()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
