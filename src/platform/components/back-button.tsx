@@ -18,6 +18,7 @@ export const BackButton = <
   const TMaskTo extends string = '',
 >({
   children,
+  onClick,
   ...props
 }: ButtonLinkProps<TRouter, TFrom, TTo, TMaskFrom, TMaskTo>) => {
   const { t } = useTranslation(['components']);
@@ -26,13 +27,21 @@ export const BackButton = <
   const linkProps = {
     variant: 'ghost',
     size: 'icon-sm',
+    ...props,
     onClick: (event: MouseEvent<HTMLAnchorElement>) => {
-      if (canGoBack) {
+      onClick?.(event);
+      const target = props.target ?? event.currentTarget.getAttribute('target');
+      if (
+        canGoBack &&
+        !event.defaultPrevented &&
+        event.button === 0 &&
+        !(event.ctrlKey || event.metaKey || event.shiftKey || event.altKey) &&
+        (!target || target === '_self')
+      ) {
         event.preventDefault();
         navigateBack();
       }
     },
-    ...props,
     to: props.to ?? '..',
   } as ButtonLinkProps<TRouter, TFrom, TTo, TMaskFrom, TMaskTo>;
 

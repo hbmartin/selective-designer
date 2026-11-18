@@ -17,11 +17,13 @@ import {
   isCliEntrypoint,
   main,
   normalizePath,
+  POSTGRES_SETUP_FILES,
   parseCliArguments,
   parseNullDelimitedPaths,
   runStrategyB,
   runVitest,
 } from '../../../scripts/affected-tests';
+import postgresConfig from '../../../vitest.postgres.config';
 
 const tempDirectories: string[] = [];
 
@@ -268,6 +270,206 @@ describe('PostgreSQL guidance', () => {
     ],
   };
 
+  it('models the setup files configured by the dedicated PostgreSQL suite', () => {
+    const setupFiles = postgresConfig.test?.setupFiles;
+    const configuredFiles =
+      typeof setupFiles === 'string' ? [setupFiles] : (setupFiles ?? []);
+    expect(
+      deduplicateAndSort(
+        configuredFiles.map((file) => path.relative(process.cwd(), file))
+      )
+    ).toEqual(deduplicateAndSort([...POSTGRES_SETUP_FILES]));
+  });
+
+  it.each([
+    { file: 'drizzle/migrations/0012_example.sql', state: 'added' },
+    { file: 'drizzle/migrations/0012_example.sql', state: 'edited' },
+    { file: 'drizzle/migrations/0012_example.sql', state: 'deleted' },
+    { file: 'drizzle/migrations/meta/_journal.json', state: 'added' },
+    { file: 'drizzle/migrations/meta/_journal.json', state: 'edited' },
+    { file: 'drizzle/migrations/meta/_journal.json', state: 'deleted' },
+  ])(
+    'warns for $state migration input $file without executing PostgreSQL specs',
+    async ({ file, state }) => {
+      const otherSpec =
+        'tests/integration/another.postgres.integration.test.ts';
+      const cwd = makeTempCwd([
+        unitTest,
+        postgresTest,
+        otherSpec,
+        ...(state === 'deleted' ? [] : [file]),
+      ]);
+      const dependencyCruiser = vi.fn();
+      const result = await findAffectedTests({
+        cwd,
+        changedFiles: [file],
+        dependencyCruiser,
+      });
+      expect(result.postgresImpactReasons).toEqual(['migration']);
+      expect(result.postgresTestFiles).toEqual([otherSpec, postgresTest]);
+      expect(result.testFiles).toEqual([]);
+      expect(result.warnings).toEqual([
+        `${warning} Reason: PostgreSQL migration inputs changed.`,
+      ]);
+      expect(dependencyCruiser).not.toHaveBeenCalled();
+      const run = vi.fn();
+      const stderr = vi.fn();
+      await expect(
+        main(['--run'], {
+          findAffectedTests: async () => result,
+          runVitest: run,
+          stdout: vi.fn(),
+          stderr,
+        })
+      ).resolves.toBe(0);
+      expect(run).not.toHaveBeenCalled();
+      expect(stderr).toHaveBeenCalledWith(
+        `${warning} Reason: PostgreSQL migration inputs changed.\n`
+      );
+      expect(
+        JSON.parse(
+          formatOutput(result, { json: true, summary: false, verbose: false })
+        )
+      ).toMatchObject({
+        postgresImpactReasons: ['migration'],
+        postgresTestFiles: [otherSpec, postgresTest],
+        testFiles: [],
+      });
+    }
+  );
+
+  it.each([
+    'drizzle/migrations/meta/0012_snapshot.json',
+    'drizzle/migrations-not-used/0012_example.sql',
+  ])(
+    'does not treat unused metadata or similarly named paths as runtime migration input: %s',
+    async (file) => {
+      const result = await findAffectedTests({
+        cwd: makeTempCwd([postgresTest]),
+        changedFiles: [file],
+      });
+      expect(result.warnings).toEqual([]);
+      expect(result.postgresTestFiles).toEqual([]);
+    }
+  );
+
+  it('deduplicates normalized migration suite paths with direct and discovered specs', async () => {
+    const cwd = makeTempCwd([postgresTest, unitTest, source]);
+    const result = await findAffectedTests({
+      cwd,
+      changedFiles: [
+        '.\\drizzle\\migrations\\0012_example.sql',
+        'drizzle/migrations/meta/_journal.json',
+        postgresTest,
+        source,
+      ],
+      allTestFiles: [
+        unitTest,
+        `./${postgresTest}`,
+        postgresTest.replaceAll('/', '\\'),
+      ],
+      dependencyCruiser: async () => report,
+    });
+    expect(result.postgresTestFiles).toEqual([postgresTest]);
+    expect(result.postgresImpactReasons).toEqual([
+      'direct_test',
+      'migration',
+      'dependency',
+    ]);
+    expect(result.warnings).toEqual([
+      `${warning} Reason: a PostgreSQL spec changed; PostgreSQL migration inputs changed; changed code is used by PostgreSQL specs.`,
+    ]);
+    const run = vi.fn(async () => 0);
+    await main(['--run'], {
+      findAffectedTests: async () => result,
+      runVitest: run,
+      stdout: vi.fn(),
+      stderr: vi.fn(),
+    });
+    expect(run).toHaveBeenCalledExactlyOnceWith([unitTest]);
+  });
+
+  it('follows transitive setup dependencies without importing setup modules', async () => {
+    const dependency = 'src/setup-dependency.ts';
+    const intermediate = 'src/setup-bridge.ts';
+    const setup = POSTGRES_SETUP_FILES[0];
+    const otherSpec = 'tests/integration/another.postgres.integration.test.ts';
+    const cwd = makeTempCwd([
+      dependency,
+      intermediate,
+      setup,
+      unitTest,
+      postgresTest,
+      otherSpec,
+    ]);
+    fs.writeFileSync(
+      path.join(cwd, setup),
+      'throw new Error("setup must not execute during discovery");'
+    );
+    const setupReport: DependencyCruiserReport = {
+      modules: [
+        { source: dependency },
+        { source: intermediate, dependencies: [{ resolved: dependency }] },
+        { source: setup, dependencies: [{ resolved: intermediate }] },
+        { source: unitTest, dependencies: [{ resolved: dependency }] },
+        { source: postgresTest },
+        { source: otherSpec },
+      ],
+    };
+    const result = await findAffectedTests({
+      cwd,
+      changedFiles: [dependency],
+      dependencyCruiser: async () => setupReport,
+    });
+    expect(result.postgresTestFiles).toEqual([otherSpec, postgresTest]);
+    expect(result.postgresImpactReasons).toEqual(['dependency']);
+    expect(result.dependencyCruiserFailed).toBe(false);
+    expect(result.testFiles).toEqual([unitTest]);
+    expect(result.warnings).toEqual([
+      `${warning} Reason: changed code is used by PostgreSQL specs.`,
+    ]);
+  });
+
+  it('retains guidance for a deleted PostgreSQL spec without listing a nonexistent path', async () => {
+    const removed = 'tests/integration/removed.postgres.integration.test.ts';
+    const result = await findAffectedTests({
+      cwd: makeTempCwd([unitTest]),
+      changedFiles: [removed],
+    });
+    expect(result.postgresTestFiles).toEqual([]);
+    expect(result.postgresImpactReasons).toEqual(['direct_test']);
+    expect(result.warnings).toEqual([
+      `${warning} Reason: a PostgreSQL spec changed.`,
+    ]);
+    expect(
+      formatOutput(result, { json: false, summary: true, verbose: false })
+    ).not.toContain('PostgreSQL spec paths:');
+    expect(
+      JSON.parse(
+        formatOutput(result, { json: true, summary: false, verbose: false })
+      )
+    ).toMatchObject({
+      postgresTestFiles: [],
+      postgresImpactReasons: ['direct_test'],
+    });
+  });
+
+  it('filters deleted graph specs while retaining existing affected specs', async () => {
+    const removed = 'tests/integration/removed.postgres.integration.test.ts';
+    const result = await findAffectedTests({
+      cwd: makeTempCwd([source, postgresTest, unitTest]),
+      changedFiles: [removed, source],
+      dependencyCruiser: async () => ({
+        modules: [
+          ...report.modules,
+          { source: removed, dependencies: [{ resolved: source }] },
+        ],
+      }),
+    });
+    expect(result.postgresTestFiles).toEqual([postgresTest]);
+    expect(result.postgresImpactReasons).toEqual(['direct_test', 'dependency']);
+  });
+
   it.each([
     {
       name: 'a direct spec',
@@ -419,6 +621,7 @@ describe('PostgreSQL guidance', () => {
         `${warning} Reason: dependency analysis failed for source or support changes.`,
       ]);
       expect(result.testFiles).not.toContain(postgresTest);
+      expect(result.excludedChangedFiles).toEqual([]);
     }
   );
 
@@ -489,6 +692,28 @@ describe('mirror path strategy', () => {
 });
 
 describe('dependency graph strategy', () => {
+  it('reports only intentional exclusions during a full-suite fallback with a successful graph', async () => {
+    const source = 'src/a.ts';
+    const missing = 'src/new.ts';
+    const unit = 'tests/unit/a.unit.spec.ts';
+    const result = await findAffectedTests({
+      cwd: makeTempCwd([source, missing, unit]),
+      changedFiles: ['vitest.config.ts', source, missing, 'README.md'],
+      allTestFiles: [unit],
+      dependencyCruiser: async () => ({
+        modules: [
+          { source },
+          { source: unit, dependencies: [{ resolved: source }] },
+        ],
+      }),
+    });
+    expect(result.runAll).toBe(true);
+    expect(result.excludedChangedFiles).toEqual(['README.md']);
+    expect(result.strategyAFiles).toEqual([unit]);
+    expect(result.strategyBFiles).toEqual([]);
+    expect(result.testFiles).toEqual([unit]);
+  });
+
   it('walks transitive importers until it reaches runnable tests', () => {
     const report: DependencyCruiserReport = {
       modules: [
@@ -577,6 +802,7 @@ describe('dependency graph strategy', () => {
     expect(result.runAllReason).toBe(
       'dependency-cruiser failed for test support changes'
     );
+    expect(result.excludedChangedFiles).toEqual([]);
     expect(result.testFiles).toEqual([
       'tests/browser/components/form.browser.spec.tsx',
       'tests/unit/a.unit.spec.ts',
