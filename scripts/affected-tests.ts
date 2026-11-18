@@ -10,13 +10,14 @@ import { resolveTrustedTool } from './trusted-tool';
 const DEPENDENCY_CRUISE_ROOT_CANDIDATES = ['src', 'tests', 'scripts'] as const;
 const GIT_COMMAND = 'git';
 const POSTGRES_CONFIG_FILE = 'vitest.postgres.config.ts';
+export const POSTGRES_SETUP_FILES = ['tests/setup.base.ts'] as const;
 const POSTGRES_CONFIG_FILES = new Set([
   POSTGRES_CONFIG_FILE,
   'tsconfig.json',
   'package.json',
   'pnpm-lock.yaml',
   'pnpm-workspace.yaml',
-  'tests/setup.base.ts',
+  ...POSTGRES_SETUP_FILES,
 ]);
 
 const GLOBAL_CONFIG_FILES = new Set([
@@ -103,6 +104,7 @@ export type GraphDiscoveryResult = {
 export type PostgresImpactReason =
   | 'direct_test'
   | 'configuration'
+  | 'migration'
   | 'dependency'
   | 'graph_unavailable';
 
@@ -439,9 +441,10 @@ export const filterExistingFiles = (filePaths: string[], cwd = process.cwd()) =>
     existsSync(path.join(cwd, filePath))
   );
 
-export const collectAllRunnableVitestTestFiles = (
-  cwd = process.cwd(),
-  root = 'tests'
+const collectTestFiles = (
+  cwd: string,
+  root: string,
+  matches: (file: string) => boolean
 ) => {
   const rootPath = path.join(cwd, root);
   if (!existsSync(rootPath)) return [];
@@ -455,7 +458,7 @@ export const collectAllRunnableVitestTestFiles = (
       const relativePath = `${relativeDirectory}/${entry.name}`;
       if (entry.isDirectory()) {
         visit(relativePath);
-      } else if (entry.isFile() && isRunnableVitestTestFile(relativePath)) {
+      } else if (entry.isFile() && matches(relativePath)) {
         testFiles.push(relativePath);
       }
     }
@@ -465,6 +468,11 @@ export const collectAllRunnableVitestTestFiles = (
 
   return deduplicateAndSort(testFiles);
 };
+
+export const collectAllRunnableVitestTestFiles = (
+  cwd = process.cwd(),
+  root = 'tests'
+) => collectTestFiles(cwd, root, isRunnableVitestTestFile);
 
 export const collectExistingCruiseRoots = (
   cwd = process.cwd(),
@@ -530,10 +538,20 @@ export const buildReverseDependencies = (report: DependencyCruiserReport) => {
 
 export const findRelatedTestsInGraph = (
   changedFiles: string[],
-  report: DependencyCruiserReport
+  report: DependencyCruiserReport,
+  postgresTestFiles = report.modules
+    .map((module) => normalizePath(module.source))
+    .filter(isPostgresTestFile)
 ): GraphDiscoveryResult => {
   const workspaceModules = collectWorkspaceModules(report);
   const reverseDependencies = buildReverseDependencies(report);
+  // Vitest loads setupFiles for each spec without a source-level import edge.
+  for (const setupFile of POSTGRES_SETUP_FILES) {
+    const importers = reverseDependencies.get(setupFile) ?? new Set<string>();
+    for (const spec of deduplicateAndSort(postgresTestFiles))
+      importers.add(spec);
+    reverseDependencies.set(setupFile, importers);
+  }
   const consideredSourceFiles = deduplicateAndSort(changedFiles).filter(
     (filePath) => workspaceModules.has(filePath)
   );
@@ -574,35 +592,54 @@ const isPostgresTestFile = (file: string) =>
   file.startsWith('tests/integration/') &&
   POSTGRES_INTEGRATION_TEST_PATTERN.test(file);
 
+const isMigrationInput = (file: string) =>
+  file.startsWith('drizzle/migrations/') &&
+  (file.endsWith('.sql') || file === 'drizzle/migrations/meta/_journal.json');
+
 const POSTGRES_WARNING =
   'PostgreSQL checks may be affected. Run pnpm test:integration:postgres to verify them.';
 
 const POSTGRES_REASON_DESCRIPTIONS = {
   direct_test: 'a PostgreSQL spec changed',
   configuration: 'PostgreSQL configuration changed',
+  migration: 'PostgreSQL migration inputs changed',
   dependency: 'changed code is used by PostgreSQL specs',
   graph_unavailable: 'dependency analysis failed for source or support changes',
 } satisfies Record<PostgresImpactReason, string>;
 
-const findPostgresImpact = (
-  changedFiles: string[],
-  graphTestFiles: string[],
-  graphUnavailable: boolean
-) => {
+const findPostgresImpact = ({
+  changedFiles,
+  graphTestFiles,
+  graphUnavailable,
+  getAllPostgresTests,
+  cwd,
+}: {
+  changedFiles: string[];
+  graphTestFiles: string[];
+  graphUnavailable: boolean;
+  getAllPostgresTests: () => string[];
+  cwd: string;
+}) => {
   const directTestFiles = changedFiles.filter(isPostgresTestFile);
+  const migrationChanged = changedFiles.some(isMigrationInput);
   const postgresImpactReasons: PostgresImpactReason[] = [];
   if (directTestFiles.length > 0) postgresImpactReasons.push('direct_test');
   if (changedFiles.some((file) => POSTGRES_CONFIG_FILES.has(file))) {
     postgresImpactReasons.push('configuration');
   }
+  if (migrationChanged) postgresImpactReasons.push('migration');
   if (graphTestFiles.length > 0) postgresImpactReasons.push('dependency');
   if (graphUnavailable) postgresImpactReasons.push('graph_unavailable');
 
   return {
-    postgresTestFiles: deduplicateAndSort([
-      ...directTestFiles,
-      ...graphTestFiles,
-    ]),
+    postgresTestFiles: filterExistingFiles(
+      [
+        ...directTestFiles,
+        ...graphTestFiles,
+        ...(migrationChanged ? getAllPostgresTests() : []),
+      ],
+      cwd
+    ),
     postgresImpactReasons,
     warnings:
       postgresImpactReasons.length > 0
@@ -627,10 +664,16 @@ export const findAffectedTests = async ({
   );
   const classified = classifyChangedFiles(normalizedChangedFiles);
   const injectedTestFiles = allTestFiles
-    ? deduplicateAndSort(allTestFiles).filter(isRunnableVitestTestFile)
+    ? deduplicateAndSort(allTestFiles)
     : undefined;
   const getAllRunnableTests = () =>
-    injectedTestFiles ?? collectAllRunnableVitestTestFiles(cwd);
+    injectedTestFiles?.filter(isRunnableVitestTestFile) ??
+    collectAllRunnableVitestTestFiles(cwd);
+  let allPostgresTests: string[] | undefined;
+  const getAllPostgresTests = () =>
+    (allPostgresTests ??= injectedTestFiles
+      ? filterExistingFiles(injectedTestFiles.filter(isPostgresTestFile), cwd)
+      : collectTestFiles(cwd, 'tests/integration', isPostgresTestFile));
   const warnings: string[] = [];
   const graphSeeds = deduplicateAndSort([
     ...classified.sourceFiles,
@@ -648,7 +691,11 @@ export const findAffectedTests = async ({
     try {
       const report = await dependencyCruiser(rootsCruised, cwd);
       workspaceModules = collectWorkspaceModules(report);
-      const graphResult = findRelatedTestsInGraph(graphSeeds, report);
+      const graphResult = findRelatedTestsInGraph(
+        graphSeeds,
+        report,
+        getAllPostgresTests()
+      );
       graphPostgresTestFiles = graphResult.postgresTestFiles;
       strategyAFiles = graphResult.testFiles;
       consideredSourceFiles = graphResult.consideredSourceFiles;
@@ -660,11 +707,13 @@ export const findAffectedTests = async ({
     }
   }
 
-  const postgresImpact = findPostgresImpact(
-    normalizedChangedFiles,
-    graphPostgresTestFiles,
-    dependencyCruiserFailed
-  );
+  const postgresImpact = findPostgresImpact({
+    changedFiles: normalizedChangedFiles,
+    graphTestFiles: graphPostgresTestFiles,
+    graphUnavailable: dependencyCruiserFailed,
+    getAllPostgresTests,
+    cwd,
+  });
   warnings.push(...postgresImpact.warnings);
   const runAllReason = classified.globalConfigChanged
     ? 'global config file changed'
@@ -681,7 +730,9 @@ export const findAffectedTests = async ({
   );
   const excludedChangedFiles = deduplicateAndSort([
     ...classified.excludedFiles,
-    ...graphSeedFilesMissingFromGraph,
+    ...(!runAll && !dependencyCruiserFailed
+      ? graphSeedFilesMissingFromGraph
+      : []),
   ]);
   const testFiles = runAll
     ? getAllRunnableTests()

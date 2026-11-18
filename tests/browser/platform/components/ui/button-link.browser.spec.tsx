@@ -11,7 +11,12 @@ import {
   ButtonLinkRouteChildren,
   ButtonLinkRouterProvider,
 } from '@tests/support/button-link-router';
-import { act, createRef, type ReactNode } from 'react';
+import {
+  act,
+  createRef,
+  type MouseEvent as ReactMouseEvent,
+  type ReactNode,
+} from 'react';
 import { afterEach, assert, expect, it, vi } from 'vitest';
 import { page, userEvent } from 'vitest/browser';
 import { render } from 'vitest-browser-react';
@@ -62,6 +67,36 @@ async function setupRouter(initialLocation = '/login') {
     </ButtonLinkRouterProvider>
   );
   return { router, wrapper };
+}
+
+async function setupBackNavigation(withHistory = true) {
+  const setup = await setupRouter('/manager/users/sample');
+  vi.stubGlobal('IS_REACT_ACT_ENVIRONMENT', true);
+  if (withHistory) await act(() => setup.router.navigate({ to: '/manager' }));
+  return setup;
+}
+
+function observeClick(anchor: HTMLAnchorElement, options: MouseEventInit) {
+  let preventedByComponent: boolean | undefined;
+  const observe = (event: Event) => {
+    preventedByComponent = event.defaultPrevented;
+    // Inspect router behavior without allowing the test to open a tab or leave its iframe.
+    event.preventDefault();
+  };
+  document.addEventListener('click', observe, { once: true });
+  try {
+    anchor.dispatchEvent(
+      new MouseEvent('click', {
+        bubbles: true,
+        cancelable: true,
+        button: 0,
+        ...options,
+      })
+    );
+  } finally {
+    document.removeEventListener('click', observe);
+  }
+  return preventedByComponent;
 }
 
 afterEach(() => {
@@ -221,24 +256,31 @@ it.each(['internal', 'untyped external'] as const)(
 
 it('preserves responsive styling and render children at desktop and mobile widths', async () => {
   const { wrapper } = await setupRouter('/manager');
-  await page.viewport(1100, 800);
-  const view = await render(
-    <ResponsiveIconButtonLink to="/manager" label="Manager" size="lg">
-      {({ isActive }) => <span>{String(isActive)}</span>}
-    </ResponsiveIconButtonLink>,
-    { wrapper }
-  );
-  const link = view.getByRole('link', { name: 'true Manager' });
-  await expect.element(link).toHaveClass('h-10');
-  await expect
-    .element(view.getByText('Manager', { exact: true }))
-    .not.toHaveClass('sr-only');
-  await page.viewport(390, 844);
-  await expect.element(link).toHaveClass('size-10');
-  await expect
-    .element(view.getByText('Manager', { exact: true }))
-    .toHaveClass('sr-only');
-  await page.viewport(1280, 720);
+  const initialViewport = {
+    width: window.innerWidth,
+    height: window.innerHeight,
+  };
+  try {
+    await page.viewport(1100, 800);
+    const view = await render(
+      <ResponsiveIconButtonLink to="/manager" label="Manager" size="lg">
+        {({ isActive }) => <span>{String(isActive)}</span>}
+      </ResponsiveIconButtonLink>,
+      { wrapper }
+    );
+    const link = view.getByRole('link', { name: 'true Manager' });
+    await expect.element(link).toHaveClass('h-10');
+    await expect
+      .element(view.getByText('Manager', { exact: true }))
+      .not.toHaveClass('sr-only');
+    await page.viewport(390, 844);
+    await expect.element(link).toHaveClass('size-10');
+    await expect
+      .element(view.getByText('Manager', { exact: true }))
+      .toHaveClass('sr-only');
+  } finally {
+    await page.viewport(initialViewport.width, initialViewport.height);
+  }
 });
 
 it('uses BackButton fallback and native history back', async () => {
@@ -258,6 +300,200 @@ it('uses BackButton fallback and native history back', async () => {
   await expect
     .poll(() => router.state.location.pathname)
     .toBe('/manager/users');
+});
+
+it('runs a consumer callback before going back in history', async () => {
+  const { router, wrapper } = await setupBackNavigation();
+  const order: string[] = [];
+  const consumer = vi.fn(() => {
+    order.push('consumer');
+  });
+  const originalBack = router.history.back.bind(router.history);
+  const back = vi
+    .spyOn(router.history, 'back')
+    .mockImplementation((options) => {
+      order.push('history');
+      return originalBack(options);
+    });
+  const navigate = vi.spyOn(router, 'navigate');
+  const view = await render(<BackButton onClick={consumer}>Back</BackButton>, {
+    wrapper,
+  });
+  await view.getByRole('link', { name: 'Back' }).click();
+  expect(order).toEqual(['consumer', 'history']);
+  expect(consumer).toHaveBeenCalledTimes(1);
+  expect(back).toHaveBeenCalledExactlyOnceWith({ ignoreBlocker: undefined });
+  expect(navigate).not.toHaveBeenCalled();
+  await expect
+    .poll(() => router.state.location.pathname)
+    .toBe('/manager/users/sample');
+});
+
+it.each([
+  { name: 'absent', props: {} },
+  { name: 'explicitly undefined', props: { onClick: undefined } },
+])('goes back when the consumer callback is $name', async ({ props }) => {
+  const { router, wrapper } = await setupBackNavigation();
+  const back = vi.spyOn(router.history, 'back');
+  const navigate = vi.spyOn(router, 'navigate');
+  const view = await render(<BackButton {...props}>Back</BackButton>, {
+    wrapper,
+  });
+  await view.getByRole('link', { name: 'Back' }).click();
+  expect(back).toHaveBeenCalledTimes(1);
+  expect(navigate).not.toHaveBeenCalled();
+  await expect
+    .poll(() => router.state.location.pathname)
+    .toBe('/manager/users/sample');
+});
+
+it.each([false, true])(
+  'lets the consumer cancel navigation with history available: %s',
+  async (withHistory) => {
+    const { router, wrapper } = await setupBackNavigation(withHistory);
+    const originalLocation = router.state.location;
+    const cancel = vi.fn((event: ReactMouseEvent<HTMLAnchorElement>) =>
+      event.preventDefault()
+    );
+    const back = vi.spyOn(router.history, 'back');
+    const navigate = vi.spyOn(router, 'navigate');
+    const view = await render(<BackButton onClick={cancel}>Back</BackButton>, {
+      wrapper,
+    });
+    await view.getByRole('link', { name: 'Back' }).click();
+    expect(cancel).toHaveBeenCalledTimes(1);
+    expect(back).not.toHaveBeenCalled();
+    expect(navigate).not.toHaveBeenCalled();
+    expect(router.state.location).toBe(originalLocation);
+  }
+);
+
+it('runs the consumer before native fallback navigation when no history is available', async () => {
+  const { router, wrapper } = await setupBackNavigation(false);
+  const order: string[] = [];
+  const consumer = vi.fn(() => {
+    order.push('consumer');
+  });
+  const originalNavigate = router.navigate.bind(router);
+  const navigate = vi
+    .spyOn(router, 'navigate')
+    .mockImplementation((options) => {
+      order.push('fallback');
+      return originalNavigate(options);
+    });
+  const back = vi.spyOn(router.history, 'back');
+  const view = await render(<BackButton onClick={consumer}>Back</BackButton>, {
+    wrapper,
+  });
+  await view.getByRole('link', { name: 'Back' }).click();
+  expect(order).toEqual(['consumer', 'fallback']);
+  expect(back).not.toHaveBeenCalled();
+  expect(navigate).toHaveBeenCalledTimes(1);
+  await expect
+    .poll(() => router.state.location.pathname)
+    .toBe('/manager/users');
+});
+
+it.each([
+  { name: 'Control', options: { ctrlKey: true }, consumerCalls: 1 },
+  { name: 'Meta', options: { metaKey: true }, consumerCalls: 1 },
+  { name: 'Shift', options: { shiftKey: true }, consumerCalls: 1 },
+  { name: 'Alt', options: { altKey: true }, consumerCalls: 1 },
+  { name: 'middle button', options: { button: 1 }, consumerCalls: 1 },
+  // React suppresses right-button click events before they reach onClick.
+  { name: 'secondary button', options: { button: 2 }, consumerCalls: 0 },
+])(
+  'leaves $name clicks to the fallback URL without intercepting them',
+  async ({ options, consumerCalls }) => {
+    const { router, wrapper } = await setupBackNavigation();
+    const consumer = vi.fn();
+    const back = vi.spyOn(router.history, 'back');
+    const navigate = vi.spyOn(router, 'navigate');
+    const ref = createRef<HTMLAnchorElement>();
+    await render(
+      <BackButton ref={ref} onClick={consumer}>
+        Back
+      </BackButton>,
+      { wrapper }
+    );
+    assert(ref.current);
+    expect(ref.current.getAttribute('href')).toBe('/');
+    expect(observeClick(ref.current, options)).toBe(false);
+    expect(consumer).toHaveBeenCalledTimes(consumerCalls);
+    expect(back).not.toHaveBeenCalled();
+    expect(navigate).not.toHaveBeenCalled();
+    expect(router.state.location.pathname).toBe('/manager');
+  }
+);
+
+it.each(['_blank', '_parent', '_top', 'named-window'])(
+  'leaves target=%s to native fallback navigation',
+  async (target) => {
+    const { router, wrapper } = await setupBackNavigation();
+    const back = vi.spyOn(router.history, 'back');
+    const navigate = vi.spyOn(router, 'navigate');
+    const ref = createRef<HTMLAnchorElement>();
+    await render(
+      <BackButton ref={ref} target={target}>
+        Back
+      </BackButton>,
+      { wrapper }
+    );
+    assert(ref.current);
+    expect(ref.current.getAttribute('target')).toBe(target);
+    expect(ref.current.getAttribute('href')).toBe('/');
+    expect(observeClick(ref.current, {})).toBe(false);
+    expect(back).not.toHaveBeenCalled();
+    expect(navigate).not.toHaveBeenCalled();
+    expect(router.state.location.pathname).toBe('/manager');
+  }
+);
+
+it('retains history back for an explicit _self target', async () => {
+  const { router, wrapper } = await setupBackNavigation();
+  const back = vi.spyOn(router.history, 'back');
+  const view = await render(<BackButton target="_self">Back</BackButton>, {
+    wrapper,
+  });
+  await view.getByRole('link', { name: 'Back' }).click();
+  expect(back).toHaveBeenCalledTimes(1);
+  await expect
+    .poll(() => router.state.location.pathname)
+    .toBe('/manager/users/sample');
+});
+
+it('uses the rendered target when no target prop is supplied', async () => {
+  const { router, wrapper } = await setupBackNavigation();
+  const back = vi.spyOn(router.history, 'back');
+  const navigate = vi.spyOn(router, 'navigate');
+  const ref = createRef<HTMLAnchorElement>();
+  await render(<BackButton ref={ref}>Back</BackButton>, { wrapper });
+  assert(ref.current);
+  ref.current.setAttribute('target', '_blank');
+  expect(observeClick(ref.current, {})).toBe(false);
+  expect(back).not.toHaveBeenCalled();
+  expect(navigate).not.toHaveBeenCalled();
+});
+
+it('keeps the explicit target precedence used by native Link', async () => {
+  const { router, wrapper } = await setupBackNavigation();
+  const back = vi.spyOn(router.history, 'back');
+  const view = await render(
+    <BackButton
+      target="_self"
+      onClick={(event) => {
+        event.currentTarget.setAttribute('target', '_blank');
+      }}
+    >
+      Back
+    </BackButton>,
+    { wrapper }
+  );
+  await view.getByRole('link', { name: 'Back' }).click();
+  expect(back).toHaveBeenCalledTimes(1);
+  await expect
+    .poll(() => router.state.location.pathname)
+    .toBe('/manager/users/sample');
 });
 
 it('navigates and preloads a safe masked relative destination', async () => {
