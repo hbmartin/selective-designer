@@ -46,6 +46,8 @@ const makeResult = (
   dependencyCruiserFailed: false,
   directTestFiles: [],
   excludedChangedFiles: [],
+  postgresTestFiles: [],
+  postgresImpactReasons: [],
   rootsCruised: [],
   runAll: false,
   strategyAFiles: [],
@@ -215,6 +217,7 @@ describe('global config fallback', () => {
       'tests/browser/a.browser.spec.tsx',
       'tests/unit/a.unit.spec.ts',
     ]);
+    expect(result.warnings).toEqual([]);
     expect(dependencyCruiser).not.toHaveBeenCalled();
   });
 
@@ -234,7 +237,7 @@ describe('global config fallback', () => {
     expect(result.excludedChangedFiles).toEqual([config]);
     expect(result.testFiles).toEqual([]);
     expect(result.warnings).toEqual([
-      'PostgreSQL checks may be affected. Run pnpm test:integration:postgres to verify them.',
+      'PostgreSQL checks may be affected. Run pnpm test:integration:postgres to verify them. Reason: PostgreSQL configuration changed.',
     ]);
     expect(
       JSON.parse(
@@ -266,21 +269,38 @@ describe('PostgreSQL guidance', () => {
   };
 
   it.each([
-    { name: 'a direct spec', changes: [postgresTest], tests: [] },
-    { name: 'a transitive source', changes: [source], tests: [unitTest] },
+    {
+      name: 'a direct spec',
+      changes: [postgresTest],
+      tests: [],
+      reasons: ['direct_test'],
+      detail: 'a PostgreSQL spec changed',
+    },
+    {
+      name: 'a transitive source',
+      changes: [source],
+      tests: [unitTest],
+      reasons: ['dependency'],
+      detail: 'changed code is used by PostgreSQL specs',
+    },
     {
       name: 'mixed config, spec, and source changes',
       changes: ['vitest.postgres.config.ts', postgresTest, source],
       tests: [unitTest],
+      reasons: ['direct_test', 'configuration', 'dependency'],
+      detail:
+        'a PostgreSQL spec changed; PostgreSQL configuration changed; changed code is used by PostgreSQL specs',
     },
     {
-      name: 'a shared config fallback',
+      name: 'an ordinary config mixed with a related source',
       changes: ['vitest.config.ts', source],
       tests: [unitTest],
+      reasons: ['dependency'],
+      detail: 'changed code is used by PostgreSQL specs',
     },
   ])(
     'warns once for $name while selecting only ordinary tests',
-    async ({ changes, tests }) => {
+    async ({ changes, tests, reasons, detail }) => {
       const cwd = makeTempCwd([source, unitTest, postgresTest]);
       const result = await findAffectedTests({
         changedFiles: changes,
@@ -289,7 +309,10 @@ describe('PostgreSQL guidance', () => {
         dependencyCruiser: async () => report,
       });
       expect(result.testFiles).toEqual(tests);
-      expect(result.warnings).toEqual([warning]);
+      const expectedWarning = `${warning} Reason: ${detail}.`;
+      expect(result.warnings).toEqual([expectedWarning]);
+      expect(result.postgresTestFiles).toEqual([postgresTest]);
+      expect(result.postgresImpactReasons).toEqual(reasons);
       const stdout: string[] = [];
       const stderr: string[] = [];
       const dependencies = {
@@ -298,11 +321,15 @@ describe('PostgreSQL guidance', () => {
         stderr: (message: string) => stderr.push(message),
       };
       expect(await main([], dependencies)).toBe(0);
-      expect(stderr).toEqual([`${warning}\n`]);
+      expect(stderr).toEqual([`${expectedWarning}\n`]);
       stdout.length = 0;
       stderr.length = 0;
       expect(await main(['--json'], dependencies)).toBe(0);
-      expect(JSON.parse(stdout.join('')).warnings).toEqual([warning]);
+      expect(JSON.parse(stdout.join(''))).toMatchObject({
+        warnings: [expectedWarning],
+        postgresTestFiles: [postgresTest],
+        postgresImpactReasons: reasons,
+      });
       expect(stderr).toEqual([]);
     }
   );
@@ -317,8 +344,12 @@ describe('PostgreSQL guidance', () => {
       cwd: makeTempCwd([source, postgresTest, unitTest]),
       dependencyCruiser: async () => report,
     });
-    expect(result.warnings).toEqual([warning]);
+    expect(result.warnings).toEqual([
+      `${warning} Reason: a PostgreSQL spec changed; changed code is used by PostgreSQL specs.`,
+    ]);
     expect(result.testFiles).toEqual([unitTest]);
+    expect(result.postgresTestFiles).toEqual([postgresTest]);
+    expect(result.postgresImpactReasons).toEqual(['direct_test', 'dependency']);
   });
 
   it('does not warn when changed sources have no PostgreSQL importers', async () => {
@@ -332,6 +363,91 @@ describe('PostgreSQL guidance', () => {
       }),
     });
     expect(result.warnings).toEqual([]);
+  });
+
+  it.each([
+    'vitest.config.ts',
+    'tests/setup.browser.ts',
+    'tests/server/test-setup.ts',
+    'tests/server/pglite-global-setup.ts',
+  ])('does not warn for ordinary-only configuration %s', async (config) => {
+    const result = await findAffectedTests({
+      changedFiles: [config],
+      allTestFiles: [unitTest],
+    });
+    expect(result.warnings).toEqual([]);
+    expect(result.postgresImpactReasons).toEqual([]);
+    expect(result.postgresTestFiles).toEqual([]);
+    expect(result.runAll).toBe(true);
+  });
+
+  it.each([
+    'vitest.postgres.config.ts',
+    'tests/setup.base.ts',
+    'tsconfig.json',
+    'package.json',
+    'pnpm-lock.yaml',
+    'pnpm-workspace.yaml',
+  ])('warns for PostgreSQL configuration %s', async (config) => {
+    const result = await findAffectedTests({
+      changedFiles: [config],
+      allTestFiles: [unitTest, postgresTest],
+    });
+    expect(result.warnings).toEqual([
+      `${warning} Reason: PostgreSQL configuration changed.`,
+    ]);
+    expect(result.postgresImpactReasons).toEqual(['configuration']);
+    expect(result.testFiles).not.toContain(postgresTest);
+  });
+
+  it.each([[source], ['vitest.config.ts', source]])(
+    'warns conservatively when graph discovery fails for %j',
+    async (...changes) => {
+      const result = await findAffectedTests({
+        changedFiles: changes,
+        cwd: makeTempCwd([source, unitTest, postgresTest]),
+        allTestFiles: [unitTest, postgresTest],
+        dependencyCruiser: async () => {
+          throw new Error('unavailable');
+        },
+      });
+      expect(result.dependencyCruiserFailed).toBe(true);
+      expect(result.postgresTestFiles).toEqual([]);
+      expect(result.postgresImpactReasons).toEqual(['graph_unavailable']);
+      expect(result.warnings).toEqual([
+        'Warning: dependency-cruiser failed; dependency-based test discovery is unavailable.',
+        `${warning} Reason: dependency analysis failed for source or support changes.`,
+      ]);
+      expect(result.testFiles).not.toContain(postgresTest);
+    }
+  );
+
+  it('reports known PostgreSQL specs and reasons in summary and verbose output', async () => {
+    const result = await findAffectedTests({
+      changedFiles: [source],
+      cwd: makeTempCwd([source, unitTest, postgresTest]),
+      dependencyCruiser: async () => report,
+    });
+    const summary = formatOutput(result, {
+      json: false,
+      summary: true,
+      verbose: false,
+    });
+    expect(summary).toContain(`PostgreSQL spec paths:\n  ${postgresTest}`);
+    expect(summary).toContain(
+      'PostgreSQL impact: changed code is used by PostgreSQL specs'
+    );
+    const verbose = formatOutput(result, {
+      json: false,
+      summary: false,
+      verbose: true,
+    });
+    expect(verbose).toContain(
+      `# PostgreSQL specs - dedicated command (1):\n#   ${postgresTest}`
+    );
+    expect(verbose).toContain(
+      '# PostgreSQL impact reasons (1):\n#   changed code is used by PostgreSQL specs'
+    );
   });
 });
 
@@ -466,8 +582,8 @@ describe('dependency graph strategy', () => {
       'tests/unit/a.unit.spec.ts',
     ]);
     expect(result.warnings).toEqual([
-      'Warning: dependency-cruiser failed, continuing with mirror-path strategy only',
-      'PostgreSQL checks may be affected. Run pnpm test:integration:postgres to verify them.',
+      'Warning: dependency-cruiser failed; dependency-based test discovery is unavailable.',
+      'PostgreSQL checks may be affected. Run pnpm test:integration:postgres to verify them. Reason: dependency analysis failed for source or support changes.',
     ]);
   });
 });

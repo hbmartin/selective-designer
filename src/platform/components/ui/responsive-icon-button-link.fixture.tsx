@@ -1,9 +1,8 @@
+import { ButtonLinkFixtureRouter } from '@tests/support/button-link-router';
 import { PlusIcon } from 'lucide-react';
 import { type ReactNode } from 'react';
 
 import { ResponsiveIconButtonLink } from '@/platform/components/ui/responsive-icon-button-link';
-
-import { ButtonLinkFixtureRouter } from './button-link-fixture-router';
 
 function Default() {
   return (

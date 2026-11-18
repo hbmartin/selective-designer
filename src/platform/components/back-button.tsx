@@ -1,32 +1,43 @@
+import type { AnyRouter, RegisteredRouter } from '@tanstack/react-router';
 import { ArrowLeftIcon } from 'lucide-react';
-import { ComponentProps } from 'react';
+import type { MouseEvent } from 'react';
 import { useTranslation } from 'react-i18next';
 
 import { useNavigateBack } from '@/platform/hooks/use-navigate-back';
 
-import { ButtonLink } from '@/platform/components/ui/button-link';
+import {
+  ButtonLink,
+  type ButtonLinkProps,
+} from '@/platform/components/ui/button-link';
 
-export const BackButton = ({
+export const BackButton = <
+  TRouter extends AnyRouter = RegisteredRouter,
+  const TFrom extends string = string,
+  const TTo extends string | undefined = '..',
+  const TMaskFrom extends string = TFrom,
+  const TMaskTo extends string = '',
+>({
   children,
-  to = '..',
   ...props
-}: ComponentProps<typeof ButtonLink>) => {
+}: ButtonLinkProps<TRouter, TFrom, TTo, TMaskFrom, TMaskTo>) => {
   const { t } = useTranslation(['components']);
   const { canGoBack, navigateBack } = useNavigateBack();
+  // Preserve the inferred destination contract when supplying the default.
+  const linkProps = {
+    variant: 'ghost',
+    size: 'icon-sm',
+    onClick: (event: MouseEvent<HTMLAnchorElement>) => {
+      if (canGoBack) {
+        event.preventDefault();
+        navigateBack();
+      }
+    },
+    ...props,
+    to: props.to ?? '..',
+  } as ButtonLinkProps<TRouter, TFrom, TTo, TMaskFrom, TMaskTo>;
 
   return (
-    <ButtonLink
-      variant="ghost"
-      size="icon-sm"
-      onClick={(e) => {
-        if (canGoBack) {
-          e.preventDefault();
-          navigateBack();
-        }
-      }}
-      to={to}
-      {...props}
-    >
+    <ButtonLink<TRouter, TFrom, TTo, TMaskFrom, TMaskTo> {...linkProps}>
       {children ?? (
         <>
           <ArrowLeftIcon className="rtl:rotate-180" />
