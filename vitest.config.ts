@@ -1,4 +1,5 @@
-import react from '@vitejs/plugin-react';
+import babel from '@rolldown/plugin-babel';
+import react, { reactCompilerPreset } from '@vitejs/plugin-react';
 import { playwright } from '@vitest/browser-playwright';
 import path from 'node:path';
 import { coverageConfigDefaults, defineConfig } from 'vitest/config';
@@ -36,6 +37,12 @@ export default defineConfig({
     },
     projects: [
       {
+        plugins: [
+          babel({
+            include: /[/\\]src[/\\]platform[/\\]router[/\\]bridge-link\.tsx$/,
+            presets: [reactCompilerPreset()],
+          }),
+        ],
         optimizeDeps: {
           include: [
             '@base-ui/react/merge-props',

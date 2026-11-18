@@ -241,6 +241,18 @@ describe('global config fallback', () => {
     expect(result.runAll).toBe(false);
     expect(result.excludedChangedFiles).toEqual([config]);
     expect(result.testFiles).toEqual([]);
+    expect(result.warnings).toEqual([
+      'PostgreSQL test config changed. Run pnpm test:integration:postgres to verify it.',
+    ]);
+    expect(
+      JSON.parse(
+        formatOutput(result, {
+          json: true,
+          summary: false,
+          verbose: false,
+        })
+      ).warnings
+    ).toEqual(result.warnings);
     expect(dependencyCruiser).not.toHaveBeenCalled();
   });
 });

@@ -165,14 +165,14 @@ export function verifyBackButtonCompiler(backButtonFile: string): Plugin {
     escape(value: string): string;
   };
   const exactId = new RegExp(`^${nodeRegExp.escape(file)}$`);
-  let hasCache = false;
+  let hasCache: boolean | undefined;
   return {
     name: 'selective-designer:verify-back-button-compiler',
     apply: 'build',
     applyToEnvironment: ({ config }) => config.consumer === 'client',
     enforce: 'post',
     buildStart() {
-      hasCache = false;
+      hasCache = undefined;
     },
     transform: {
       filter: { id: exactId },
@@ -189,6 +189,11 @@ export function verifyBackButtonCompiler(backButtonFile: string): Plugin {
       );
       if (!rendered) {
         this.error('BackButton was not rendered in a client chunk.');
+      }
+      if (hasCache === undefined) {
+        this.error(
+          'The React Compiler verifier did not receive the BackButton transform.'
+        );
       }
       if (!hasCache) {
         this.error(
