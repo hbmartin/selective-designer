@@ -1,41 +1,47 @@
 import { cruise } from 'dependency-cruiser';
 import extractDepcruiseOptions from 'dependency-cruiser/config-utl/extract-depcruise-options';
 import { spawn, spawnSync } from 'node:child_process';
-import { existsSync, readdirSync } from 'node:fs';
+import fs, { existsSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import picomatch from 'picomatch';
+import { mapValues } from 'remeda';
 
 import { resolveTrustedTool } from './trusted-tool';
+import { type TestProjectId, vitestProjects } from './vitest-projects';
 
 const DEPENDENCY_CRUISE_ROOT_CANDIDATES = ['src', 'tests', 'scripts'] as const;
 const GIT_COMMAND = 'git';
 const POSTGRES_CONFIG_FILE = 'vitest.postgres.config.ts';
-export const POSTGRES_SETUP_FILES = ['tests/setup.base.ts'] as const;
+const PROJECT_CATALOG_FILE = 'scripts/vitest-projects.ts';
 const POSTGRES_CONFIG_FILES = new Set([
   POSTGRES_CONFIG_FILE,
+  PROJECT_CATALOG_FILE,
   'tsconfig.json',
   'package.json',
   'pnpm-lock.yaml',
   'pnpm-workspace.yaml',
-  ...POSTGRES_SETUP_FILES,
+  ...vitestProjects.postgres.setupFiles,
+  ...vitestProjects.postgres.globalSetup,
 ]);
 
 const GLOBAL_CONFIG_FILES = new Set([
   'vitest.config.ts',
+  PROJECT_CATALOG_FILE,
   'tsconfig.json',
   'package.json',
   'pnpm-lock.yaml',
   'pnpm-workspace.yaml',
-  'tests/setup.base.ts',
-  'tests/setup.browser.ts',
-  'tests/server/test-setup.ts',
-  'tests/server/pglite-global-setup.ts',
+  ...Object.values(vitestProjects)
+    .filter((project) => project.execution === 'ordinary')
+    .flatMap((project) => [...project.setupFiles, ...project.globalSetup]),
 ]);
 
-const RUNNABLE_TEST_FILE_PATTERN =
-  /^tests\/(?:unit|browser|integration|architecture|security)\/.*\.(?:test|spec)\.[cm]?[jt]sx?$/;
-const POSTGRES_INTEGRATION_TEST_PATTERN =
-  /\.postgres\.integration\.test\.[cm]?[jt]sx?$/;
+const projectMatchers = mapValues(vitestProjects, (project) => {
+  const include = picomatch(project.include, { dot: true });
+  const exclude = picomatch(project.exclude, { dot: true });
+  return (file: string) => include(file) && !exclude(file);
+});
 const SOURCE_FILE_PATTERN = /^(?:src|scripts)\/.*\.[cm]?[jt]sx?$/;
 const DECLARATION_FILE_PATTERN = /\.d\.[cm]?ts$/;
 const TEST_SUPPORT_PATTERN = /^tests\/(?:support|mocks|server)\//;
@@ -114,6 +120,8 @@ export type AffectedTestsResult = {
   dependencyCruiserFailed: boolean;
   directTestFiles: string[];
   excludedChangedFiles: string[];
+  migrationTestFiles: string[];
+  unresolvedGraphFiles: string[];
   postgresTestFiles: string[];
   postgresImpactReasons: PostgresImpactReason[];
   rootsCruised: string[];
@@ -126,7 +134,9 @@ export type AffectedTestsResult = {
 };
 
 export type FindAffectedTestsOptions = {
+  // Inventory overrides expand suites; direct/graph evidence remains additive.
   allTestFiles?: string[];
+  allPostgresTestFiles?: string[];
   base?: string;
   changedFiles?: string[];
   cwd?: string;
@@ -285,9 +295,10 @@ export const collectChangedFilesFromGit = ({
 
 export const isRunnableVitestTestFile = (filePath: string) => {
   const normalized = normalizePath(filePath);
-  return (
-    RUNNABLE_TEST_FILE_PATTERN.test(normalized) &&
-    !POSTGRES_INTEGRATION_TEST_PATTERN.test(normalized)
+  return Object.entries(vitestProjects).some(
+    ([id, project]) =>
+      project.execution === 'ordinary' &&
+      projectMatchers[id as TestProjectId](normalized)
   );
 };
 
@@ -332,6 +343,13 @@ export const classifyChangedFiles = (
       classified.sourceFiles.push(filePath);
     } else if (isTestSupportFile(filePath)) {
       classified.testSupportFiles.push(filePath);
+    } else if (
+      isPostgresTestFile(filePath) ||
+      isMigrationInput(filePath) ||
+      POSTGRES_CONFIG_FILES.has(filePath)
+    ) {
+      // Dedicated-suite inputs are handled separately from ordinary execution.
+      continue;
     } else {
       classified.excludedFiles.push(filePath);
     }
@@ -452,7 +470,7 @@ const collectTestFiles = (
   const testFiles: string[] = [];
   const visit = (relativeDirectory: string) => {
     const absoluteDirectory = path.join(cwd, relativeDirectory);
-    for (const entry of readdirSync(absoluteDirectory, {
+    for (const entry of fs.readdirSync(absoluteDirectory, {
       withFileTypes: true,
     })) {
       const relativePath = `${relativeDirectory}/${entry.name}`;
@@ -539,18 +557,22 @@ export const buildReverseDependencies = (report: DependencyCruiserReport) => {
 export const findRelatedTestsInGraph = (
   changedFiles: string[],
   report: DependencyCruiserReport,
-  postgresTestFiles = report.modules
-    .map((module) => normalizePath(module.source))
-    .filter(isPostgresTestFile)
+  testFiles: string[] = []
 ): GraphDiscoveryResult => {
   const workspaceModules = collectWorkspaceModules(report);
   const reverseDependencies = buildReverseDependencies(report);
-  // Vitest loads setupFiles for each spec without a source-level import edge.
-  for (const setupFile of POSTGRES_SETUP_FILES) {
-    const importers = reverseDependencies.get(setupFile) ?? new Set<string>();
-    for (const spec of deduplicateAndSort(postgresTestFiles))
-      importers.add(spec);
-    reverseDependencies.set(setupFile, importers);
+  const candidates = deduplicateAndSort([
+    ...report.modules.map((module) => module.source),
+    ...testFiles,
+  ]);
+  // Vitest loads setup/globalSetup without source-level imports from each spec.
+  for (const [id, project] of Object.entries(vitestProjects)) {
+    const specs = candidates.filter(projectMatchers[id as TestProjectId]);
+    for (const setupFile of [...project.setupFiles, ...project.globalSetup]) {
+      const importers = reverseDependencies.get(setupFile) ?? new Set<string>();
+      for (const spec of specs) importers.add(spec);
+      reverseDependencies.set(setupFile, importers);
+    }
   }
   const consideredSourceFiles = deduplicateAndSort(changedFiles).filter(
     (filePath) => workspaceModules.has(filePath)
@@ -586,15 +608,19 @@ export const findRelatedTestsInGraph = (
 };
 
 export const runStrategyB = (sourceFiles: string[], cwd = process.cwd()) =>
-  filterExistingFiles(computeMirrorTestPaths(sourceFiles), cwd);
+  filterExistingFiles(
+    computeMirrorTestPaths(sourceFiles).filter(isRunnableVitestTestFile),
+    cwd
+  );
 
 const isPostgresTestFile = (file: string) =>
-  file.startsWith('tests/integration/') &&
-  POSTGRES_INTEGRATION_TEST_PATTERN.test(file);
+  projectMatchers.postgres(normalizePath(file));
+
+const isMigrationSql = (file: string) =>
+  /^drizzle\/migrations\/[^/]+\.sql$/.test(file);
 
 const isMigrationInput = (file: string) =>
-  file.startsWith('drizzle/migrations/') &&
-  (file.endsWith('.sql') || file === 'drizzle/migrations/meta/_journal.json');
+  isMigrationSql(file) || file === 'drizzle/migrations/meta/_journal.json';
 
 const POSTGRES_WARNING =
   'PostgreSQL checks may be affected. Run pnpm test:integration:postgres to verify them.';
@@ -622,9 +648,12 @@ const findPostgresImpact = ({
 }) => {
   const directTestFiles = changedFiles.filter(isPostgresTestFile);
   const migrationChanged = changedFiles.some(isMigrationInput);
+  const configurationChanged = changedFiles.some((file) =>
+    POSTGRES_CONFIG_FILES.has(file)
+  );
   const postgresImpactReasons: PostgresImpactReason[] = [];
   if (directTestFiles.length > 0) postgresImpactReasons.push('direct_test');
-  if (changedFiles.some((file) => POSTGRES_CONFIG_FILES.has(file))) {
+  if (configurationChanged) {
     postgresImpactReasons.push('configuration');
   }
   if (migrationChanged) postgresImpactReasons.push('migration');
@@ -636,7 +665,9 @@ const findPostgresImpact = ({
       [
         ...directTestFiles,
         ...graphTestFiles,
-        ...(migrationChanged ? getAllPostgresTests() : []),
+        ...(migrationChanged || configurationChanged || graphUnavailable
+          ? getAllPostgresTests()
+          : []),
       ],
       cwd
     ),
@@ -654,6 +685,7 @@ const findPostgresImpact = ({
 
 export const findAffectedTests = async ({
   allTestFiles,
+  allPostgresTestFiles,
   base,
   changedFiles,
   cwd = process.cwd(),
@@ -666,14 +698,13 @@ export const findAffectedTests = async ({
   const injectedTestFiles = allTestFiles
     ? deduplicateAndSort(allTestFiles)
     : undefined;
+  let inventory: string[] | undefined;
+  const getInventory = () =>
+    (inventory ??= collectTestFiles(cwd, 'tests', (file) =>
+      Object.values(projectMatchers).some((matches) => matches(file))
+    ));
   const getAllRunnableTests = () =>
-    injectedTestFiles?.filter(isRunnableVitestTestFile) ??
-    collectAllRunnableVitestTestFiles(cwd);
-  let allPostgresTests: string[] | undefined;
-  const getAllPostgresTests = () =>
-    (allPostgresTests ??= injectedTestFiles
-      ? filterExistingFiles(injectedTestFiles.filter(isPostgresTestFile), cwd)
-      : collectTestFiles(cwd, 'tests/integration', isPostgresTestFile));
+    (injectedTestFiles ?? getInventory()).filter(isRunnableVitestTestFile);
   const warnings: string[] = [];
   const graphSeeds = deduplicateAndSort([
     ...classified.sourceFiles,
@@ -686,19 +717,11 @@ export const findAffectedTests = async ({
   let graphPostgresTestFiles: string[] = [];
   let consideredSourceFiles: string[] = [];
   let workspaceModules = new Set<string>();
+  let report: DependencyCruiserReport | undefined;
 
   if (rootsCruised.length > 0 && graphSeeds.length > 0) {
     try {
-      const report = await dependencyCruiser(rootsCruised, cwd);
-      workspaceModules = collectWorkspaceModules(report);
-      const graphResult = findRelatedTestsInGraph(
-        graphSeeds,
-        report,
-        getAllPostgresTests()
-      );
-      graphPostgresTestFiles = graphResult.postgresTestFiles;
-      strategyAFiles = graphResult.testFiles;
-      consideredSourceFiles = graphResult.consideredSourceFiles;
+      report = await dependencyCruiser(rootsCruised, cwd);
     } catch {
       dependencyCruiserFailed = true;
       warnings.push(
@@ -706,6 +729,31 @@ export const findAffectedTests = async ({
       );
     }
   }
+
+  const graphTestInventory =
+    report?.modules.map((module) => module.source) ?? [];
+  if (report) {
+    workspaceModules = collectWorkspaceModules(report);
+    const graphResult = findRelatedTestsInGraph(graphSeeds, report, [
+      ...(injectedTestFiles ?? []),
+      ...(allPostgresTestFiles ?? []),
+    ]);
+    graphPostgresTestFiles = filterExistingFiles(
+      graphResult.postgresTestFiles,
+      cwd
+    );
+    strategyAFiles = filterExistingFiles(graphResult.testFiles, cwd);
+    consideredSourceFiles = graphResult.consideredSourceFiles;
+  }
+  const getAllPostgresTests = () =>
+    filterExistingFiles(
+      [
+        ...(allPostgresTestFiles ?? getInventory()),
+        ...(injectedTestFiles ?? []),
+        ...graphTestInventory,
+      ].filter(isPostgresTestFile),
+      cwd
+    );
 
   const postgresImpact = findPostgresImpact({
     changedFiles: normalizedChangedFiles,
@@ -717,27 +765,38 @@ export const findAffectedTests = async ({
   warnings.push(...postgresImpact.warnings);
   const runAllReason = classified.globalConfigChanged
     ? 'global config file changed'
-    : dependencyCruiserFailed && classified.testSupportFiles.length > 0
-      ? 'dependency-cruiser failed for test support changes'
+    : dependencyCruiserFailed
+      ? 'dependency-cruiser failed for source or support changes'
       : undefined;
   const runAll = runAllReason !== undefined;
   const strategyBFiles = runAll
     ? []
     : runStrategyB(classified.sourceFiles, cwd);
   const directTestFiles = filterExistingFiles(classified.directTestFiles, cwd);
-  const graphSeedFilesMissingFromGraph = graphSeeds.filter(
-    (filePath) => !workspaceModules.has(filePath)
-  );
-  const excludedChangedFiles = deduplicateAndSort([
-    ...classified.excludedFiles,
-    ...(!runAll && !dependencyCruiserFailed
-      ? graphSeedFilesMissingFromGraph
-      : []),
-  ]);
+  const unresolvedGraphFiles = report
+    ? graphSeeds.filter((filePath) => !workspaceModules.has(filePath))
+    : [];
+  const migrationTestFiles = normalizedChangedFiles.some(isMigrationSql)
+    ? filterExistingFiles(
+        getAllRunnableTests().filter(projectMatchers.integration),
+        cwd
+      )
+    : [];
+  const excludedChangedFiles = classified.excludedFiles;
   const testFiles = runAll
-    ? getAllRunnableTests()
+    ? deduplicateAndSort([
+        ...getAllRunnableTests(),
+        ...directTestFiles,
+        ...strategyAFiles,
+        ...migrationTestFiles,
+      ])
     : filterExistingFiles(
-        [...directTestFiles, ...strategyAFiles, ...strategyBFiles],
+        [
+          ...directTestFiles,
+          ...strategyAFiles,
+          ...strategyBFiles,
+          ...migrationTestFiles,
+        ],
         cwd
       );
 
@@ -747,6 +806,8 @@ export const findAffectedTests = async ({
     dependencyCruiserFailed,
     directTestFiles,
     excludedChangedFiles,
+    migrationTestFiles,
+    unresolvedGraphFiles,
     postgresTestFiles: postgresImpact.postgresTestFiles,
     postgresImpactReasons: postgresImpact.postgresImpactReasons,
     rootsCruised,
@@ -781,6 +842,8 @@ export const formatSummary = (result: AffectedTestsResult) => {
     `Direct test changes: ${result.directTestFiles.length}`,
     `Strategy A tests: ${result.strategyAFiles.length}`,
     `Strategy B tests: ${result.strategyBFiles.length}`,
+    `PGLite tests - SQL migrations: ${result.migrationTestFiles.length}`,
+    `Unresolved graph paths: ${result.unresolvedGraphFiles.length}`,
     `PostgreSQL specs (dedicated command): ${result.postgresTestFiles.length}`,
     `PostgreSQL impact: ${
       result.postgresImpactReasons
@@ -796,6 +859,18 @@ export const formatSummary = (result: AffectedTestsResult) => {
     lines.push(
       'PostgreSQL spec paths:',
       ...result.postgresTestFiles.map((file) => `  ${file}`)
+    );
+  }
+  if (result.migrationTestFiles.length > 0) {
+    lines.push(
+      'PGLite paths - SQL migrations:',
+      ...result.migrationTestFiles.map((file) => `  ${file}`)
+    );
+  }
+  if (result.unresolvedGraphFiles.length > 0) {
+    lines.push(
+      'Unresolved graph paths:',
+      ...result.unresolvedGraphFiles.map((file) => `  ${file}`)
     );
   }
   if (result.excludedChangedFiles.length > 0) {
@@ -831,6 +906,14 @@ export const formatOutput = (
       result.strategyAFiles
     ),
     ...formatVerboseSection('Strategy B - mirror paths', result.strategyBFiles),
+    ...formatVerboseSection(
+      'PGLite tests - SQL migrations',
+      result.migrationTestFiles
+    ),
+    ...formatVerboseSection(
+      'Unresolved graph paths',
+      result.unresolvedGraphFiles
+    ),
     ...formatVerboseSection(
       'PostgreSQL specs - dedicated command',
       result.postgresTestFiles

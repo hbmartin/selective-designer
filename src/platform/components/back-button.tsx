@@ -33,13 +33,14 @@ export const BackButton = <
       const target = props.target ?? event.currentTarget.getAttribute('target');
       if (
         canGoBack &&
+        !props.reloadDocument &&
         !event.defaultPrevented &&
         event.button === 0 &&
         !(event.ctrlKey || event.metaKey || event.shiftKey || event.altKey) &&
         (!target || target === '_self')
       ) {
         event.preventDefault();
-        navigateBack();
+        navigateBack({ ignoreBlocker: props.ignoreBlocker });
       }
     },
     to: props.to ?? '..',

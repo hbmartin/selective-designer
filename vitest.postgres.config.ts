@@ -1,15 +1,16 @@
 import path from 'node:path';
 import { defineConfig } from 'vitest/config';
 
+import { vitestProjectOptions } from './scripts/vitest-projects';
+
 const resolve = (filePath: string) =>
   path.resolve(import.meta.dirname, filePath);
 
 export default defineConfig({
   test: {
     environment: 'node',
-    include: ['tests/integration/**/*.postgres.integration.test.ts'],
+    ...vitestProjectOptions('postgres', resolve),
     fileParallelism: false,
-    setupFiles: [resolve('tests/setup.base.ts')],
     testTimeout: 60_000,
   },
   resolve: {
