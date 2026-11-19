@@ -376,3 +376,69 @@ it.each(['node_modules', 'node_modules/.bin'])(
     ).rejects.toThrow(link);
   }
 );
+
+it.each(['raw', 'shell'] as const)(
+  'checks late collisions at the shared %s boundary including support',
+  (kind) => {
+    const fixture = makeFixture();
+    const env = fixtureEnvironment(fixture);
+    const bin = path.join(fixture.support, 'nested/node_modules/.bin');
+    fs.mkdirSync(bin, { recursive: true });
+    fs.writeFileSync(path.join(bin, 'node'), 'must not execute');
+    expect(() =>
+      kind === 'raw'
+        ? runFixtureCommand(process.execPath, ['--version'], fixture, { env })
+        : runFixtureShell('node --version', fixture, { env })
+    ).toThrow('Conflicting fixture-local tool');
+  }
+);
+
+it.each(['Node', 'PNPM', 'NODE_MODULES/.bin/node', 'node_modules/.BIN/node'])(
+  'uses canonical filesystem lookups for case variant %s',
+  async (name) => {
+    const fixture = makeFixture();
+    const relative = name.includes('/') ? name : `node_modules/.bin/${name}`;
+    const file = path.join(fixture.cwd, relative);
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    fs.writeFileSync(file, 'must not execute');
+    const canonical = path.join(fixture.cwd, relative.toLowerCase());
+    if (fs.existsSync(canonical)) {
+      expect(() =>
+        runFixtureCommand(process.execPath, ['--version'], fixture)
+      ).toThrow('Conflicting fixture-local tool');
+    } else {
+      const result = await runFixtureCommand(
+        process.execPath,
+        ['--version'],
+        fixture
+      );
+      assert.strictEqual(result.status, 0, describeCommand(result));
+    }
+  }
+);
+
+it('allows owned root/support cwd and rejects external and symlink escapes without creating paths', async () => {
+  const fixture = makeFixture();
+  const external = makeFixture();
+  for (const cwd of [fixture.root, fixture.support]) {
+    const result = await runFixtureCommand(
+      process.execPath,
+      ['-p', 'process.cwd()'],
+      fixture,
+      { cwd }
+    );
+    assert.strictEqual(result.status, 0, describeCommand(result));
+    expect(result.stdout.trim()).toBe(cwd);
+  }
+  expect(() =>
+    runFixtureCommand(process.execPath, [], fixture, { cwd: external.cwd })
+  ).toThrow('must be owned');
+  const link = path.join(fixture.support, 'escape');
+  fs.symlinkSync(external.cwd, link, 'dir');
+  expect(() =>
+    runFixtureCommand(process.execPath, [], fixture, {
+      cwd: path.join(link, 'missing'),
+    })
+  ).toThrow('symlink');
+  expect(fs.existsSync(path.join(external.cwd, 'missing'))).toBe(false);
+});

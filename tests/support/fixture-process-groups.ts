@@ -13,11 +13,17 @@ export type FixtureProcessGroup = {
   started?: string;
 };
 
-export function inspectFixtureProcesses(): Map<number, ProcessRow> {
+export function inspectFixtureProcesses(
+  timeoutMs = 500
+): Map<number, ProcessRow> {
   const result = spawnSync(
     '/bin/ps',
     ['-A', '-o', 'pid=,ppid=,pgid=,stat=,lstart='],
-    { encoding: 'utf8', timeout: 500, env: { LC_ALL: 'C' } }
+    {
+      encoding: 'utf8',
+      timeout: Math.max(1, Math.min(500, timeoutMs)),
+      env: { LC_ALL: 'C' },
+    }
   );
   if (result.error || result.status !== 0 || result.stderr.trim()) {
     throw new Error(
@@ -37,6 +43,14 @@ export function inspectFixtureProcesses(): Map<number, ProcessRow> {
       state: match[4]!,
       started: match[5]!,
     };
+    if (
+      ![row.pid, row.parent, row.group].every(
+        (value) => Number.isSafeInteger(value) && value >= 0
+      ) ||
+      row.pid === 0 ||
+      rows.has(row.pid)
+    )
+      throw new Error(`Invalid fixture process identity: ${line}`);
     rows.set(row.pid, row);
   }
   if (!rows.has(process.pid))
@@ -49,20 +63,20 @@ export function fixtureGroupIsLive(
   rows: ReturnType<typeof inspectFixtureProcesses>
 ) {
   const leader = rows.get(group.pid);
+  const live = [...rows.values()].some(
+    (row) => row.group === group.pid && !row.state.startsWith('Z')
+  );
+  if (!live) return false;
+  // A proven replacement cannot belong to the original, now-ended group.
+  if (leader && group.started && leader.started !== group.started) return false;
   if (leader && leader.group !== group.pid && !leader.state.startsWith('Z')) {
     throw new Error(
       `Fixture process ${group.pid} is no longer its process-group leader`
     );
   }
-  if (leader && group.started && leader.started !== group.started) {
-    throw new Error(
-      `Fixture process group ${group.pid} changed identity; refusing to signal it`
-    );
-  }
-  if (leader && !group.started) group.started = leader.started;
-  return [...rows.values()].some(
-    (row) => row.group === group.pid && !row.state.startsWith('Z')
-  );
+  if (!group.started)
+    throw new Error(`Original fixture group identity is unknown: ${group.pid}`);
+  return true;
 }
 
 export function signalFixtureGroup(
