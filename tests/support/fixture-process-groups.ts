@@ -1,61 +1,30 @@
-import { spawnSync } from 'node:child_process';
-
-type ProcessRow = {
-  pid: number;
-  parent: number;
-  group: number;
-  state: string;
-  started: string;
-};
+import {
+  inspectFixtureProcesses,
+  type ProcessRow,
+} from './fixture-process-snapshot.mjs';
+export { inspectFixtureProcesses } from './fixture-process-snapshot.mjs';
 
 export type FixtureProcessGroup = {
   pid: number;
   started?: string;
+  members?: Map<number, string>;
+  continuity?: 'authenticated' | 'lost';
 };
 
-export function inspectFixtureProcesses(
-  timeoutMs = 500
-): Map<number, ProcessRow> {
-  const result = spawnSync(
-    '/bin/ps',
-    ['-A', '-o', 'pid=,ppid=,pgid=,stat=,lstart='],
-    {
-      encoding: 'utf8',
-      timeout: Math.max(1, Math.min(500, timeoutMs)),
-      env: { LC_ALL: 'C' },
-    }
-  );
-  if (result.error || result.status !== 0 || result.stderr.trim()) {
-    throw new Error(
-      `Cannot inspect fixture processes: ${result.error?.message ?? result.stderr}; exit ${result.status}`
-    );
-  }
-  const rows = new Map<number, ProcessRow>();
-  for (const line of result.stdout.split('\n')) {
-    if (!line.trim()) continue;
-    const match = /^\s*(\d+)\s+(\d+)\s+(\d+)\s+(\S+)\s+(.+?)\s*$/.exec(line);
-    if (!match)
-      throw new Error(`Invalid fixture process inspection row: ${line}`);
-    const row = {
-      pid: Number(match[1]),
-      parent: Number(match[2]),
-      group: Number(match[3]),
-      state: match[4]!,
-      started: match[5]!,
-    };
-    if (
-      ![row.pid, row.parent, row.group].every(
-        (value) => Number.isSafeInteger(value) && value >= 0
-      ) ||
-      row.pid === 0 ||
-      rows.has(row.pid)
-    )
-      throw new Error(`Invalid fixture process identity: ${line}`);
-    rows.set(row.pid, row);
-  }
-  if (!rows.has(process.pid))
-    throw new Error('Fixture process inspection omitted the test runner');
-  return rows;
+export function seedFixtureProcessGroup(
+  row: ProcessRow,
+  rows: ReadonlyMap<number, ProcessRow>
+): FixtureProcessGroup {
+  return {
+    pid: row.group,
+    started: row.started,
+    continuity: 'authenticated',
+    members: new Map(
+      [...rows.values()]
+        .filter((member) => member.group === row.group)
+        .map((member) => [member.pid, member.started])
+    ),
+  };
 }
 
 export function fixtureGroupIsLive(
@@ -63,19 +32,29 @@ export function fixtureGroupIsLive(
   rows: ReturnType<typeof inspectFixtureProcesses>
 ) {
   const leader = rows.get(group.pid);
-  const live = [...rows.values()].some(
-    (row) => row.group === group.pid && !row.state.startsWith('Z')
-  );
-  if (!live) return false;
-  // A proven replacement cannot belong to the original, now-ended group.
+  const members = [...rows.values()].filter((row) => row.group === group.pid);
+  if (!members.some((row) => !row.state.startsWith('Z'))) return false;
   if (leader && group.started && leader.started !== group.started) return false;
-  if (leader && leader.group !== group.pid && !leader.state.startsWith('Z')) {
-    throw new Error(
+  const uncertain = (message: string): never => {
+    group.continuity = 'lost';
+    group.members = new Map();
+    throw new Error(message);
+  };
+  if (leader && leader.group !== group.pid)
+    return uncertain(
       `Fixture process ${group.pid} is no longer its process-group leader`
     );
-  }
   if (!group.started)
-    throw new Error(`Original fixture group identity is unknown: ${group.pid}`);
+    return uncertain(
+      `Original fixture group identity is unknown: ${group.pid}`
+    );
+  if (group.continuity === 'lost')
+    return uncertain(`Fixture group continuity is lost: ${group.pid}`);
+  const witnesses = group.members ?? new Map([[group.pid, group.started]]);
+  if (!members.some((row) => witnesses.get(row.pid) === row.started))
+    return uncertain(`Fixture group continuity is lost: ${group.pid}`);
+  group.members = new Map(members.map((row) => [row.pid, row.started]));
+  group.continuity = 'authenticated';
   return true;
 }
 
@@ -121,7 +100,7 @@ export function validateDetachedFixtureGroup(
   let row = rows.get(leader.parent);
   while (row && !visited.has(row.pid)) {
     if (roots.has(row.pid) && !row.state.startsWith('Z'))
-      return { pid, started: leader.started };
+      return seedFixtureProcessGroup(leader, rows);
     visited.add(row.pid);
     row = rows.get(row.parent);
   }

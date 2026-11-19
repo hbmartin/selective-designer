@@ -1511,3 +1511,28 @@ rules:
         - src/modules/kernel/testing.ts
         - '**/*.unit.spec.ts'
         - '**/*.test.ts'
+
+  - id: fixture-signaling-requires-verified-helper
+    languages: [typescript, javascript]
+    severity: ERROR
+    message: Fixture process signals must go through the identity-checked fixture process-group helper.
+    patterns:
+      - pattern: process.kill(...)
+    paths:
+      include:
+        - tests/support/**
+        - tests/security/**
+      exclude:
+        - tests/support/fixture-process-groups.ts
+
+  - id: fixture-kill-spy-requires-persistent-replacement
+    languages: [typescript, javascript]
+    severity: ERROR
+    message: Synthetic process IDs require a fully replaced kill spy; never allow calls to reach the host.
+    patterns:
+      - pattern: $MOCK.spyOn(process, 'kill')
+      - pattern-not-inside: $MOCK.spyOn(process, 'kill').mockImplementation(...)
+      - pattern-not-inside: $MOCK.spyOn(process, 'kill').mockReturnValue(...)
+    paths:
+      include:
+        - tests/security/**
