@@ -7,7 +7,9 @@ const resolve = (filePath: string) =>
 export default defineConfig({
   test: {
     environment: 'node',
-    include: ['tests/integration/**/*.postgres.integration.test.ts'],
+    include: [
+      'tests/integration/**/*.postgres.integration.test.?(c|m)[jt]s?(x)',
+    ],
     exclude: configDefaults.exclude,
     setupFiles: [resolve('./tests/setup.base.ts')],
     globalSetup: [],

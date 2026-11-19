@@ -4,20 +4,26 @@ import path from 'node:path';
 import { expect, it } from 'vitest';
 import { createVitest } from 'vitest/node';
 
-it('discovers ordinary integration specs while excluding PostgreSQL and nested tool directories', async () => {
+it('separates ordinary and dedicated PostgreSQL discovery across supported extensions', async () => {
   const root = fs.realpathSync(
     fs.mkdtempSync(path.join(os.tmpdir(), 'vitest-discovery-'))
   );
-  const ordinary = [
-    'tests/integration/ordinary.integration.test.ts',
-    'tests/integration/nested/ordinary.integration.test.mts',
-  ];
+  const extensions = ['ts', 'mts', 'cts', 'tsx', 'js', 'mjs', 'cjs', 'jsx'];
+  const ordinary = extensions.map(
+    (extension) =>
+      `tests/integration/nested/ordinary.integration.test.${extension}`
+  );
+  const postgres = extensions.map(
+    (extension) =>
+      `tests/integration/nested/driver.postgres.integration.test.${extension}`
+  );
   const excluded = [
-    'tests/integration/nested/driver.postgres.integration.test.ts',
     'tests/integration/nested/node_modules/pkg/vendor.integration.test.ts',
     'tests/integration/nested/.git/metadata.integration.test.ts',
+    'tests/integration/nested/node_modules/pkg/vendor.postgres.integration.test.mts',
+    'tests/integration/nested/.git/metadata.postgres.integration.test.ts',
   ];
-  for (const file of [...ordinary, ...excluded]) {
+  for (const file of [...ordinary, ...postgres, ...excluded]) {
     const target = path.join(root, file);
     fs.mkdirSync(path.dirname(target), { recursive: true });
     fs.writeFileSync(
@@ -27,19 +33,28 @@ it('discovers ordinary integration specs while excluding PostgreSQL and nested t
   }
 
   try {
-    const context = await createVitest({
-      config: path.resolve('vitest.config.ts'),
-      root,
-      project: ['integration'],
-      watch: false,
-    });
-    try {
-      const specs = await context.globTestSpecifications();
-      expect(
-        specs.map((spec) => path.relative(root, spec.moduleId)).sort()
-      ).toEqual(ordinary.sort());
-    } finally {
-      await context.close();
+    for (const project of [
+      {
+        config: 'vitest.config.ts',
+        project: ['integration'],
+        expected: ordinary,
+      },
+      { config: 'vitest.postgres.config.ts', project: [], expected: postgres },
+    ]) {
+      const context = await createVitest({
+        config: path.resolve(project.config),
+        root,
+        project: project.project,
+        watch: false,
+      });
+      try {
+        const specs = await context.globTestSpecifications();
+        expect(
+          specs.map((spec) => path.relative(root, spec.moduleId)).sort()
+        ).toEqual(project.expected.toSorted());
+      } finally {
+        await context.close();
+      }
     }
   } finally {
     fs.rmSync(root, { recursive: true, force: true });

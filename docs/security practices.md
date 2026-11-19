@@ -41,7 +41,7 @@ While a formal SOC 2 audit has not yet been completed, the codebase implements c
 
 [Code Quality](../.github/workflows/code-quality.yml) runs on main pushes and ready pull requests. Its jobs cover formatting, Oxlint/ESLint/typechecking, dependency-cruiser and architecture checks, dependency policies, migration integrity, the ordinary suite with coverage, dedicated PostgreSQL integration, and production builds.
 
-The Coverage and PostgreSQL Integration jobs require JUnit reports and check that tests leave tracked worktree and staged files unchanged. Report and mutation checks run after attempted tests, including failures; artifact uploads remain enabled on failure. LCOV is required after successful coverage runs.
+The Architecture Checks, Coverage, and PostgreSQL Integration jobs require JUnit reports and check that tests leave tracked worktree and staged files unchanged. Report and mutation checks run after attempted tests, including failures; artifact uploads remain enabled on failure. LCOV is required after successful coverage runs.
 
 Security scanning uses the dedicated workflows linked above. Trigger policies differ: Dependency Review and OSV diff scanning are PR-specific. CodeQL also runs on main pushes and a schedule; Semgrep also supports main pushes, scheduled runs, and manual dispatch; detect-secrets also runs on main pushes and manual dispatch. Most PR jobs skip drafts. [Supply Chain Artifacts](../.github/workflows/supply-chain.yml) generates audit, SBOM, and provenance artifacts on main pushes or manual dispatch.
 
