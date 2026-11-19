@@ -339,6 +339,9 @@ it('forwards an explicit blocker bypass to history back', async () => {
   await view.getByRole('link', { name: 'Back' }).click();
   expect(back).toHaveBeenCalledExactlyOnceWith({ ignoreBlocker: true });
   expect(navigate).not.toHaveBeenCalled();
+  await expect
+    .poll(() => router.state.resolvedLocation?.pathname)
+    .toBe('/manager/users/sample');
 });
 
 it.each([true, false])(

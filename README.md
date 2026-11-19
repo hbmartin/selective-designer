@@ -69,14 +69,15 @@ pnpm dev
 
 ```bash
 pnpm check           # Static checks: format, lint, types, architecture, test layering, security, audit
-pnpm test            # Unit, browser, and integration tests
+pnpm test            # Full ordinary Vitest suite, including PGLite integration
+pnpm test:integration:postgres # Dedicated PostgreSQL tests (Docker required)
 pnpm test:property   # Focused property/invariant tests
 pnpm test:e2e        # Full Playwright user journeys
 pnpm verify          # Full local pre-merge gate
 pnpm verify:task     # Task verification logs; add --visual, --e2e-chromium, or --build as needed
 ```
 
-`pnpm verify:task` writes timestamped logs under `test-results/task-verification/`. Its optional flags add visual regression tests (`--visual`), Chromium E2E (`--e2e-chromium`), and a production build (`--build`). See [AGENTS.md](AGENTS.md) and [Testing Strategy](TESTING.md) for the full verification workflow.
+`pnpm verify:task` runs static checks and the full ordinary test suite, writing timestamped logs under `test-results/task-verification/`. Its optional flags add visual regression tests (`--visual`), Chromium E2E (`--e2e-chromium`), and a production build (`--build`). PostgreSQL and Playwright tests remain separate from the ordinary suite. See [AGENTS.md](AGENTS.md) and [Testing Strategy](TESTING.md) for the full verification workflow.
 
 ## Auth Route Freshness
 

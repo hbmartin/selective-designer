@@ -13,9 +13,9 @@ Use these commands instead of invoking underlying tools directly.
 |---|---|
 | `pnpm dev` | Start the local dev server. |
 | `pnpm check` | Static checks: format, lint, typecheck, depcruise, semgrep, audit. |
-| `pnpm test` | Vitest unit and browser projects. |
-| `pnpm test:affected:list` | List tests associated with changed files. |
-| `pnpm test:affected` | Run tests associated with changed files. |
+| `pnpm test` | Full ordinary Vitest suite: unit, browser, architecture/security, and PGLite integration. |
+| `pnpm test:affected:list` | Compatibility alias listing all ordinary tests with native Vitest discovery. |
+| `pnpm test:affected` | Compatibility alias for `pnpm test`; runs the full ordinary suite. |
 | `pnpm test:e2e:visual` | Local Chromium visual regression check for stable critical screens. |
 | `pnpm test:e2e:visual:auth` | Local Chromium visual regression check for login and verification screens. |
 | `pnpm test:e2e:visual:app-shell` | Local Chromium visual regression check for the authenticated app shell. |
@@ -27,7 +27,9 @@ Use these commands instead of invoking underlying tools directly.
 | `pnpm format:changed` | Format changed files only. |
 | `pnpm check:migrations` | Guard against invalid manual migration edits. |
 
-After code changes, run `pnpm format:changed && pnpm check && pnpm test:affected`. Before merge, run `pnpm verify`.
+After code changes, run `pnpm format:changed && pnpm check && pnpm test`. Before merge, run `pnpm verify`.
+
+The ordinary suite excludes dedicated PostgreSQL and Playwright tests. Run `pnpm test:integration:postgres` and `pnpm test:e2e` separately when needed. Native listing supports `pnpm test:affected:list --json`; the old selector flags and selection-report format are retired. See [TESTING.md](TESTING.md) for command details.
 
 ## Task Verification Loop
 
@@ -36,7 +38,7 @@ Use a layered verification loop rather than relying on one broad command.
 - Start with the narrowest relevant unit, browser, or E2E checks for the behavior being changed.
 - For UI changes, start the local app with `pnpm dev` or the E2E webserver path, inspect the affected flow in the Codex in-app Browser, and check desktop and mobile viewports for console errors, broken interactions, text overflow, and layout overlap.
 - Capture screenshots or Playwright artifacts for meaningful UI changes. Prefer local Playwright screenshots for visual regression with `pnpm test:e2e:visual`; update baselines for review with `pnpm test:e2e:visual:update`. Do not add Percy, Applitools, Cypress, BrowserStack, or another external visual/browser service unless explicitly requested.
-- After code changes, run `pnpm format:changed && pnpm check && pnpm test:affected`.
+- After code changes, run `pnpm format:changed && pnpm check && pnpm test`.
 - Use `pnpm verify:task` when a single command/report is more useful than separate commands. Add `-- --visual` for UI changes, `-- --e2e-chromium` for auth/routing/session/persistence risk, and `-- --build` for production runtime risk.
 - Escalate to `pnpm test:e2e --project=chromium` when auth, routing, session, persistence, upload, or full-stack behavior is touched.
 - Escalate to all Playwright projects or the CI matrix when a change is likely to vary by browser.
