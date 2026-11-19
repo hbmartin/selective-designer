@@ -1,4 +1,5 @@
 import {
+  type AnyRouter,
   createMemoryHistory,
   createRootRoute,
   createRoute,
@@ -26,6 +27,19 @@ import buttonLinkFixtures from '@/platform/components/ui/button-link.fixture';
 import { ButtonLink } from '@/platform/components/ui/button-link';
 import responsiveButtonLinkFixtures from '@/platform/components/ui/responsive-icon-button-link.fixture';
 import { ResponsiveIconButtonLink } from '@/platform/components/ui/responsive-icon-button-link';
+
+async function expectResolvedPath(router: AnyRouter, pathname: string) {
+  await expect
+    .poll(() => {
+      const state = router.state;
+      return {
+        pathname: state.location.pathname,
+        resolvedPathname: state.resolvedLocation?.pathname,
+        status: state.status,
+      };
+    })
+    .toEqual({ pathname, resolvedPathname: pathname, status: 'idle' });
+}
 
 async function setupRouter(initialLocation = '/login') {
   const root = createRootRoute({ component: ButtonLinkRouteChildren });
@@ -289,17 +303,13 @@ it('uses BackButton fallback and native history back', async () => {
   const link = view.getByRole('link', { name: 'Back' });
   await expect.element(link).toHaveAttribute('href', '/manager/users');
   await link.click();
-  await expect
-    .poll(() => router.state.location.pathname)
-    .toBe('/manager/users');
+  await expectResolvedPath(router, '/manager/users');
   vi.stubGlobal('IS_REACT_ACT_ENVIRONMENT', true);
   await act(() => router.navigate({ to: '/manager' }));
   const back = vi.spyOn(router.history, 'back');
   await link.click();
   expect(back).toHaveBeenCalledExactlyOnceWith({ ignoreBlocker: undefined });
-  await expect
-    .poll(() => router.state.location.pathname)
-    .toBe('/manager/users');
+  await expectResolvedPath(router, '/manager/users');
 });
 
 it('runs a consumer callback before going back in history', async () => {
@@ -324,9 +334,7 @@ it('runs a consumer callback before going back in history', async () => {
   expect(consumer).toHaveBeenCalledTimes(1);
   expect(back).toHaveBeenCalledExactlyOnceWith({ ignoreBlocker: undefined });
   expect(navigate).not.toHaveBeenCalled();
-  await expect
-    .poll(() => router.state.location.pathname)
-    .toBe('/manager/users/sample');
+  await expectResolvedPath(router, '/manager/users/sample');
 });
 
 it('forwards an explicit blocker bypass to history back', async () => {
@@ -339,9 +347,7 @@ it('forwards an explicit blocker bypass to history back', async () => {
   await view.getByRole('link', { name: 'Back' }).click();
   expect(back).toHaveBeenCalledExactlyOnceWith({ ignoreBlocker: true });
   expect(navigate).not.toHaveBeenCalled();
-  await expect
-    .poll(() => router.state.resolvedLocation?.pathname)
-    .toBe('/manager/users/sample');
+  await expectResolvedPath(router, '/manager/users/sample');
 });
 
 it.each([true, false])(
@@ -406,9 +412,7 @@ it.each([
   await view.getByRole('link', { name: 'Back' }).click();
   expect(back).toHaveBeenCalledTimes(1);
   expect(navigate).not.toHaveBeenCalled();
-  await expect
-    .poll(() => router.state.location.pathname)
-    .toBe('/manager/users/sample');
+  await expectResolvedPath(router, '/manager/users/sample');
 });
 
 it.each([false, true])(
@@ -453,9 +457,7 @@ it('runs the consumer before native fallback navigation when no history is avail
   expect(order).toEqual(['consumer', 'fallback']);
   expect(back).not.toHaveBeenCalled();
   expect(navigate).toHaveBeenCalledTimes(1);
-  await expect
-    .poll(() => router.state.location.pathname)
-    .toBe('/manager/users');
+  await expectResolvedPath(router, '/manager/users');
 });
 
 it.each([
@@ -521,9 +523,7 @@ it('retains history back for an explicit _self target', async () => {
   });
   await view.getByRole('link', { name: 'Back' }).click();
   expect(back).toHaveBeenCalledTimes(1);
-  await expect
-    .poll(() => router.state.location.pathname)
-    .toBe('/manager/users/sample');
+  await expectResolvedPath(router, '/manager/users/sample');
 });
 
 it('uses the rendered target when no target prop is supplied', async () => {
@@ -555,9 +555,7 @@ it('keeps the explicit target precedence used by native Link', async () => {
   );
   await view.getByRole('link', { name: 'Back' }).click();
   expect(back).toHaveBeenCalledTimes(1);
-  await expect
-    .poll(() => router.state.location.pathname)
-    .toBe('/manager/users/sample');
+  await expectResolvedPath(router, '/manager/users/sample');
 });
 
 it('navigates and preloads a safe masked relative destination', async () => {
@@ -584,9 +582,7 @@ it('navigates and preloads a safe masked relative destination', async () => {
   expect(destination.pathname).toBe('/manager/users/sample/update');
   expect(destination.maskedLocation?.pathname).toBe('/manager');
   await link.click();
-  await expect
-    .poll(() => router.state.location.pathname)
-    .toBe('/manager/users/sample/update');
+  await expectResolvedPath(router, '/manager/users/sample/update');
   expect(router.state.location.maskedLocation?.pathname).toBe('/manager');
   await expect
     .element(view.getByRole('link', { name: 'Editing' }))
