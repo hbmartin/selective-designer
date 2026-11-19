@@ -2,7 +2,7 @@ import {
   createWorkflowFixture,
   describeCommand,
   disposeFixtureCommands,
-  disposeWorkflowFixture,
+  disposeWorkflowFixtures,
   fixtureEnvironment,
   fixtureGit as git,
   pnpmFixtureEnvironment,
@@ -66,10 +66,10 @@ function makeFixture() {
 }
 
 afterEach(async () => {
-  vi.unstubAllEnvs();
-  for (const fixture of fixtures.splice(0))
-    await disposeWorkflowFixture(fixture);
-  vi.restoreAllMocks();
+  await disposeWorkflowFixtures(fixtures, () => {
+    vi.restoreAllMocks();
+    vi.unstubAllEnvs();
+  });
 });
 
 function expectPostTestGuards(
@@ -109,9 +109,22 @@ function initializeTrackedFixture(fixture: WorkflowFixture) {
   ]);
 }
 
-function reporterDeadline(parent: AbortSignal, timeoutMs = 70_000) {
+function reporterDeadline(
+  parent: AbortSignal,
+  timeoutMs = 70_000,
+  timers: {
+    schedule: (
+      callback: () => void,
+      milliseconds: number
+    ) => ReturnType<typeof setTimeout>;
+    cancel: (timer: ReturnType<typeof setTimeout>) => void;
+  } = {
+    schedule: (callback, milliseconds) => setTimeout(callback, milliseconds),
+    cancel: clearTimeout,
+  }
+) {
   const controller = new AbortController();
-  const timer = setTimeout(
+  const timer = timers.schedule(
     () =>
       controller.abort(
         new Error(`Reporter case deadline exceeded (${timeoutMs}ms)`)
@@ -120,7 +133,7 @@ function reporterDeadline(parent: AbortSignal, timeoutMs = 70_000) {
   );
   return {
     signal: AbortSignal.any([parent, controller.signal]),
-    dispose: () => clearTimeout(timer),
+    dispose: () => timers.cancel(timer),
   };
 }
 
@@ -463,7 +476,7 @@ it('reports bounded subprocess timeouts and spawn errors', async () => {
     fixture
   );
   expect(missing.error).toMatchObject({ code: 'ENOENT' });
-  expect(describeCommand(missing)).toContain('Spawn error: spawn');
+  expect(describeCommand(missing)).toContain('Error: spawn');
 });
 
 it.for(['cancellation', 'disposal'])(
@@ -579,31 +592,64 @@ it('never spawns a command whose signal is already aborted', async () => {
   }
 });
 
-it('shares the reporter deadline across successive command phases', async ({
-  signal,
-}) => {
-  const fixture = makeFixture();
-  const deadline = reporterDeadline(signal, 1_000);
-  try {
-    const first = await runFixtureCommand(
-      '/bin/echo',
-      ['first phase'],
-      fixture,
-      { signal: deadline.signal }
-    );
-    expect(first.status).toBe(0);
-    const second = await runFixtureCommand(
-      process.execPath,
-      ['-e', 'setInterval(() => {}, 1000)'],
-      fixture,
-      { signal: deadline.signal, timeoutMs: 5_000 }
-    );
-    expect(second.aborted).toBe(true);
-    expect(second.timedOut).toBe(false);
-    expect(describeCommand(second)).toContain(
-      'Reporter case deadline exceeded (1000ms)'
-    );
-  } finally {
-    deadline.dispose();
+it(
+  'shares the reporter deadline across successive command phases',
+  { timeout: 15_000 },
+  async ({ signal }) => {
+    const fixture = makeFixture();
+    let elapsed = 0;
+    let expire = () => {};
+    let due = 0;
+    const timers = {
+      schedule: vi.fn((callback: () => void, milliseconds: number) => {
+        expire = callback;
+        due = milliseconds;
+        return setTimeout(() => {}, milliseconds);
+      }),
+      cancel: clearTimeout,
+    };
+    const advance = (milliseconds: number) => {
+      elapsed += milliseconds;
+      if (elapsed >= due) expire();
+    };
+    const deadline = reporterDeadline(signal, 70_000, timers);
+    let running: ReturnType<typeof runFixtureCommand> | undefined;
+    try {
+      const first = await runFixtureCommand(
+        process.execPath,
+        ['-e', 'console.log("first phase")'],
+        fixture,
+        { signal: deadline.signal }
+      );
+      assert.strictEqual(first.status, 0, describeCommand(first));
+      advance(40_000);
+      const ready = path.join(fixture.support, 'deadline-ready');
+      running = runFixtureCommand(
+        process.execPath,
+        [
+          '-e',
+          `setInterval(()=>{},1000);require('node:fs').writeFileSync(${JSON.stringify(ready)},'ready')`,
+        ],
+        fixture,
+        { signal: deadline.signal, timeoutMs: 10_000 }
+      );
+      await expect
+        .poll(() => fs.existsSync(ready), { timeout: 5_000 })
+        .toBe(true);
+      advance(29_999);
+      expect(deadline.signal.aborted).toBe(false);
+      advance(1);
+      const result = await running;
+      expect(result.aborted).toBe(true);
+      expect(result.timedOut).toBe(false);
+      expect(timers.schedule).toHaveBeenCalledTimes(1);
+      expect(describeCommand(result)).toContain(
+        'Reporter case deadline exceeded (70000ms)'
+      );
+    } finally {
+      deadline.dispose();
+      await disposeFixtureCommands(fixture);
+      await running;
+    }
   }
-});
+);

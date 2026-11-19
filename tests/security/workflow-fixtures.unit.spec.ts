@@ -1,7 +1,7 @@
 import {
   createWorkflowFixture,
   describeCommand,
-  disposeWorkflowFixture,
+  disposeWorkflowFixtures,
   fixtureEnvironment,
   pnpmFixtureEnvironment,
   runFixtureCommand,
@@ -10,7 +10,7 @@ import {
 } from '@tests/support/workflow-fixtures';
 import fs from 'node:fs';
 import path from 'node:path';
-import { afterEach, assert, expect, it } from 'vitest';
+import { afterEach, assert, expect, it, vi } from 'vitest';
 
 const manifest = JSON.parse(fs.readFileSync('package.json', 'utf8')) as {
   packageManager: string;
@@ -24,8 +24,10 @@ function makeFixture() {
   return fixture;
 }
 afterEach(async () => {
-  for (const fixture of fixtures.splice(0))
-    await disposeWorkflowFixture(fixture);
+  await disposeWorkflowFixtures(fixtures, () => {
+    vi.restoreAllMocks();
+    vi.unstubAllEnvs();
+  });
 });
 function manager(fixture: WorkflowFixture, directory: string, source: string) {
   const bin = path.join(fixture.support, directory);
@@ -47,11 +49,6 @@ it('preserves caller tool precedence and runs exactly the validated pnpm with th
     '#!/bin/sh\nprintf "wrong manager\\n"\n'
   );
   fs.writeFileSync(path.join(later, 'node'), '#!/bin/sh\nexit 91\n', {
-    mode: 0o700,
-  });
-  const localBin = path.join(fixture.cwd, 'node_modules/.bin');
-  fs.mkdirSync(localBin, { recursive: true });
-  fs.writeFileSync(path.join(localBin, 'pnpm'), '#!/bin/sh\nexit 92\n', {
     mode: 0o700,
   });
   const parent = {
@@ -216,7 +213,7 @@ it('aborts validation before creating the workflow launcher', async () => {
       { PATH: bin },
       AbortSignal.abort('validation cancelled')
     )
-  ).rejects.toThrow('validation cancelled');
+  ).rejects.toThrow(/pnpm version probe cancelled[\s\S]*validation cancelled/);
   expect(fs.existsSync(path.join(fixture.bin, 'pnpm'))).toBe(false);
 });
 
@@ -232,7 +229,7 @@ it(
     );
     await expect(
       pnpmFixtureEnvironment(fixture, manifest.packageManager, { PATH: bin })
-    ).rejects.toThrow('timeout: true');
+    ).rejects.toThrow(/pnpm version probe timed out[\s\S]*timeout: true/);
     expect(fs.existsSync(path.join(fixture.bin, 'pnpm'))).toBe(false);
   }
 );
@@ -250,3 +247,132 @@ it('does not create a missing cwd while constructing the environment or attempti
   expect(result.error).toMatchObject({ code: 'ENOENT' });
   expect(fs.existsSync(cwd)).toBe(false);
 });
+
+it.each(['node', 'pnpm'])(
+  'rejects an early fixture-local %s collision before probing',
+  async (tool) => {
+    const fixture = makeFixture();
+    const marker = path.join(fixture.support, 'executed');
+    const bin = manager(
+      fixture,
+      'candidate',
+      `#!/bin/sh\nprintf marker > '${marker}'\nprintf '${version}\\n'\n`
+    );
+    const localBin = path.join(fixture.cwd, 'nested/node_modules/.bin');
+    fs.mkdirSync(localBin, { recursive: true });
+    const collision = path.join(localBin, tool);
+    fs.writeFileSync(collision, '#!/bin/sh\nexit 99\n', { mode: 0o700 });
+    await expect(
+      pnpmFixtureEnvironment(fixture, manifest.packageManager, { PATH: bin })
+    ).rejects.toThrow(collision);
+    expect(fs.existsSync(marker)).toBe(false);
+    expect(fs.readFileSync(collision, 'utf8')).toContain('exit 99');
+  }
+);
+
+it(
+  'uses actual pinned pnpm and current Node for nested package scripts and rejects later collisions',
+  { timeout: 20_000 },
+  async ({ signal }) => {
+    const fixture = makeFixture();
+    const metadata = path.resolve('node_modules/.modules.yaml');
+    const before = fs.readFileSync(metadata);
+    fs.writeFileSync(
+      path.join(fixture.cwd, 'package.json'),
+      JSON.stringify({
+        private: true,
+        packageManager: manifest.packageManager,
+        scripts: { outer: 'pnpm run inner', inner: 'node -p process.execPath' },
+      })
+    );
+    fs.writeFileSync(
+      path.join(fixture.cwd, '.npmrc'),
+      'verify-deps-before-run=false\n'
+    );
+    const env = await pnpmFixtureEnvironment(
+      fixture,
+      manifest.packageManager,
+      process.env,
+      signal
+    );
+    const result = await runFixtureShell('pnpm run outer', fixture, {
+      env,
+      signal,
+    });
+    assert.strictEqual(result.status, 0, describeCommand(result));
+    expect(result.stdout).toContain(process.execPath);
+    for (const tool of ['node', 'pnpm']) {
+      const localBin = path.join(fixture.cwd, 'node_modules/.bin');
+      fs.mkdirSync(localBin, { recursive: true });
+      const collision = path.join(localBin, tool);
+      fs.writeFileSync(collision, '#!/bin/sh\nexit 99\n', { mode: 0o700 });
+      expect(() =>
+        runFixtureShell('pnpm run outer', fixture, { env, signal })
+      ).toThrow(collision);
+      fs.unlinkSync(collision);
+    }
+    expect(fs.readFileSync(metadata)).toEqual(before);
+  }
+);
+
+it('does not follow linked dependency directories while checking local tools', async () => {
+  const fixture = makeFixture();
+  const dependency = makeFixture();
+  fs.mkdirSync(path.join(dependency.cwd, 'node_modules/.bin'), {
+    recursive: true,
+  });
+  fs.writeFileSync(
+    path.join(dependency.cwd, 'node_modules/.bin/node'),
+    'not fixture-owned'
+  );
+  fs.mkdirSync(path.join(fixture.cwd, 'node_modules'));
+  fs.symlinkSync(
+    dependency.cwd,
+    path.join(fixture.cwd, 'node_modules/dependency'),
+    'dir'
+  );
+  const bin = manager(
+    fixture,
+    'candidate',
+    `#!/bin/sh\nprintf '${version}\\n'\n`
+  );
+  await expect(
+    pnpmFixtureEnvironment(fixture, manifest.packageManager, { PATH: bin })
+  ).resolves.toBeDefined();
+});
+
+it('distinguishes an executable with a missing interpreter from a version mismatch', async () => {
+  const fixture = makeFixture();
+  const bin = manager(
+    fixture,
+    'unspawnable',
+    '#!/missing/fixture-interpreter\n'
+  );
+  await expect(
+    pnpmFixtureEnvironment(fixture, manifest.packageManager, { PATH: bin })
+  ).rejects.toThrow(
+    /pnpm version probe failed to spawn[\s\S]*Phase: version validation[\s\S]*ENOENT/
+  );
+});
+
+it.each(['node_modules', 'node_modules/.bin'])(
+  'rejects a linked tool container at %s without traversing it',
+  async (relative) => {
+    const fixture = makeFixture();
+    const target = makeFixture();
+    fs.writeFileSync(path.join(target.cwd, 'node'), '#!/bin/sh\nexit 99\n', {
+      mode: 0o700,
+    });
+    const link = path.join(fixture.cwd, relative);
+    fs.mkdirSync(path.dirname(link), { recursive: true });
+    fs.symlinkSync(target.cwd, link, 'dir');
+    const bin = manager(
+      fixture,
+      'candidate',
+      `#!/bin/sh\nprintf '${version}\\n'\n`
+    );
+    await expect(
+      pnpmFixtureEnvironment(fixture, manifest.packageManager, { PATH: bin })
+    ).rejects.toThrow(link);
+  }
+);

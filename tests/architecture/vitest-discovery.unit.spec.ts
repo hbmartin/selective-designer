@@ -15,10 +15,26 @@ it('separates ordinary and dedicated PostgreSQL discovery across supported exten
         `tests/integration/${directory}ordinary.integration.test.${extension}`
     )
   );
+  ordinary.push(
+    ...extensions.flatMap((extension) =>
+      ['', 'nested/'].map(
+        (directory) =>
+          `tests/integration/${directory}public.workflow.integration.test.${extension}`
+      )
+    )
+  );
   const postgres = extensions.flatMap((extension) =>
     ['', 'nested/'].map(
       (directory) =>
         `tests/integration/${directory}driver.postgres.integration.test.${extension}`
+    )
+  );
+  postgres.push(
+    ...extensions.flatMap((extension) =>
+      ['', 'nested/'].map(
+        (directory) =>
+          `tests/integration/${directory}public.workflow.postgres.integration.test.${extension}`
+      )
     )
   );
   const excluded = [
