@@ -6,6 +6,9 @@ const root = process.cwd();
 const sourceRoot = path.join(root, 'src');
 const testRoot = path.join(root, 'tests');
 const sourceFilePattern = /\.[cm]?[jt]sx?$/;
+const integrationTestPattern = /\.integration\.test\.(?:[cm]?[jt]s|[jt]sx)$/;
+const workflowTestPattern =
+  /\.workflow\.integration\.test\.(?:[cm]?[jt]s|[jt]sx)$/;
 const publicModuleFiles = new Set([
   'index',
   'server',
@@ -96,7 +99,7 @@ for (const filePath of sourceFiles) {
   }
 
   if (
-    /^tests\/unit\/modules\/[^/]+\/domain\/__tests__\/[^/]+\.unit\.spec\.tsx?$/.test(
+    /^tests\/unit\/modules\/[^/]+\/domain\/__tests__\/[^/]+\.unit\.spec\.[cm]?[jt]sx?$/.test(
       projectPath
     ) &&
     importSpecifiers.includes('@tests/support/property-testing')
@@ -108,17 +111,14 @@ for (const filePath of sourceFiles) {
 
   if (
     projectPath.startsWith('tests/integration/') &&
-    !projectPath.endsWith('.integration.test.ts')
+    !integrationTestPattern.test(projectPath)
   ) {
     failures.push(
-      `${projectPath}: integration tests must end with .integration.test.ts`
+      `${projectPath}: integration tests must end with .integration.test followed by a standard JS/TS extension`
     );
   }
 
-  if (
-    projectPath.endsWith('.workflow.integration.test.ts') ||
-    projectPath.endsWith('.workflow.integration.test.tsx')
-  ) {
+  if (workflowTestPattern.test(projectPath)) {
     for (const specifier of importSpecifiers) {
       const violation = moduleImportViolation(
         resolveLocalImport(filePath, specifier)

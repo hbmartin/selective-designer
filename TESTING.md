@@ -9,7 +9,7 @@ This project uses a layered test system. The default rule is to verify behavior 
 | Property tests | `tests/unit/**/*.unit.spec.ts` using `@tests/support/property-testing` | `pnpm test:property` | Invariants over generated inputs for pure functions, state transitions, validators, and data mappers. |
 | Unit tests | `tests/unit/**/*.unit.{test,spec}.{ts,tsx}` | `pnpm test:unit` | Business logic in isolation. Mock only true I/O boundaries such as DB, network, provider SDKs, clock, and generated IDs. |
 | Browser component tests | `tests/browser/**/*.browser.{test,spec}.tsx` | `pnpm test:browser` | Component rendering and user interactions in Chromium through Vitest Browser. |
-| Public workflow integration tests | `tests/integration/**/*.workflow.integration.test.ts` | `pnpm test:integration:workflow` | Sub-feature workflows through module public APIs only. No module-internal imports. Assert observable outputs and fake or real port side effects. |
+| Public workflow integration tests | `tests/integration/**/*.workflow.integration.test.{ts,tsx,mts,cts,js,jsx,mjs,cjs}` | `pnpm test:integration:workflow` | Sub-feature workflows through module public APIs only. No module-internal imports. Assert observable outputs and fake or real port side effects. |
 | Adapter integration tests | Ordinary owner-specific `*.integration.test.*` specs under `tests/integration` | `pnpm test:integration <ordinary-file>` | Repository, webhook, SDK, and provider adapters against realistic local infrastructure such as PGlite. The `test:integration:adapters` alias selects only `infrastructure/__tests__` paths. |
 | Native PostgreSQL integration | PostgreSQL-marked `*.postgres.integration.test.*` specs under `tests/integration` | `pnpm test:integration:postgres` (optionally `<postgres-file>`) | Real PostgreSQL migration, transaction, locking, and driver contracts using disposable Docker/Testcontainers databases. |
 | E2E UI tests | `tests/e2e/*.spec.ts` | `pnpm test:e2e` or `pnpm test:e2e:chromium` | User-facing journeys from UI to rendered outcome. Assert durable side effects when the workflow writes data. |
@@ -18,6 +18,22 @@ This project uses a layered test system. The default rule is to verify behavior 
 | Mutation testing | Stryker scoped configs | `pnpm test:mutation:critical` or scoped scripts | Test sensitivity for critical domain/application logic. Run periodically and for risky auth, authorization, and data-loss changes. |
 
 `pnpm test` runs the full ordinary Vitest suite: unit, browser, architecture/security, and PGLite integration projects. Dedicated PostgreSQL tests use `pnpm test:integration:postgres` (Docker required); Playwright tests use `pnpm test:e2e`. Use the layer commands when you need a faster or more diagnostic signal. Focus ordinary specs with `pnpm test:integration <ordinary-file>` and native PostgreSQL specs with `pnpm test:integration:postgres <postgres-file>`; the ordinary command excludes PostgreSQL-marked specs.
+
+## Fixture tooling and discovery
+
+Integration discovery, PostgreSQL exclusion/inclusion, and the layering check support exactly `ts`, `tsx`, `mts`, `cts`, `js`, `jsx`, `mjs`, and `cjs` extensions. Integration files retain the `.integration.test` suffix before the extension. Unit and browser project membership is unchanged.
+
+Workflow reporter fixtures require the project-pinned pnpm to be available through the caller's PATH. They use the first PATH candidate, verify its exact version, and bind execution to that executable. A mismatched raw pnpm fails instead of automatically switching versions. An already-cached Corepack pnpm shim on PATH may work offline; a bare `corepack pnpm` launch without a PATH pnpm is not a fallback. Fixtures neither use `npm_execpath` nor download tools or repair dependencies.
+
+For direct Vitest or IDE launches, expose the already-installed pinned pnpm with a command-scoped PATH or equivalent IDE runner environment:
+
+```bash
+PATH="/absolute/path/to/pinned-pnpm/bin:$PATH" node node_modules/vitest/vitest.mjs run --project=unit tests/security/test-workflow.unit.spec.ts
+```
+
+Git configuration, ignore/attribute sources, and private executable shims belong to fixture-owned support directories outside their Git worktrees. Fixture commands use the current test Node through that private bin, and teardown stops and awaits owned commands before deleting the container.
+
+The default Semgrep scan excludes integration tests. The three integration-only rules for awaited loader assertions, PGlite setup placement, and optional cleanup remain deferred; the layering checker currently enforces naming, workflow-import, and property-placement policy rather than those three checks.
 
 ## Functional Correctness
 
@@ -37,7 +53,7 @@ Unit tests should cover the business rule directly from `tests/unit`. Fakes are 
 
 There are two intentional integration shapes:
 
-- Public workflow integration tests exercise a module through `index.ts`, `server.ts`, `client.ts`, `presentation.ts`, or a test-only `testing.ts` gate when internals are intentionally part of the test setup. They are for sub-feature workflows and should not import `domain/`, `application/`, `infrastructure/`, `transport/`, or `factory.ts` directly. `pnpm check:test-layering` enforces this for `*.workflow.integration.test.ts`.
+- Public workflow integration tests exercise a module through `index.ts`, `server.ts`, `client.ts`, `presentation.ts`, or a test-only `testing.ts` gate when internals are intentionally part of the test setup. They are for sub-feature workflows and should not import `domain/`, `application/`, `infrastructure/`, `transport/`, or `factory.ts` directly. `pnpm check:test-layering` enforces the existing workflow import-gate policy across the integration extensions documented above. Broader import-gate policy alignment is separate work.
 - Adapter integration tests live under `tests/integration` and may use owner `testing.ts` gates for the adapter internals they are proving. These tests assert on durable behavior: DB rows, emitted events, provider payloads, idempotency, pagination, and transaction effects.
 
 Use PGlite for fast repository and module-level checks. For repository SQL or persistence behavior, raw SQL, schema serialization, migrations, database clients/drivers, or transaction/locking changes, also run `pnpm test:integration:postgres` (Docker required). Add or extend PostgreSQL coverage when PGlite cannot prove the contract. The dedicated suite runs its own `*.postgres.integration.test.*` specs; it does not repeat every ordinary repository test. Provider/webhook-only changes use focused adapter checks unless persistence is also affected. Use appropriate local infrastructure or Docker/Testcontainers for object-storage, queue, extension, or network contracts that PGlite cannot represent.

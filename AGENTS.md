@@ -141,7 +141,7 @@ Use the cheapest test that proves the behavior:
 |---|---|
 | Unit | `tests/unit/**/*.unit.{test,spec}.{ts,tsx}` |
 | Browser/component | `tests/browser/**/*.browser.{test,spec}.tsx` |
-| Integration | `tests/integration/**/*.integration.test.ts` |
+| Integration | `tests/integration/**/*.integration.test.{ts,tsx,mts,cts,js,jsx,mjs,cjs}` |
 | Architecture/security | `tests/architecture/**/*.unit.spec.ts`, `tests/security/**/*.unit.spec.ts` |
 | E2E | `tests/e2e/*.spec.ts` |
 | Fixtures/support | `tests/support`, `tests/server`, nearest `*.fixture.tsx` when useful |
