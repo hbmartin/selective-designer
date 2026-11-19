@@ -8,7 +8,7 @@ const testRoot = path.join(root, 'tests');
 const sourceFilePattern = /\.[cm]?[jt]sx?$/;
 const integrationTestPattern = /\.integration\.test\.(?:[cm]?[jt]s|[jt]sx)$/;
 const workflowTestPattern =
-  /\.workflow\.integration\.test\.(?:[cm]?[jt]s|[jt]sx)$/;
+  /\.workflow(?:\.postgres)?\.integration\.test\.(?:[cm]?[jt]s|[jt]sx)$/;
 const publicModuleFiles = new Set([
   'index',
   'server',
@@ -99,7 +99,7 @@ for (const filePath of sourceFiles) {
   }
 
   if (
-    /^tests\/unit\/modules\/[^/]+\/domain\/__tests__\/[^/]+\.unit\.spec\.[cm]?[jt]sx?$/.test(
+    /^tests\/unit\/modules\/[^/]+\/domain\/__tests__\/[^/]+\.unit\.(?:spec|test)\.[cm]?[jt]sx?$/.test(
       projectPath
     ) &&
     importSpecifiers.includes('@tests/support/property-testing')
@@ -115,6 +115,12 @@ for (const filePath of sourceFiles) {
   ) {
     failures.push(
       `${projectPath}: integration tests must end with .integration.test followed by a standard JS/TS extension`
+    );
+  }
+
+  if (/\.postgres\.workflow\.integration\.test\./.test(projectPath)) {
+    failures.push(
+      `${projectPath}: PostgreSQL workflow tests must use .workflow.postgres.integration.test`
     );
   }
 
