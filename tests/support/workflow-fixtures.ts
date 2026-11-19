@@ -3,31 +3,79 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 
+export type WorkflowFixture = Readonly<{
+  root: string;
+  cwd: string;
+  support: string;
+  bin: string;
+}>;
+
+export function createWorkflowFixture(): WorkflowFixture {
+  const root = fs.realpathSync(
+    fs.mkdtempSync(path.join(os.tmpdir(), 'test-workflow-'))
+  );
+  const cwd = path.join(root, 'worktree');
+  const support = path.join(root, 'support');
+  const bin = path.join(support, 'bin');
+  fs.mkdirSync(cwd);
+  fs.mkdirSync(bin, { recursive: true });
+  for (const file of [
+    'git-global',
+    'git-system',
+    'git-ignore',
+    'git-attributes',
+  ]) {
+    fs.writeFileSync(path.join(support, file), '', { mode: 0o600 });
+  }
+  fs.symlinkSync(process.execPath, path.join(bin, 'node'));
+  return Object.freeze({ root, cwd, support, bin });
+}
+
+function callerPath(parent: NodeJS.ProcessEnv) {
+  return (parent.PATH ?? '')
+    .split(path.delimiter)
+    .filter((entry) => entry.length > 0)
+    .map((entry) => path.resolve(entry));
+}
+
 export function fixtureEnvironment(
-  root: string,
+  fixture: WorkflowFixture,
   parent: NodeJS.ProcessEnv = process.env
 ): NodeJS.ProcessEnv {
-  const configDirectory = path.join(root, '.fixture-environment');
-  fs.mkdirSync(configDirectory, { recursive: true });
-  const emptyConfig = path.join(configDirectory, 'gitconfig');
-  if (!fs.existsSync(emptyConfig)) fs.writeFileSync(emptyConfig, '');
-
-  return {
-    PATH: [
-      path.join(root, 'node_modules/.bin'),
-      path.dirname(process.execPath),
-      parent.PATH ?? '',
-    ].join(path.delimiter),
+  const env: NodeJS.ProcessEnv = {
+    PATH: [fixture.bin, ...callerPath(parent)].join(path.delimiter),
     HOME: parent.HOME ?? os.homedir(),
     TMPDIR: os.tmpdir(),
     GIT_CONFIG_NOSYSTEM: '1',
-    GIT_CONFIG_SYSTEM: emptyConfig,
-    GIT_CONFIG_GLOBAL: emptyConfig,
-    npm_config_verify_deps_before_run: 'false',
+    GIT_CONFIG_SYSTEM: path.join(fixture.support, 'git-system'),
+    GIT_CONFIG_GLOBAL: path.join(fixture.support, 'git-global'),
+    GIT_ATTR_NOSYSTEM: '1',
+    GIT_CONFIG_COUNT: '2',
+    GIT_CONFIG_KEY_0: 'core.excludesFile',
+    GIT_CONFIG_VALUE_0: path.join(fixture.support, 'git-ignore'),
+    GIT_CONFIG_KEY_1: 'core.attributesFile',
+    GIT_CONFIG_VALUE_1: path.join(fixture.support, 'git-attributes'),
+    pnpm_config_pm_on_fail: 'error',
+    pnpm_config_verify_deps_before_run: 'false',
+    pnpm_config_manage_package_manager_versions: 'false',
+    npm_config_manage_package_manager_versions: 'false',
+    COREPACK_ENABLE_NETWORK: '0',
+    COREPACK_ENV_FILE: '0',
+    COREPACK_ENABLE_AUTO_PIN: '0',
+    COREPACK_DEFAULT_TO_LATEST: '0',
   };
+  for (const key of [
+    'COREPACK_HOME',
+    'PNPM_HOME',
+    'XDG_CACHE_HOME',
+    'XDG_DATA_HOME',
+  ]) {
+    if (parent[key] !== undefined) env[key] = parent[key];
+  }
+  return env;
 }
 
-export function fixtureGit(root: string, args: string[]) {
+export function fixtureGit(fixture: WorkflowFixture, args: string[]) {
   const result = spawnSync(
     'git',
     [
@@ -42,21 +90,22 @@ export function fixtureGit(root: string, args: string[]) {
       ...args,
     ],
     {
-      cwd: root,
+      cwd: fixture.cwd,
       encoding: 'utf8',
       timeout: 5_000,
-      env: fixtureEnvironment(root),
+      env: fixtureEnvironment(fixture),
     }
   );
   if (result.error || result.status !== 0) {
     throw new Error(
-      `Fixture git ${args.join(' ')} failed in ${root}: ${result.error ?? result.stderr}`
+      `Fixture git ${args.join(' ')} failed in ${fixture.cwd}: ${result.error ?? result.stderr}`
     );
   }
   return result.stdout.trim();
 }
 
 type CommandOptions = {
+  cwd?: string;
   env?: NodeJS.ProcessEnv;
   timeoutMs?: number;
   terminationGraceMs?: number;
@@ -70,21 +119,27 @@ type CommandResult = {
   signal: NodeJS.Signals | null;
   timedOut: boolean;
   aborted: boolean;
+  abortReason?: string;
   error?: Error;
   stdout: string;
   stderr: string;
 };
 
-const runningCommands = new Map<
-  string,
+const runningCommands = new WeakMap<
+  WorkflowFixture,
   Map<Promise<CommandResult>, () => void>
 >();
 
-export async function disposeFixtureCommands(root: string) {
-  const commands = runningCommands.get(root);
+export async function disposeFixtureCommands(fixture: WorkflowFixture) {
+  const commands = runningCommands.get(fixture);
   if (!commands) return;
   for (const stop of commands.values()) stop();
   await Promise.allSettled(commands.keys());
+}
+
+export async function disposeWorkflowFixture(fixture: WorkflowFixture) {
+  await disposeFixtureCommands(fixture);
+  fs.rmSync(fixture.root, { recursive: true, force: true });
 }
 
 export function describeCommand(result: CommandResult) {
@@ -92,6 +147,7 @@ export function describeCommand(result: CommandResult) {
     `Command: ${result.command}`,
     `Working directory: ${result.cwd}`,
     `Exit: ${result.status}; signal: ${result.signal}; timeout: ${result.timedOut}; aborted: ${result.aborted}`,
+    `Cancellation: ${result.abortReason ?? 'none'}`,
     `Spawn error: ${result.error?.message ?? 'none'}`,
     `stdout:\n${result.stdout}`,
     `stderr:\n${result.stderr}`,
@@ -101,14 +157,29 @@ export function describeCommand(result: CommandResult) {
 export function runFixtureCommand(
   command: string,
   args: string[],
-  cwd: string,
+  fixture: WorkflowFixture,
   {
-    env = fixtureEnvironment(cwd),
+    cwd = fixture.cwd,
+    env = fixtureEnvironment(fixture),
     timeoutMs = 5_000,
     terminationGraceMs = 2_000,
     signal,
   }: CommandOptions = {}
 ): Promise<CommandResult> {
+  const result: CommandResult = {
+    command: [command, ...args].join(' '),
+    cwd,
+    status: null,
+    signal: null,
+    timedOut: false,
+    aborted: signal?.aborted ?? false,
+    stdout: '',
+    stderr: '',
+  };
+  if (signal?.aborted) {
+    result.abortReason = String(signal.reason);
+    return Promise.resolve(result);
+  }
   let stopRunning = () => {};
   const completion = new Promise<CommandResult>((resolve) => {
     const child = spawn(command, args, {
@@ -117,39 +188,28 @@ export function runFixtureCommand(
       detached: true,
       stdio: ['ignore', 'pipe', 'pipe'],
     });
-    const result: CommandResult = {
-      command: [command, ...args].join(' '),
-      cwd,
-      status: null,
-      signal: null,
-      timedOut: false,
-      aborted: false,
-      stdout: '',
-      stderr: '',
-    };
     let escalation: ReturnType<typeof setTimeout> | undefined;
     const killGroup = (killSignal: NodeJS.Signals) => {
       if (child.pid === undefined) return;
       try {
         process.kill(-child.pid, killSignal);
       } catch (error) {
-        if ((error as NodeJS.ErrnoException).code !== 'ESRCH') {
+        if ((error as NodeJS.ErrnoException).code !== 'ESRCH')
           result.error ??= error as Error;
-        }
       }
     };
-    const stop = (reason: 'timedOut' | 'aborted') => {
+    const stop = (reason: 'timedOut' | 'aborted', detail?: string) => {
       if (result.timedOut || result.aborted) return;
       result[reason] = true;
+      result.abortReason = detail;
       killGroup('SIGTERM');
       escalation = setTimeout(() => killGroup('SIGKILL'), terminationGraceMs);
     };
     const deadline = setTimeout(() => stop('timedOut'), timeoutMs);
-    const onAbort = () => stop('aborted');
-    stopRunning = onAbort;
+    const onAbort = () => stop('aborted', String(signal?.reason));
+    stopRunning = () => stop('aborted', 'Fixture disposed');
     signal?.addEventListener('abort', onAbort, { once: true });
     if (signal?.aborted) onAbort();
-
     // Bound retained output while continuing to drain both pipes.
     child.stdout.setEncoding('utf8');
     child.stderr.setEncoding('utf8');
@@ -166,7 +226,6 @@ export function runFixtureCommand(
       clearTimeout(deadline);
       clearTimeout(escalation);
       signal?.removeEventListener('abort', onAbort);
-      // A descendant may have closed its pipes before the group leader exited.
       if (result.timedOut || result.aborted) killGroup('SIGKILL');
       result.status = status;
       result.signal = exitSignal;
@@ -174,41 +233,45 @@ export function runFixtureCommand(
     });
   });
   const commands =
-    runningCommands.get(cwd) ?? new Map<Promise<CommandResult>, () => void>();
-  runningCommands.set(cwd, commands);
+    runningCommands.get(fixture) ??
+    new Map<Promise<CommandResult>, () => void>();
+  runningCommands.set(fixture, commands);
   commands.set(completion, () => stopRunning());
   return completion.finally(() => {
     commands.delete(completion);
-    if (commands.size === 0) runningCommands.delete(cwd);
+    if (commands.size === 0) runningCommands.delete(fixture);
   });
 }
 
 export function runFixtureShell(
   script: string,
-  cwd: string,
+  fixture: WorkflowFixture,
   options: CommandOptions = {}
 ) {
   return runFixtureCommand(
-    'bash',
+    '/bin/bash',
     ['-e', '-o', 'pipefail', '-c', script],
-    cwd,
+    fixture,
     options
   );
 }
 
+function shellQuote(value: string) {
+  return `'${value.replaceAll("'", "'\\''")}'`;
+}
+
 export async function pnpmFixtureEnvironment(
-  root: string,
+  fixture: WorkflowFixture,
   packageManager: string,
-  env = fixtureEnvironment(root),
+  parent: NodeJS.ProcessEnv = process.env,
   signal?: AbortSignal
 ) {
   const expectedVersion = /^pnpm@(\d+\.\d+\.\d+)(?:\+.*)?$/.exec(
     packageManager
   )?.[1];
   if (!expectedVersion) throw new Error(`Invalid pnpm pin: ${packageManager}`);
-  const candidate = (env.PATH ?? '')
-    .split(path.delimiter)
-    .map((directory) => path.resolve(root, directory, 'pnpm'))
+  const candidate = callerPath(parent)
+    .map((directory) => path.join(directory, 'pnpm'))
     .find((file) => {
       try {
         fs.accessSync(file, fs.constants.X_OK);
@@ -219,10 +282,15 @@ export async function pnpmFixtureEnvironment(
     });
   if (!candidate) {
     throw new Error(
-      `pnpm ${expectedVersion} is required for workflow fixtures but was not found on PATH. Make the project's pinned pnpm available before running tests.`
+      `pnpm ${expectedVersion} is required for workflow fixtures but was not found on PATH. Put the project's already-installed pinned pnpm on PATH before running tests; automatic downloads and switching are disabled.`
     );
   }
-  const version = await runFixtureCommand(candidate, ['--version'], root, {
+  if (candidate === path.join(fixture.bin, 'pnpm'))
+    throw new Error(
+      'Resolve pnpm from the caller PATH, not the private fixture bin.'
+    );
+  const env = fixtureEnvironment(fixture, parent);
+  const version = await runFixtureCommand(candidate, ['--version'], fixture, {
     env,
     timeoutMs: 10_000,
     signal,
@@ -235,16 +303,13 @@ export async function pnpmFixtureEnvironment(
     version.stdout.trim() !== expectedVersion
   ) {
     throw new Error(
-      `Expected pnpm ${expectedVersion} from ${candidate}. Make the project's pinned pnpm available.\n${describeCommand(version)}`
+      `Expected pnpm ${expectedVersion} from ${candidate}. Put the project's already-installed pinned pnpm on PATH; automatic downloads and switching are disabled.\n${describeCommand(version)}`
     );
   }
-  return {
-    ...env,
-    PATH: [
-      path.join(root, 'node_modules/.bin'),
-      path.dirname(process.execPath),
-      path.dirname(candidate),
-      env.PATH,
-    ].join(path.delimiter),
-  };
+  fs.writeFileSync(
+    path.join(fixture.bin, 'pnpm'),
+    `#!/bin/sh\nexec ${shellQuote(candidate)} "$@"\n`,
+    { mode: 0o700 }
+  );
+  return env;
 }

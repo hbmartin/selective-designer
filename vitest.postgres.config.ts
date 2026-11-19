@@ -8,7 +8,7 @@ export default defineConfig({
   test: {
     environment: 'node',
     include: [
-      'tests/integration/**/*.postgres.integration.test.?(c|m)[jt]s?(x)',
+      'tests/integration/**/*.postgres.integration.test.{ts,tsx,mts,cts,js,jsx,mjs,cjs}',
     ],
     exclude: configDefaults.exclude,
     setupFiles: [resolve('./tests/setup.base.ts')],

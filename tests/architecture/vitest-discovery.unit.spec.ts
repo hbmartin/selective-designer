@@ -9,15 +9,23 @@ it('separates ordinary and dedicated PostgreSQL discovery across supported exten
     fs.mkdtempSync(path.join(os.tmpdir(), 'vitest-discovery-'))
   );
   const extensions = ['ts', 'mts', 'cts', 'tsx', 'js', 'mjs', 'cjs', 'jsx'];
-  const ordinary = extensions.map(
-    (extension) =>
-      `tests/integration/nested/ordinary.integration.test.${extension}`
+  const ordinary = extensions.flatMap((extension) =>
+    ['', 'nested/'].map(
+      (directory) =>
+        `tests/integration/${directory}ordinary.integration.test.${extension}`
+    )
   );
-  const postgres = extensions.map(
-    (extension) =>
-      `tests/integration/nested/driver.postgres.integration.test.${extension}`
+  const postgres = extensions.flatMap((extension) =>
+    ['', 'nested/'].map(
+      (directory) =>
+        `tests/integration/${directory}driver.postgres.integration.test.${extension}`
+    )
   );
   const excluded = [
+    ...['mtsx', 'ctsx', 'mjsx', 'cjsx'].flatMap((extension) => [
+      `tests/integration/unsupported.integration.test.${extension}`,
+      `tests/integration/unsupported.postgres.integration.test.${extension}`,
+    ]),
     'tests/integration/nested/node_modules/pkg/vendor.integration.test.ts',
     'tests/integration/nested/.git/metadata.integration.test.ts',
     'tests/integration/nested/node_modules/pkg/vendor.postgres.integration.test.mts',
