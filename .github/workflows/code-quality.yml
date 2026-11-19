@@ -169,9 +169,20 @@ jobs:
         run: pnpm check:test-layering
 
       - name: Run architecture tests
+        id: tests
         run: |
           mkdir -p test-results/architecture
           pnpm exec vitest run --project=unit tests/architecture --reporter=default --reporter=junit --outputFile.junit=test-results/architecture/junit.xml
+
+      - name: Ensure JUnit report was generated
+        if: ${{ !cancelled() && (steps.tests.outcome == 'success' || steps.tests.outcome == 'failure') }}
+        run: test -s test-results/architecture/junit.xml
+
+      - name: Ensure tests did not mutate tracked files
+        if: ${{ !cancelled() && (steps.tests.outcome == 'success' || steps.tests.outcome == 'failure') }}
+        run: |
+          git diff --exit-code -- .
+          git diff --cached --exit-code -- .
 
       - name: Upload architecture test report
         if: always()
@@ -180,9 +191,6 @@ jobs:
           name: architecture-test-report
           path: test-results/architecture/
           retention-days: 30
-
-      - name: Ensure architecture checks did not mutate files
-        run: git diff --exit-code -- .
 
   coverage:
     name: Coverage

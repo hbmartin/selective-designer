@@ -103,7 +103,7 @@ export default defineConfig({
           include: ['tests/integration/**/*.integration.test.?(c|m)[jt]s?(x)'],
           exclude: [
             ...configDefaults.exclude,
-            'tests/integration/**/*.postgres.integration.test.ts',
+            'tests/integration/**/*.postgres.integration.test.?(c|m)[jt]s?(x)',
           ],
           setupFiles: [resolve('./tests/setup.base.ts')],
           globalSetup: [resolve('./tests/server/pglite-global-setup.ts')],

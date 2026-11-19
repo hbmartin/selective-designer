@@ -10,14 +10,14 @@ This project uses a layered test system. The default rule is to verify behavior 
 | Unit tests | `tests/unit/**/*.unit.{test,spec}.{ts,tsx}` | `pnpm test:unit` | Business logic in isolation. Mock only true I/O boundaries such as DB, network, provider SDKs, clock, and generated IDs. |
 | Browser component tests | `tests/browser/**/*.browser.{test,spec}.tsx` | `pnpm test:browser` | Component rendering and user interactions in Chromium through Vitest Browser. |
 | Public workflow integration tests | `tests/integration/**/*.workflow.integration.test.ts` | `pnpm test:integration:workflow` | Sub-feature workflows through module public APIs only. No module-internal imports. Assert observable outputs and fake or real port side effects. |
-| Adapter integration tests | Owner-specific `tests/integration/**/*.integration.test.ts` | `pnpm test:integration <relevant-file>` | Repository, webhook, SDK, and provider adapters against realistic local infrastructure such as PGlite. The `test:integration:adapters` alias selects only `infrastructure/__tests__` paths. |
-| Native PostgreSQL integration | `tests/integration/**/*.postgres.integration.test.ts` | `pnpm test:integration:postgres` | Real PostgreSQL migration, transaction, locking, and driver contracts using disposable Docker/Testcontainers databases. |
+| Adapter integration tests | Ordinary owner-specific `*.integration.test.*` specs under `tests/integration` | `pnpm test:integration <ordinary-file>` | Repository, webhook, SDK, and provider adapters against realistic local infrastructure such as PGlite. The `test:integration:adapters` alias selects only `infrastructure/__tests__` paths. |
+| Native PostgreSQL integration | PostgreSQL-marked `*.postgres.integration.test.*` specs under `tests/integration` | `pnpm test:integration:postgres` (optionally `<postgres-file>`) | Real PostgreSQL migration, transaction, locking, and driver contracts using disposable Docker/Testcontainers databases. |
 | E2E UI tests | `tests/e2e/*.spec.ts` | `pnpm test:e2e` or `pnpm test:e2e:chromium` | User-facing journeys from UI to rendered outcome. Assert durable side effects when the workflow writes data. |
 | Visual regression | `tests/e2e/visual/*.visual.spec.ts` | `pnpm test:e2e:visual` | Stable critical screens with local Playwright snapshots. Baseline updates use `pnpm test:e2e:visual:update` and require review. |
 | Coverage | Ordinary Vitest projects | `pnpm test:coverage` | Floor metric for touched code and trend signal in CI. Do not treat line coverage as proof of assertion quality. |
 | Mutation testing | Stryker scoped configs | `pnpm test:mutation:critical` or scoped scripts | Test sensitivity for critical domain/application logic. Run periodically and for risky auth, authorization, and data-loss changes. |
 
-`pnpm test` runs the full ordinary Vitest suite: unit, browser, architecture/security, and PGLite integration projects. Dedicated PostgreSQL tests use `pnpm test:integration:postgres` (Docker required); Playwright tests use `pnpm test:e2e`. Use the layer commands when you need a faster or more diagnostic signal.
+`pnpm test` runs the full ordinary Vitest suite: unit, browser, architecture/security, and PGLite integration projects. Dedicated PostgreSQL tests use `pnpm test:integration:postgres` (Docker required); Playwright tests use `pnpm test:e2e`. Use the layer commands when you need a faster or more diagnostic signal. Focus ordinary specs with `pnpm test:integration <ordinary-file>` and native PostgreSQL specs with `pnpm test:integration:postgres <postgres-file>`; the ordinary command excludes PostgreSQL-marked specs.
 
 ## Functional Correctness
 
@@ -40,7 +40,7 @@ There are two intentional integration shapes:
 - Public workflow integration tests exercise a module through `index.ts`, `server.ts`, `client.ts`, `presentation.ts`, or a test-only `testing.ts` gate when internals are intentionally part of the test setup. They are for sub-feature workflows and should not import `domain/`, `application/`, `infrastructure/`, `transport/`, or `factory.ts` directly. `pnpm check:test-layering` enforces this for `*.workflow.integration.test.ts`.
 - Adapter integration tests live under `tests/integration` and may use owner `testing.ts` gates for the adapter internals they are proving. These tests assert on durable behavior: DB rows, emitted events, provider payloads, idempotency, pagination, and transaction effects.
 
-Use PGlite for fast repository and module-level checks. For repository SQL or persistence behavior, raw SQL, schema serialization, migrations, database clients/drivers, or transaction/locking changes, also run `pnpm test:integration:postgres` (Docker required). Add or extend PostgreSQL coverage when PGlite cannot prove the contract. The dedicated suite runs its own `*.postgres.integration.test.ts` specs; it does not repeat every ordinary repository test. Provider/webhook-only changes use focused adapter checks unless persistence is also affected.
+Use PGlite for fast repository and module-level checks. For repository SQL or persistence behavior, raw SQL, schema serialization, migrations, database clients/drivers, or transaction/locking changes, also run `pnpm test:integration:postgres` (Docker required). Add or extend PostgreSQL coverage when PGlite cannot prove the contract. The dedicated suite runs its own `*.postgres.integration.test.*` specs; it does not repeat every ordinary repository test. Provider/webhook-only changes use focused adapter checks unless persistence is also affected. Use appropriate local infrastructure or Docker/Testcontainers for object-storage, queue, extension, or network contracts that PGlite cannot represent.
 
 ## End To End
 
@@ -74,8 +74,8 @@ Escalate based on touched surface:
 | --- | --- |
 | Pure domain policies, validators, or mappers | `pnpm test:property` and `pnpm test:unit` |
 | Shared React components or forms | `pnpm test:browser` and browser inspection when layout changes |
-| Repository SQL/persistence, schema serialization, migrations, drivers, transactions, locking | `pnpm test:integration <relevant-file>` and `pnpm test:integration:postgres`; also `pnpm check:migrations` for schema/migration edits |
-| Provider or webhook contracts without persistence changes | Focused `pnpm test:integration <relevant-file>`; `test:integration:adapters` covers matching `infrastructure/__tests__` files only |
+| Repository SQL/persistence, schema serialization, migrations, drivers, transactions, locking | `pnpm test:integration <ordinary-file>` and `pnpm test:integration:postgres`; also `pnpm check:migrations` for schema/migration edits |
+| Provider or webhook contracts without persistence changes | Focused `pnpm test:integration <ordinary-file>`; `test:integration:adapters` covers matching `infrastructure/__tests__` files only |
 | Module workflows or public APIs | `pnpm test:integration:workflow` |
 | Auth, routing, session, upload, or full-stack persistence | `pnpm test:e2e:chromium` |
 | Critical screens or layout-heavy UI | `pnpm test:e2e:visual` |
