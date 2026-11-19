@@ -3,6 +3,8 @@ import { playwright } from '@vitest/browser-playwright';
 import path from 'node:path';
 import { coverageConfigDefaults, defineConfig } from 'vitest/config';
 
+import { vitestProjectOptions } from './scripts/vitest-projects';
+
 const resolve = (filePath: string) =>
   path.resolve(import.meta.dirname, filePath);
 
@@ -60,11 +62,7 @@ export default defineConfig({
             }),
             instances: [{ browser: 'chromium' }],
           },
-          include: ['tests/browser/**/*.{test,spec}.?(c|m)[jt]s?(x)'],
-          setupFiles: [
-            resolve('tests/setup.base.ts'),
-            resolve('tests/setup.browser.ts'),
-          ],
+          ...vitestProjectOptions('browser', resolve),
         },
         resolve: {
           alias: testAliases,
@@ -74,15 +72,7 @@ export default defineConfig({
         test: {
           name: 'unit',
           environment: 'node',
-          include: [
-            'tests/unit/**/*.{test,spec}.?(c|m)[jt]s?(x)',
-            'tests/architecture/**/*.{test,spec}.?(c|m)[jt]s?(x)',
-            'tests/security/**/*.{test,spec}.?(c|m)[jt]s?(x)',
-          ],
-          setupFiles: [
-            resolve('tests/setup.base.ts'),
-            resolve('tests/server/test-setup.ts'),
-          ],
+          ...vitestProjectOptions('unit', resolve),
         },
         resolve: {
           alias: testAliases,
@@ -92,11 +82,8 @@ export default defineConfig({
         test: {
           name: 'integration',
           environment: 'node',
-          exclude: ['tests/integration/**/*.postgres.integration.test.ts'],
-          include: ['tests/integration/**/*.integration.test.?(c|m)[jt]s?(x)'],
+          ...vitestProjectOptions('integration', resolve),
           fileParallelism: false,
-          globalSetup: resolve('tests/server/pglite-global-setup.ts'),
-          setupFiles: [resolve('tests/setup.base.ts')],
         },
         resolve: {
           alias: testAliases,

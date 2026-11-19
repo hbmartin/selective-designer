@@ -15,15 +15,18 @@ import {
   findRelatedTestsInGraph,
   formatOutput,
   isCliEntrypoint,
+  isRunnableVitestTestFile,
   main,
   normalizePath,
-  POSTGRES_SETUP_FILES,
   parseCliArguments,
   parseNullDelimitedPaths,
   runStrategyB,
   runVitest,
 } from '../../../scripts/affected-tests';
-import postgresConfig from '../../../vitest.postgres.config';
+import {
+  vitestProjectOptions,
+  vitestProjects,
+} from '../../../scripts/vitest-projects';
 
 const tempDirectories: string[] = [];
 
@@ -48,6 +51,8 @@ const makeResult = (
   dependencyCruiserFailed: false,
   directTestFiles: [],
   excludedChangedFiles: [],
+  migrationTestFiles: [],
+  unresolvedGraphFiles: [],
   postgresTestFiles: [],
   postgresImpactReasons: [],
   rootsCruised: [],
@@ -169,8 +174,8 @@ describe('changed file classification', () => {
         'scripts/affected-tests.ts',
         'tests/unit/modules/design/domain/design.unit.spec.ts',
         'tests/browser/platform/components/form/form.browser.spec.tsx',
-        'tests/integration/modules/design/infrastructure/__tests__/design-repository-drizzle.postgres.integration.test.ts',
         'tests/e2e/login.spec.ts',
+        'tests/integration/modules/design/infrastructure/__tests__/design-repository-drizzle.postgres.integration.test.ts',
         'tests/server/test-utils.ts',
         'README.md',
       ])
@@ -179,11 +184,7 @@ describe('changed file classification', () => {
         'tests/browser/platform/components/form/form.browser.spec.tsx',
         'tests/unit/modules/design/domain/design.unit.spec.ts',
       ],
-      excludedFiles: [
-        'README.md',
-        'tests/e2e/login.spec.ts',
-        'tests/integration/modules/design/infrastructure/__tests__/design-repository-drizzle.postgres.integration.test.ts',
-      ],
+      excludedFiles: ['README.md', 'tests/e2e/login.spec.ts'],
       globalConfigChanged: true,
       globalConfigFiles: ['vitest.config.ts'],
       sourceFiles: [
@@ -236,7 +237,7 @@ describe('global config fallback', () => {
     });
 
     expect(result.runAll).toBe(false);
-    expect(result.excludedChangedFiles).toEqual([config]);
+    expect(result.excludedChangedFiles).toEqual([]);
     expect(result.testFiles).toEqual([]);
     expect(result.warnings).toEqual([
       'PostgreSQL checks may be affected. Run pnpm test:integration:postgres to verify them. Reason: PostgreSQL configuration changed.',
@@ -270,15 +271,17 @@ describe('PostgreSQL guidance', () => {
     ],
   };
 
-  it('models the setup files configured by the dedicated PostgreSQL suite', () => {
-    const setupFiles = postgresConfig.test?.setupFiles;
-    const configuredFiles =
-      typeof setupFiles === 'string' ? [setupFiles] : (setupFiles ?? []);
-    expect(
-      deduplicateAndSort(
-        configuredFiles.map((file) => path.relative(process.cwd(), file))
-      )
-    ).toEqual(deduplicateAndSort([...POSTGRES_SETUP_FILES]));
+  it('provides Vitest configuration from the shared project catalog', () => {
+    for (const id of ['unit', 'browser', 'integration', 'postgres'] as const) {
+      const project = vitestProjects[id];
+      const resolve = (file: string) => `/repo/${file}`;
+      expect(vitestProjectOptions(id, resolve)).toEqual({
+        include: project.include,
+        exclude: project.exclude,
+        setupFiles: project.setupFiles.map(resolve),
+        globalSetup: project.globalSetup.map(resolve),
+      });
+    }
   });
 
   it.each([
@@ -293,8 +296,11 @@ describe('PostgreSQL guidance', () => {
     async ({ file, state }) => {
       const otherSpec =
         'tests/integration/another.postgres.integration.test.ts';
+      const pgliteSpec = 'tests/integration/repository.integration.test.ts';
+      const selected = [pgliteSpec].filter(() => file.endsWith('.sql'));
       const cwd = makeTempCwd([
         unitTest,
+        pgliteSpec,
         postgresTest,
         otherSpec,
         ...(state === 'deleted' ? [] : [file]),
@@ -307,12 +313,14 @@ describe('PostgreSQL guidance', () => {
       });
       expect(result.postgresImpactReasons).toEqual(['migration']);
       expect(result.postgresTestFiles).toEqual([otherSpec, postgresTest]);
-      expect(result.testFiles).toEqual([]);
+      expect(result.testFiles).toEqual(selected);
+      expect(result.migrationTestFiles).toEqual(selected);
+      expect(result.excludedChangedFiles).toEqual([]);
       expect(result.warnings).toEqual([
         `${warning} Reason: PostgreSQL migration inputs changed.`,
       ]);
       expect(dependencyCruiser).not.toHaveBeenCalled();
-      const run = vi.fn();
+      const run = vi.fn(async () => 0);
       const stderr = vi.fn();
       await expect(
         main(['--run'], {
@@ -322,7 +330,8 @@ describe('PostgreSQL guidance', () => {
           stderr,
         })
       ).resolves.toBe(0);
-      expect(run).not.toHaveBeenCalled();
+      expect(run).toHaveBeenCalledTimes(selected.length);
+      expect(run.mock.calls.flat(2)).toEqual(selected);
       expect(stderr).toHaveBeenCalledWith(
         `${warning} Reason: PostgreSQL migration inputs changed.\n`
       );
@@ -333,13 +342,15 @@ describe('PostgreSQL guidance', () => {
       ).toMatchObject({
         postgresImpactReasons: ['migration'],
         postgresTestFiles: [otherSpec, postgresTest],
-        testFiles: [],
+        testFiles: selected,
+        migrationTestFiles: selected,
       });
     }
   );
 
   it.each([
     'drizzle/migrations/meta/0012_snapshot.json',
+    'drizzle/migrations/nested/not-loaded.sql',
     'drizzle/migrations-not-used/0012_example.sql',
   ])(
     'does not treat unused metadata or similarly named paths as runtime migration input: %s',
@@ -392,7 +403,7 @@ describe('PostgreSQL guidance', () => {
   it('follows transitive setup dependencies without importing setup modules', async () => {
     const dependency = 'src/setup-dependency.ts';
     const intermediate = 'src/setup-bridge.ts';
-    const setup = POSTGRES_SETUP_FILES[0];
+    const setup = vitestProjects.postgres.setupFiles[0]!;
     const otherSpec = 'tests/integration/another.postgres.integration.test.ts';
     const cwd = makeTempCwd([
       dependency,
@@ -585,6 +596,7 @@ describe('PostgreSQL guidance', () => {
 
   it.each([
     'vitest.postgres.config.ts',
+    'scripts/vitest-projects.ts',
     'tests/setup.base.ts',
     'tsconfig.json',
     'package.json',
@@ -593,12 +605,15 @@ describe('PostgreSQL guidance', () => {
   ])('warns for PostgreSQL configuration %s', async (config) => {
     const result = await findAffectedTests({
       changedFiles: [config],
+      cwd: makeTempCwd([unitTest, postgresTest]),
       allTestFiles: [unitTest, postgresTest],
     });
     expect(result.warnings).toEqual([
       `${warning} Reason: PostgreSQL configuration changed.`,
     ]);
     expect(result.postgresImpactReasons).toEqual(['configuration']);
+    expect(result.postgresTestFiles).toEqual([postgresTest]);
+    expect(result.excludedChangedFiles).toEqual([]);
     expect(result.testFiles).not.toContain(postgresTest);
   });
 
@@ -614,7 +629,7 @@ describe('PostgreSQL guidance', () => {
         },
       });
       expect(result.dependencyCruiserFailed).toBe(true);
-      expect(result.postgresTestFiles).toEqual([]);
+      expect(result.postgresTestFiles).toEqual([postgresTest]);
       expect(result.postgresImpactReasons).toEqual(['graph_unavailable']);
       expect(result.warnings).toEqual([
         'Warning: dependency-cruiser failed; dependency-based test discovery is unavailable.',
@@ -651,6 +666,203 @@ describe('PostgreSQL guidance', () => {
     expect(verbose).toContain(
       '# PostgreSQL impact reasons (1):\n#   changed code is used by PostgreSQL specs'
     );
+  });
+});
+
+describe('project-aware discovery', () => {
+  const specs = [
+    'tests/unit/isolated.unit.spec.ts',
+    'tests/architecture/isolated.unit.spec.ts',
+    'tests/security/isolated.unit.spec.ts',
+    'tests/browser/isolated.browser.spec.tsx',
+    'tests/integration/isolated.integration.test.ts',
+    'tests/integration/isolated.postgres.integration.test.ts',
+  ];
+  const postgres = specs[5]!;
+  const source = 'src/setup-dependency.ts';
+
+  it.each([
+    {
+      setup: 'tests/server/test-setup.ts',
+      selected: specs.slice(0, 3),
+      pg: [],
+    },
+    { setup: 'tests/setup.browser.ts', selected: [specs[3]!], pg: [] },
+    {
+      setup: 'tests/server/pglite-global-setup.ts',
+      selected: [specs[4]!],
+      pg: [],
+    },
+    {
+      setup: 'tests/setup.base.ts',
+      selected: specs.slice(0, 5),
+      pg: [postgres],
+    },
+  ])(
+    'follows transitive implicit dependencies of $setup',
+    async ({ setup, selected, pg }) => {
+      const helper = 'tests/support/setup-helper.ts';
+      const cwd = makeTempCwd([source, helper, setup, ...specs]);
+      fs.writeFileSync(
+        path.join(cwd, setup),
+        'throw new Error("setup must not execute");'
+      );
+      const read = vi.spyOn(fs, 'readdirSync');
+      const result = await findAffectedTests({
+        cwd,
+        changedFiles: [source],
+        // An ordinary-only override cannot erase PostgreSQL graph membership.
+        allTestFiles: specs.slice(0, 5),
+        dependencyCruiser: async () => ({
+          modules: [
+            { source, dependencies: [{ resolved: helper }] },
+            { source: helper, dependencies: [{ resolved: source }] },
+            { source: setup, dependencies: [{ resolved: helper }] },
+            ...specs.map((file) => ({ source: file })),
+          ],
+        }),
+      });
+      expect(result.testFiles).toEqual(deduplicateAndSort(selected));
+      expect(result.strategyAFiles).toEqual(deduplicateAndSort(selected));
+      expect(result.postgresTestFiles).toEqual(pg);
+      expect(read).not.toHaveBeenCalled();
+      expect(result.unresolvedGraphFiles).toEqual([]);
+    }
+  );
+
+  it.each([
+    ['tests/integration/a.postgres.integration.test.ts', false],
+    ['tests/integration/a.postgres.integration.test.tsx', true],
+    ['tests/integration/a.postgres.integration.test.js', true],
+    ['tests/integration/a.postgres.integration.test.mts', true],
+    ['tests/integration/a.postgres.integration.test.cts', true],
+    ['tests/unit/a.postgres.integration.test.ts', true],
+    ['tests/integration/a.integration.spec.ts', false],
+    ['tests/integration/a.integration.test.ts', true],
+    ['tests/unit/node_modules/a.unit.spec.ts', false],
+  ] as const)(
+    'matches configured project membership for %s',
+    (file, runnable) => {
+      expect(isRunnableVitestTestFile(file)).toBe(runnable);
+      expect(isRunnableVitestTestFile(`.\\${file.replaceAll('/', '\\')}`)).toBe(
+        runnable
+      );
+    }
+  );
+
+  it('shares one filesystem inventory across SQL, configuration, and failed-graph expansion', async () => {
+    const cwd = makeTempCwd([source, ...specs]);
+    const read = vi.spyOn(fs, 'readdirSync');
+    const result = await findAffectedTests({
+      cwd,
+      changedFiles: [
+        source,
+        'vitest.postgres.config.ts',
+        'drizzle/migrations/0012.sql',
+      ],
+      dependencyCruiser: async () => {
+        throw new Error('graph unavailable');
+      },
+    });
+    expect(result.runAll).toBe(true);
+    expect(result.testFiles).toEqual(deduplicateAndSort(specs.slice(0, 5)));
+    expect(result.postgresTestFiles).toEqual([postgres]);
+    expect(result.migrationTestFiles).toEqual([specs[4]]);
+    expect(result.postgresImpactReasons).toEqual([
+      'configuration',
+      'migration',
+      'graph_unavailable',
+    ]);
+    const paths = read.mock.calls.map(([file]) => String(file));
+    expect(paths.length).toBeGreaterThan(0);
+    expect(new Set(paths).size).toBe(paths.length);
+    expect(result.excludedChangedFiles).toEqual([]);
+    expect(
+      result.warnings.filter((warning) =>
+        warning.includes('pnpm test:integration:postgres')
+      )
+    ).toHaveLength(1);
+    expect(
+      JSON.parse(
+        formatOutput(result, { json: true, summary: false, verbose: false })
+      )
+    ).toMatchObject({
+      migrationTestFiles: [specs[4]],
+      unresolvedGraphFiles: [],
+    });
+    for (const options of [
+      { json: false, summary: true, verbose: false },
+      { json: false, summary: false, verbose: true },
+    ])
+      expect(formatOutput(result, options)).toContain(
+        'PGLite tests - SQL migrations'
+      );
+  });
+
+  it('keeps dedicated inventory overrides separate and preserves graph and direct evidence', async () => {
+    const other = 'tests/integration/other.postgres.integration.test.ts';
+    const cwd = makeTempCwd([source, ...specs, other]);
+    const result = await findAffectedTests({
+      cwd,
+      changedFiles: ['vitest.postgres.config.ts', source, other],
+      allTestFiles: [],
+      allPostgresTestFiles: [`./${other}`, other.replaceAll('/', '\\')],
+      dependencyCruiser: async () => ({
+        modules: [
+          { source },
+          { source: specs[0]!, dependencies: [{ resolved: source }] },
+          { source: postgres, dependencies: [{ resolved: source }] },
+        ],
+      }),
+    });
+    expect(result.testFiles).toEqual([specs[0]]);
+    expect(result.postgresTestFiles).toEqual(
+      deduplicateAndSort([postgres, other])
+    );
+  });
+
+  it('propagates filesystem failures after a successful graph without blaming dependency-cruiser', async () => {
+    const cwd = makeTempCwd([source, ...specs]);
+    const cruise = vi.fn(async () => ({ modules: [{ source }] }));
+    vi.spyOn(fs, 'readdirSync').mockImplementation(() => {
+      throw new Error('EACCES: cannot read test inventory');
+    });
+    const run = vi.fn();
+    const stderr = vi.fn();
+    expect(
+      await main(['--run'], {
+        findAffectedTests: () =>
+          findAffectedTests({
+            cwd,
+            changedFiles: ['vitest.config.ts', source],
+            dependencyCruiser: cruise,
+          }),
+        runVitest: run,
+        stdout: vi.fn(),
+        stderr,
+      })
+    ).toBe(2);
+    expect(cruise).toHaveResolved();
+    expect(run).not.toHaveBeenCalled();
+    expect(stderr).toHaveBeenCalledExactlyOnceWith(
+      'EACCES: cannot read test inventory\n'
+    );
+  });
+
+  it('reports unresolved graph inputs separately from ignored paths', async () => {
+    const cwd = makeTempCwd([source, ...specs]);
+    const result = await findAffectedTests({
+      cwd,
+      changedFiles: [source, 'README.md'],
+      dependencyCruiser: async () => ({ modules: [] }),
+    });
+    expect(result.unresolvedGraphFiles).toEqual([source]);
+    expect(result.excludedChangedFiles).toEqual(['README.md']);
+    for (const options of [
+      { json: false, summary: true, verbose: false },
+      { json: false, summary: false, verbose: true },
+    ])
+      expect(formatOutput(result, options)).toContain(source);
   });
 });
 
@@ -709,6 +921,7 @@ describe('dependency graph strategy', () => {
     });
     expect(result.runAll).toBe(true);
     expect(result.excludedChangedFiles).toEqual(['README.md']);
+    expect(result.unresolvedGraphFiles).toEqual([missing]);
     expect(result.strategyAFiles).toEqual([unit]);
     expect(result.strategyBFiles).toEqual([]);
     expect(result.testFiles).toEqual([unit]);
@@ -800,7 +1013,7 @@ describe('dependency graph strategy', () => {
     expect(result.dependencyCruiserFailed).toBe(true);
     expect(result.runAll).toBe(true);
     expect(result.runAllReason).toBe(
-      'dependency-cruiser failed for test support changes'
+      'dependency-cruiser failed for source or support changes'
     );
     expect(result.excludedChangedFiles).toEqual([]);
     expect(result.testFiles).toEqual([

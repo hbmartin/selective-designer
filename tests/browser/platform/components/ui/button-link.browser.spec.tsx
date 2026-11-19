@@ -329,6 +329,67 @@ it('runs a consumer callback before going back in history', async () => {
     .toBe('/manager/users/sample');
 });
 
+it('forwards an explicit blocker bypass to history back', async () => {
+  const { router, wrapper } = await setupBackNavigation();
+  const back = vi.spyOn(router.history, 'back');
+  const navigate = vi.spyOn(router, 'navigate');
+  const view = await render(<BackButton ignoreBlocker>Back</BackButton>, {
+    wrapper,
+  });
+  await view.getByRole('link', { name: 'Back' }).click();
+  expect(back).toHaveBeenCalledExactlyOnceWith({ ignoreBlocker: true });
+  expect(navigate).not.toHaveBeenCalled();
+});
+
+it.each([true, false])(
+  'honors document navigation with history available: %s',
+  async (withHistory) => {
+    const { router, wrapper } = await setupBackNavigation(withHistory);
+    const back = vi.spyOn(router.history, 'back');
+    // Observe Link's real handler without navigating the browser test iframe.
+    const navigate = vi.spyOn(router, 'navigate').mockResolvedValue(undefined);
+    const view = await render(
+      <BackButton to="/login" reloadDocument ignoreBlocker replace>
+        Back
+      </BackButton>,
+      { wrapper }
+    );
+    await expect
+      .element(view.getByRole('link', { name: 'Back' }))
+      .toHaveAttribute('href', '/login');
+    await view.getByRole('link', { name: 'Back' }).click();
+    expect(back).not.toHaveBeenCalled();
+    expect(navigate).toHaveBeenCalledOnce();
+    expect(navigate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        to: '/login',
+        reloadDocument: true,
+        ignoreBlocker: true,
+        replace: true,
+      })
+    );
+  }
+);
+
+it('respects cancellation with document navigation and blocker bypass', async () => {
+  const { router, wrapper } = await setupBackNavigation();
+  const back = vi.spyOn(router.history, 'back');
+  const navigate = vi.spyOn(router, 'navigate').mockResolvedValue(undefined);
+  const cancel = vi.fn((event: ReactMouseEvent<HTMLAnchorElement>) =>
+    event.preventDefault()
+  );
+  const view = await render(
+    <BackButton to="/login" reloadDocument ignoreBlocker onClick={cancel}>
+      Back
+    </BackButton>,
+    { wrapper }
+  );
+  await view.getByRole('link', { name: 'Back' }).click();
+  expect(cancel).toHaveBeenCalledOnce();
+  expect(back).not.toHaveBeenCalled();
+  expect(navigate).not.toHaveBeenCalled();
+});
+
 it.each([
   { name: 'absent', props: {} },
   { name: 'explicitly undefined', props: { onClick: undefined } },
