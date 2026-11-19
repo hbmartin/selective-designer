@@ -8,6 +8,7 @@ import {
   disposeCapturedFixtureProcessGroup,
   describeCommand,
   disposeWorkflowFixture,
+  disposeFixtureCommands,
   disposeWorkflowFixtures,
   registerFixtureProcessGroup,
   runFixtureCommand,
@@ -21,7 +22,6 @@ import {
 } from '@tests/support/fixture-process-groups';
 import childProcess from 'node:child_process';
 import fs from 'node:fs';
-import path from 'node:path';
 import { syncBuiltinESMExports } from 'node:module';
 import { afterEach, assert, expect, it, vi } from 'vitest';
 
@@ -144,7 +144,7 @@ it(
       expect(result.stdout).toContain('descendant stdout');
       expect(stopped(child.pid)).toBe(false);
     } finally {
-      await child.dispose();
+      await expect(child.dispose()).rejects.toThrow('Scenario cleanup failed');
       const result = await child.running;
       for (const failure of result.cleanupFailures) {
         if (failure.kind === 'output-drain-unconfirmed')
@@ -362,7 +362,7 @@ it.each([
     const fixture = makeFixture();
     await expect(scenario(fixture, true, 10_000, options)).rejects.toThrow();
     const observed = JSON.parse(
-      fs.readFileSync(path.join(fixture.support, 'observed.json'), 'utf8')
+      fs.readFileSync(scenarios.at(-1)!.observation, 'utf8')
     ) as { pid: number; parent: number };
     await expect
       .poll(() => stopped(observed.pid), { timeout: 5_000 })
@@ -422,7 +422,11 @@ it('attempts valid fixture cleanup after a synchronous collection error', async 
 it.each(['missing leader', 'stopped', 'same identity contradiction'])(
   'handles synthetic group snapshot: %s without host signaling',
   (mode) => {
-    const group = { pid: 2_000_001, started: 'original' };
+    const group = {
+      pid: 2_000_001,
+      started: 'original',
+      members: new Map([[2_000_002, 'child']]),
+    };
     const rows = new Map<
       number,
       {
@@ -532,5 +536,73 @@ it(
     expect(result?.error?.message).toContain(
       'startup cleanup inspection failure'
     );
+  }
+);
+
+it.each(['sequential', 'simultaneous'] as const)(
+  'isolates %s scenarios sharing one fixture and keeps diagnostic directories',
+  { timeout: 15_000 },
+  async (mode) => {
+    const fixture = makeFixture();
+    const first = createFixtureScenario(fixture);
+    const second = createFixtureScenario(fixture);
+    scenarios.push(first, second);
+    expect(first.directory).not.toBe(second.directory);
+    expect(first.observation).not.toBe(second.observation);
+    if (mode === 'sequential') {
+      const a = await first.start();
+      await a.dispose();
+      const b = await second.start();
+      expect(b.pid).not.toBe(a.pid);
+      await b.dispose();
+    } else {
+      const [a, b] = await Promise.all([first.start(), second.start()]);
+      expect(a.release).not.toBe(b.release);
+      await Promise.all([a.dispose(), b.dispose()]);
+    }
+    expect(fs.existsSync(first.observation)).toBe(true);
+    expect(fs.existsSync(second.observation)).toBe(true);
+  }
+);
+
+it(
+  'reports non-detached startup cleanup obligations and permits scoped recovery',
+  { timeout: 15_000 },
+  async () => {
+    const fixture = makeFixture();
+    const original = childProcess.spawnSync;
+    const inspection = vi.spyOn(childProcess, 'spawnSync');
+    const scope = createFixtureScenario(fixture, {
+      detached: false,
+      readiness: 'corrupt',
+      afterOwnership: () => {
+        inspection.mockImplementation(
+          (...args: Parameters<typeof original>) => {
+            if (args[0] === '/bin/ps')
+              throw new Error('non-detached cleanup fault');
+            return original(...args);
+          }
+        );
+        syncBuiltinESMExports();
+      },
+    });
+    scenarios.push(scope);
+    try {
+      await expect(scope.start()).rejects.toThrow('setup and cleanup failed');
+      await expect(scope.dispose()).rejects.toThrow('Scenario cleanup failed');
+    } finally {
+      inspection.mockRestore();
+      syncBuiltinESMExports();
+      const result = await scope.running;
+      await expect(disposeFixtureCommands(fixture)).rejects.toThrow(
+        'unresolved'
+      );
+      for (const failure of result?.cleanupFailures ?? [])
+        if (failure.kind === 'output-drain-unconfirmed')
+          acknowledgeFixtureCleanupFailure(fixture, failure, {
+            reason: 'Non-detached startup resources freshly verified stopped',
+          });
+      await scope.dispose();
+    }
   }
 );

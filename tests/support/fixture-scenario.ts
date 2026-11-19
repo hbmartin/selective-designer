@@ -6,6 +6,7 @@ import {
   disposeCapturedFixtureProcessGroup,
   registerFixtureProcessGroup,
   runFixtureCommand,
+  unresolvedFixtureCleanupFailures,
   type FixtureProcessGroupCapability,
   type WorkflowFixture,
 } from './workflow-fixtures';
@@ -58,10 +59,12 @@ export function createFixtureScenario(
   options: ScenarioOptions = {}
 ) {
   const { detached = true, register = true, timeoutMs = 10_000 } = options;
-  const launch = path.join(fixture.support, 'launch.json');
-  const ready = path.join(fixture.support, 'ready.json');
-  const acknowledgement = path.join(fixture.support, 'acknowledgement');
-  const release = path.join(fixture.support, 'release');
+  const directory = fs.mkdtempSync(path.join(fixture.support, 'scenario-'));
+  const observation = path.join(directory, 'observed.json');
+  const launch = path.join(directory, 'launch.json');
+  const ready = path.join(directory, 'ready.json');
+  const acknowledgement = path.join(directory, 'acknowledgement');
+  const release = path.join(directory, 'release');
   const cancel = new AbortController();
   let capability: FixtureProcessGroupCapability | undefined;
   let finished = false;
@@ -79,6 +82,14 @@ export function createFixtureScenario(
       const errors = results.flatMap((result) =>
         result.status === 'rejected' ? [result.reason] : []
       );
+      const command = results[0];
+      if (command?.status === 'fulfilled' && command.value)
+        errors.push(
+          ...unresolvedFixtureCleanupFailures(
+            fixture,
+            command.value.cleanupFailures
+          ).map((failure) => failure.error)
+        );
       if (errors.length)
         throw new AggregateError(errors, 'Scenario cleanup failed');
     })();
@@ -115,7 +126,7 @@ export function createFixtureScenario(
       child.on('error',error=>{console.error(error);process.exit(2)});
       process.on('SIGTERM',()=>{if(!committed)process.exit(0)});
       let committed=false;
-      fs.writeFileSync(${JSON.stringify(path.join(fixture.support, 'observed.json'))},JSON.stringify({pid:child.pid,parent:process.pid}));
+      fs.writeFileSync(${JSON.stringify(observation)},JSON.stringify({pid:child.pid,parent:process.pid}));
       ${options.producerFailure ? "console.error('injected producer error');process.exit(3);" : ''}
       if(${options.launch !== 'missing'}){fs.writeFileSync(${JSON.stringify(launch + '.tmp')},${JSON.stringify(options.launch === 'corrupt' ? 'invalid' : undefined)} ?? JSON.stringify({pid:child.pid,parent:process.pid}));fs.renameSync(${JSON.stringify(launch + '.tmp')},${JSON.stringify(launch)});}
       setInterval(()=>{
@@ -148,7 +159,15 @@ export function createFixtureScenario(
         throw new Error(
           'Scenario readiness does not match owned launch identity'
         );
-      return { ...ids, cancel, running, release, capability, dispose };
+      return {
+        ...ids,
+        cancel,
+        running,
+        release,
+        observation,
+        capability,
+        dispose,
+      };
     } catch (error) {
       try {
         await dispose();
@@ -164,6 +183,8 @@ export function createFixtureScenario(
   return {
     start,
     dispose,
+    observation,
+    directory,
     get running() {
       return running;
     },
