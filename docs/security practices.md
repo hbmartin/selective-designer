@@ -13,18 +13,19 @@ risks and implemented TanStack Start hardening controls are tracked in
 
 ### Security Scanning & SAST
 
-Automated scanners run in CI:
+The repository's workflows and configuration define the active controls:
 
-| Scanner                                | Scope                                                        | Integration                                   |
-| -------------------------------------- | ------------------------------------------------------------ | --------------------------------------------- |
-| Semgrep                                | 123 custom rules: layer boundary enforcement, SDK confinement, prohibited patterns, prompt-injection guards, mrkdwn-escaping | GitHub Actions workflow + repo `pnpm semgrep` |
-| Octoscan (`synacktiv/action-octoscan`) | GitHub Actions workflow supply-chain hardening               | GitHub Actions + SARIF upload                 |
-| Dependency-Cruiser                     | 51 cross-cutting architectural rules (no-circular, SDK confinement to designated modules, transport→DB bypass, etc.) | `pnpm depcruise` in CI                        |
-| Sheriff (`@softarc/sheriff-core`)      | Module-barrel access + 12 layer tags (barrel, domain, ports, use-cases, cache, application, infrastructure, transport, config, observability, utils, validation) | `pnpm lint:sheriff` in CI                     |
-| `pnpm audit`                           | npm advisory database (high+)                                | CI step                                       |
-| GitHub Dependency Review               | PR-level vulnerable dependency gating                        | Workflow on pull-request                      |
+| Scanner | Scope | Integration |
+| --- | --- | --- |
+| Semgrep | Public gates, SDK confinement, application error/time boundaries, secret logging, redirect and SQL guardrails | [Workflow](../.github/workflows/semgrep.yml) and [`pnpm semgrep` configuration](../.semgrep.yml); SARIF retained as an Actions artifact |
+| CodeQL | JavaScript/TypeScript and GitHub Actions analysis | [Workflow](../.github/workflows/codeql.yml), Security results, and retained SARIF artifacts |
+| Dependency-cruiser | Module boundaries, cycles, public gates, and SDK ownership | [`pnpm depcruise` rules](../.dependency-cruiser.cjs) in Code Quality |
+| Dependency audit and policy | High-severity pnpm audit, TanStack lockfile policy, license compliance, and accepted-risk review | `pnpm security:audit`; [risk register](security-risk-register.md) |
+| GitHub Dependency Review | Dependency changes at moderate severity and above | [Pull-request workflow](../.github/workflows/dependency-review.yml) |
+| OSV Scanner | Dependency vulnerabilities in PR diffs and full scans | [PR workflow](../.github/workflows/osv-scanner.yml) and [full-scan workflow](../.github/workflows/osv-scanner-full.yml), with Security integration |
+| detect-secrets | Committed files checked against the reviewed baseline | [Workflow](../.github/workflows/detect-secrets.yml) and [baseline](../.secrets.baseline) |
 
-Semgrep rules enforce e.g. no bare `new Error()`, no `console.log` in modules outside React components, no direct `process.env` access outside `modules/kernel/config`, no `as` type assertions outside tests, strict SDK confinement (Stripe to memberships, Twilio to whatsapp, Attio to external-users, MongoDB to kernel/onboarding-simulation/introductions), and prohibited PII patterns in WhatsApp logs.
+Sheriff remains an explicit local command (`pnpm lint:sheriff`, [configuration](../sheriff.config.ts)); it is not part of `check`, `verify`, or CI. jscpd is configured for manual use; there is no `pnpm dupes` script or duplication gate in CI.
 
 ### SOC 2 Readiness
 
@@ -38,40 +39,34 @@ While a formal SOC 2 audit has not yet been completed, the codebase implements c
 
 ### CI Pipeline
 
-Every pull request and push to main triggers a workflow that runs (per `.github/workflows/code-quality.yml`, `semgrep.yml`, `actions-scanning.yml`, `dependency-review.yml`):
+[Code Quality](../.github/workflows/code-quality.yml) runs on main pushes and ready pull requests. Its jobs cover formatting, Oxlint/ESLint/typechecking, dependency-cruiser and architecture checks, dependency policies, migration integrity, the ordinary suite with coverage, dedicated PostgreSQL integration, and production builds.
 
-1. `pnpm security:audit` — high-severity npm advisories
-2. `pnpm test:coverage` — full ordinary Vitest suite in the Coverage job; PostgreSQL Integration runs the dedicated database suite separately
-3. `pnpm lint` — Biome with `--error-on-warnings`
-4. `pnpm dupes` — jscpd code duplication detection
-5. `pnpm depcruise` — 51 dependency-cruiser architectural rules
-6. `pnpm lint:sheriff` — Sheriff layer-and-module-boundary verification
-7. Semgrep — 123 custom rules (separate workflow)
-8. Octoscan — GitHub Actions supply-chain hardening (separate workflow, SARIF to Security tab)
-9. GitHub Dependency Review — vulnerable dependency gating on PRs
+The Coverage and PostgreSQL Integration jobs require JUnit reports and check that tests leave tracked worktree and staged files unchanged. Report and mutation checks run after attempted tests, including failures; artifact uploads remain enabled on failure. LCOV is required after successful coverage runs.
 
-Coverage is generated locally and in CI via `pnpm test:coverage` (Vitest + V8). `pnpm test:affected` is a compatibility alias for the full ordinary suite, with no dependency-based selection. Dependency-cruiser continues to enforce architecture boundaries. Dedicated PostgreSQL and Playwright suites use their separate commands.
+Security scanning uses the dedicated workflows linked above. Trigger policies differ: Dependency Review and OSV diff scanning are PR-specific. CodeQL also runs on main pushes and a schedule; Semgrep also supports main pushes, scheduled runs, and manual dispatch; detect-secrets also runs on main pushes and manual dispatch. Most PR jobs skip drafts. [Supply Chain Artifacts](../.github/workflows/supply-chain.yml) generates audit, SBOM, and provenance artifacts on main pushes or manual dispatch.
+
+Coverage is generated locally and in CI via `pnpm test:coverage` (Vitest + V8). `pnpm test:affected` is a compatibility alias for the full ordinary suite, with no dependency-based selection. Dependency-cruiser enforces architecture boundaries. Dedicated PostgreSQL and Playwright suites use separate commands; see [Testing Strategy](../TESTING.md) for escalation guidance.
 
 ### Testing Strategy
 
-| Test Type           | Framework                                  | Purpose                                                      |
-| ------------------- | ------------------------------------------ | ------------------------------------------------------------ |
-| Unit                | Vitest                                     | Domain logic, pure functions, use cases in isolation         |
-| Integration         | Vitest + PGlite                            | Repository adapters against real SQL (in-memory PostgreSQL via WASM) |
-| Integration (Mongo) | Vitest + `mongodb-memory-server`           | Mongo-backed adapters in introductions / onboarding-simulation |
-| Component           | React Testing Library                      | UI components with interaction testing                       |
-| Architecture        | dependency-cruiser + Sheriff + Semgrep     | Boundary enforcement, SDK confinement, layer rules           |
-| Property            | `@fast-check/vitest`                       | Property-based tests for invariants                          |
-| Mutation            | Stryker (`@stryker-mutator/vitest-runner`) | Test-suite quality on five high-risk modules: intros-consent, onboarding-checkout-payments, events-rsvps-communications, whatsapp-webhook-delivery, auth-totp-security |
+| Test type | Framework | Purpose |
+| --- | --- | --- |
+| Unit | Vitest | Domain and application behavior in isolation |
+| Integration | Vitest + PGlite | Repository and workflow behavior against a local PostgreSQL-compatible driver |
+| Native PostgreSQL | Vitest + Testcontainers | Migrations, driver behavior, transactions, and locking against disposable PostgreSQL |
+| Component | Vitest Browser + Playwright + `vitest-browser-react` | Real Chromium component interactions |
+| E2E and visual | Playwright | Full-stack journeys and reviewed local screenshot baselines |
+| Architecture | Vitest + dependency-cruiser + Semgrep | Module boundaries, SDK confinement, and structural guardrails |
+| Property | fast-check + Vitest | Generated invariant and boundary checks |
+| Mutation | Stryker | Scoped test sensitivity for account, auth, runtime configuration, user, kernel, and shared code; the manual CI matrix covers auth, kernel, user, and shared |
 
 ### Code Quality Enforcement
 
-- Biome: ~400 individual rule configurations covering correctness, complexity, style, performance, security, and accessibility
-- Cognitive complexity limit: 12 per function (`noExcessiveCognitiveComplexity`)
-- Function length limit: 60 lines, blank lines and IIFEs excluded (`noExcessiveLinesPerFunction`); relaxed via overrides for factories, repositories, and similar wiring code
-- Oxlint: Additional TypeScript, React performance, and import-cycle detection
-- Knip: Unused export detection
-- Dependabot: Weekly automated dependency update PRs (`npm` and `github-actions` ecosystems)
+- [Oxfmt](../package.json) checks formatting through `pnpm format:check`.
+- [Oxlint](../.oxlintrc.json) and [ESLint](../eslint.config.mjs) provide lint rules through `pnpm lint` and `pnpm lint:eslint`. The commands do not globally treat warnings as errors; severity is defined in configuration.
+- TypeScript checks types through `pnpm typecheck`.
+- [Knip](../knip.jsonc) checks dependencies and unlisted dependencies through `pnpm knip:deps`.
+- [Dependabot](../.github/dependabot.yml) proposes dependency updates for npm, GitHub Actions, and Docker.
 
 ## Disaster Recovery & Business Continuity
 
@@ -87,7 +82,7 @@ Coverage is generated locally and in CI via `pnpm test:coverage` (Vitest + V8). 
 
 - Preview deployments: every PR gets an isolated environment via Vercel's Git integration
 - Automated testing: the Coverage CI job runs the full ordinary Vitest suite, and PostgreSQL Integration runs the dedicated database tests; local verification uses the same ordinary suite
-- Architectural guardrails: 51 dependency-cruiser rules + Sheriff layer enforcement + 123 Semgrep rules prevent regression at the structural level
-- Security scanning: Semgrep, Octoscan, GitHub Dependency Review, and `pnpm audit` run in CI with SARIF upload to the Security tab where applicable
-- Dependabot: weekly automated dependency-update PRs (npm and GitHub Actions ecosystems) catch vulnerabilities proactively
+- Architectural guardrails: dependency-cruiser rules, architecture tests, and Semgrep enforce the configured structural boundaries
+- Security scanning: the dedicated Semgrep, CodeQL, OSV, Dependency Review, and detect-secrets workflows complement the Code Quality dependency policies; result destinations are described above
+- Dependabot: automated update PRs cover the npm, GitHub Actions, and Docker ecosystems configured in `.github/dependabot.yml`
 - Migration safety: separate `db-migrate.yml` workflow runs schema-drift, file, journal, snapshot, and dry-apply validation before executing migrations, with Pushover alerts on failure

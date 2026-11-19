@@ -77,7 +77,7 @@ pnpm verify          # Full local pre-merge gate
 pnpm verify:task     # Task verification logs; add --visual, --e2e-chromium, or --build as needed
 ```
 
-`pnpm verify:task` runs static checks and the full ordinary test suite, writing timestamped logs under `test-results/task-verification/`. Its optional flags add visual regression tests (`--visual`), Chromium E2E (`--e2e-chromium`), and a production build (`--build`). PostgreSQL and Playwright tests remain separate from the ordinary suite. See [AGENTS.md](AGENTS.md) and [Testing Strategy](TESTING.md) for the full verification workflow.
+`pnpm verify:task` runs static checks and the full ordinary test suite, writing timestamped logs under `test-results/task-verification/`. Its optional flags add visual regression tests (`--visual`), Chromium E2E (`--e2e-chromium`), and a production build (`--build`). Neither `pnpm verify` nor `pnpm verify:task` automatically runs PostgreSQL tests. Run `pnpm test:integration:postgres` for SQL/persistence, schema/migration, driver, transaction, or locking changes in addition to focused integration tests. PostgreSQL and Playwright tests remain separate from the ordinary suite. See [AGENTS.md](AGENTS.md) and [Testing Strategy](TESTING.md) for the full verification workflow.
 
 ## Auth Route Freshness
 

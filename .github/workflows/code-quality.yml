@@ -208,9 +208,20 @@ jobs:
         uses: ./.github/actions/setup-playwright
 
       - name: Run tests
+        id: tests
         run: |
           mkdir -p test-results/vitest
           pnpm test:coverage --reporter=default --reporter=junit --outputFile.junit=test-results/vitest/junit.xml
+
+      - name: Ensure JUnit report was generated
+        if: ${{ !cancelled() && (steps.tests.outcome == 'success' || steps.tests.outcome == 'failure') }}
+        run: test -s test-results/vitest/junit.xml
+
+      - name: Ensure tests did not mutate tracked files
+        if: ${{ !cancelled() && (steps.tests.outcome == 'success' || steps.tests.outcome == 'failure') }}
+        run: |
+          git diff --exit-code -- .
+          git diff --cached --exit-code -- .
 
       - name: Ensure lcov report was generated
         run: test -s coverage/lcov.info
@@ -255,9 +266,20 @@ jobs:
         run: docker pull postgres:16-alpine@sha256:16bc17c64a573ef34162af9298258d1aec548232985b33ed7b1eac33ba35c229
 
       - name: Run PostgreSQL integration tests
+        id: tests
         run: |
           mkdir -p test-results/vitest-postgres
-          pnpm test:integration:postgres -- --reporter=default --reporter=junit --outputFile.junit=test-results/vitest-postgres/junit.xml
+          pnpm test:integration:postgres --reporter=default --reporter=junit --outputFile.junit=test-results/vitest-postgres/junit.xml
+
+      - name: Ensure JUnit report was generated
+        if: ${{ !cancelled() && (steps.tests.outcome == 'success' || steps.tests.outcome == 'failure') }}
+        run: test -s test-results/vitest-postgres/junit.xml
+
+      - name: Ensure tests did not mutate tracked files
+        if: ${{ !cancelled() && (steps.tests.outcome == 'success' || steps.tests.outcome == 'failure') }}
+        run: |
+          git diff --exit-code -- .
+          git diff --cached --exit-code -- .
 
       - name: Upload PostgreSQL integration test report
         if: always()

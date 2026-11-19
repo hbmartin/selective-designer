@@ -29,7 +29,7 @@ Use these commands instead of invoking underlying tools directly.
 
 After code changes, run `pnpm format:changed && pnpm check && pnpm test`. Before merge, run `pnpm verify`.
 
-The ordinary suite excludes dedicated PostgreSQL and Playwright tests. Run `pnpm test:integration:postgres` and `pnpm test:e2e` separately when needed. Native listing supports `pnpm test:affected:list --json`; the old selector flags and selection-report format are retired. See [TESTING.md](TESTING.md) for command details.
+The ordinary suite excludes dedicated PostgreSQL and Playwright tests. Neither `pnpm verify` nor `pnpm verify:task` automatically runs PostgreSQL tests. Run `pnpm test:integration:postgres` (Docker required) for the database changes described below, and `pnpm test:e2e` for the relevant full-stack flows. Native listing supports `pnpm test:affected:list --json`; the old selector flags and selection-report format are retired. See [TESTING.md](TESTING.md) for command details.
 
 ## Task Verification Loop
 
@@ -148,4 +148,4 @@ Use the cheapest test that proves the behavior:
 
 When a regression class is likely to repeat, add a guardrail through depcruise, Semgrep, or an architecture test.
 
-When touching Drizzle repositories, raw `sql`, `db.execute`, schema serialization, or migrations, prefer an integration test against the local database driver in addition to focused unit coverage. Mocked DB unit tests do not prove SQL serialization or migration behavior.
+For repository SQL or persistence behavior, raw `sql` or `db.execute`, schema serialization, migrations, database clients/drivers, or transaction/locking changes, run focused integration coverage with `pnpm test:integration <relevant-file>` and the dedicated `pnpm test:integration:postgres` suite (Docker required), in addition to the ordinary suite. Add or extend native PostgreSQL coverage when PGlite cannot prove the changed contract. Mocked DB unit tests do not prove SQL serialization or migration behavior. Provider/webhook changes without persistence changes use their focused integration checks. Retain `pnpm check:migrations` for schema or migration edits.
