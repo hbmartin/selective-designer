@@ -38,10 +38,10 @@ While a formal SOC 2 audit has not yet been completed, the codebase implements c
 
 ### CI Pipeline
 
-Every pull request and push to main triggers a workflow that runs (per `.github/workflows/ci.yml`, `semgrep.yml`, `actions-scanning.yml`, `dependency-review.yml`):
+Every pull request and push to main triggers a workflow that runs (per `.github/workflows/code-quality.yml`, `semgrep.yml`, `actions-scanning.yml`, `dependency-review.yml`):
 
 1. `pnpm security:audit` — high-severity npm advisories
-2. `pnpm test:affected` — Vitest run for tests reachable from changed files
+2. `pnpm test:coverage` — full ordinary Vitest suite in the Coverage job; PostgreSQL Integration runs the dedicated database suite separately
 3. `pnpm lint` — Biome with `--error-on-warnings`
 4. `pnpm dupes` — jscpd code duplication detection
 5. `pnpm depcruise` — 51 dependency-cruiser architectural rules
@@ -50,7 +50,7 @@ Every pull request and push to main triggers a workflow that runs (per `.github/
 8. Octoscan — GitHub Actions supply-chain hardening (separate workflow, SARIF to Security tab)
 9. GitHub Dependency Review — vulnerable dependency gating on PRs
 
-Coverage is generated locally via `pnpm test:coverage` (Vitest + V8). The `pnpm test:affected` step relies on `scripts/affected-tests.ts`, which uses dependency-cruiser to compute reachability.
+Coverage is generated locally and in CI via `pnpm test:coverage` (Vitest + V8). `pnpm test:affected` is a compatibility alias for the full ordinary suite, with no dependency-based selection. Dependency-cruiser continues to enforce architecture boundaries. Dedicated PostgreSQL and Playwright suites use their separate commands.
 
 ### Testing Strategy
 
@@ -86,7 +86,7 @@ Coverage is generated locally via `pnpm test:coverage` (Vitest + V8). The `pnpm 
 ### Deployment Safety
 
 - Preview deployments: every PR gets an isolated environment via Vercel's Git integration
-- Automated testing: affected-tests CI run gates every merge; full Vitest suite runs locally and via mutation testing
+- Automated testing: the Coverage CI job runs the full ordinary Vitest suite, and PostgreSQL Integration runs the dedicated database tests; local verification uses the same ordinary suite
 - Architectural guardrails: 51 dependency-cruiser rules + Sheriff layer enforcement + 123 Semgrep rules prevent regression at the structural level
 - Security scanning: Semgrep, Octoscan, GitHub Dependency Review, and `pnpm audit` run in CI with SARIF upload to the Security tab where applicable
 - Dependabot: weekly automated dependency-update PRs (npm and GitHub Actions ecosystems) catch vulnerabilities proactively

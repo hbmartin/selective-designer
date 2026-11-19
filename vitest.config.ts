@@ -1,9 +1,11 @@
 import react from '@vitejs/plugin-react';
 import { playwright } from '@vitest/browser-playwright';
 import path from 'node:path';
-import { coverageConfigDefaults, defineConfig } from 'vitest/config';
-
-import { vitestProjectOptions } from './scripts/vitest-projects';
+import {
+  configDefaults,
+  coverageConfigDefaults,
+  defineConfig,
+} from 'vitest/config';
 
 const resolve = (filePath: string) =>
   path.resolve(import.meta.dirname, filePath);
@@ -62,7 +64,13 @@ export default defineConfig({
             }),
             instances: [{ browser: 'chromium' }],
           },
-          ...vitestProjectOptions('browser', resolve),
+          include: ['tests/browser/**/*.{test,spec}.?(c|m)[jt]s?(x)'],
+          exclude: configDefaults.exclude,
+          setupFiles: [
+            resolve('./tests/setup.base.ts'),
+            resolve('./tests/setup.browser.ts'),
+          ],
+          globalSetup: [],
         },
         resolve: {
           alias: testAliases,
@@ -72,7 +80,17 @@ export default defineConfig({
         test: {
           name: 'unit',
           environment: 'node',
-          ...vitestProjectOptions('unit', resolve),
+          include: [
+            'tests/unit/**/*.{test,spec}.?(c|m)[jt]s?(x)',
+            'tests/architecture/**/*.{test,spec}.?(c|m)[jt]s?(x)',
+            'tests/security/**/*.{test,spec}.?(c|m)[jt]s?(x)',
+          ],
+          exclude: configDefaults.exclude,
+          setupFiles: [
+            resolve('./tests/setup.base.ts'),
+            resolve('./tests/server/test-setup.ts'),
+          ],
+          globalSetup: [],
         },
         resolve: {
           alias: testAliases,
@@ -82,7 +100,10 @@ export default defineConfig({
         test: {
           name: 'integration',
           environment: 'node',
-          ...vitestProjectOptions('integration', resolve),
+          include: ['tests/integration/**/*.integration.test.?(c|m)[jt]s?(x)'],
+          exclude: ['tests/integration/**/*.postgres.integration.test.ts'],
+          setupFiles: [resolve('./tests/setup.base.ts')],
+          globalSetup: [resolve('./tests/server/pglite-global-setup.ts')],
           fileParallelism: false,
         },
         resolve: {

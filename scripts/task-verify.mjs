@@ -22,9 +22,9 @@ const steps = [
   },
   checkStep,
   {
-    id: 'test-affected',
+    id: 'test',
     command: 'pnpm',
-    args: ['test:affected'],
+    args: ['test'],
   },
   ...(runVisual
     ? [

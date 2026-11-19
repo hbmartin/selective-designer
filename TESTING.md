@@ -16,7 +16,7 @@ This project uses a layered test system. The default rule is to verify behavior 
 | Coverage | All Vitest projects | `pnpm test:coverage` | Floor metric for touched code and trend signal in CI. Do not treat line coverage as proof of assertion quality. |
 | Mutation testing | Stryker scoped configs | `pnpm test:mutation:critical` or scoped scripts | Test sensitivity for critical domain/application logic. Run periodically and for risky auth, authorization, and data-loss changes. |
 
-`pnpm test` still runs all Vitest projects. Use the layer commands when you need a faster or more diagnostic signal.
+`pnpm test` runs the full ordinary Vitest suite: unit, browser, architecture/security, and PGLite integration projects. Dedicated PostgreSQL tests use `pnpm test:integration:postgres` (Docker required); Playwright tests use `pnpm test:e2e`. Use the layer commands when you need a faster or more diagnostic signal.
 
 ## Functional Correctness
 
@@ -56,9 +56,14 @@ Local development and agent work should usually run:
 ```bash
 pnpm format:changed
 pnpm check
-pnpm test:affected:list # Show affected Vitest tests for changed files
-pnpm test:affected      # Run affected Vitest tests for changed files
+pnpm test              # Full ordinary Vitest suite
 ```
+
+`pnpm test:affected` remains a compatibility alias for `pnpm test`. It runs the full ordinary suite even with a clean working tree. Full-suite execution avoids missed tests from implicit setup dependencies, mock aliases, imported assets, and deleted files; dependency-cruiser remains an architecture check rather than a test selector.
+
+`pnpm test:affected:list` uses native `vitest list --filesOnly` discovery and lists all ordinary test files as `[project] path` lines. Add `--json` for Vitest's array of objects with `file` (absolute path) and `projectName`. The previous selector's `--base`, `--summary`, custom `--verbose` behavior, and selection-report JSON are retired. Explicit Vitest filters remain available through the native commands.
+
+The Coverage CI job runs the full ordinary suite, and the PostgreSQL Integration job runs the dedicated suite. There are no per-change PostgreSQL impact predictions.
 
 CodeQL is intentionally opt-in locally because the CLI is not a Node dependency. Use `pnpm codeql:test`, `pnpm codeql:db`, and `pnpm codeql:analyze` when changing `.github/codeql/**` or when investigating semantic security/data-flow behavior. These commands call the CodeQL CLI directly, install the local query pack dependencies first, and write outputs under `test-results/codeql/`.
 

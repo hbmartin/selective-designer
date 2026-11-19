@@ -152,7 +152,7 @@ Decisions come from two planning interviews held on the same day. Conflicts betw
 - **Smoke test:** a manual `scripts/smoke-model.ts`, kept out of CI, to check fal mask polarity, Krea region coordinates, and FLUX grid syntax against the real models.
 
 ## Verification
-- **Per phase:** run `pnpm format:changed && pnpm check && pnpm test:affected`. Run `pnpm check:migrations` whenever schema files change.
+- **Per phase:** run `pnpm format:changed && pnpm check && pnpm test`. Run `pnpm check:migrations` whenever schema files change.
 - **Unit tests:** render-plan skip matrix, FLUX prompt-grid golden strings, mask polarity, step-result mapper, recipe immutability.
 - **Integration tests (PGlite):** repositories and the upload intent.
 - **Workflow tests:** orchestration tested with `vi.mock('workflow')`.
