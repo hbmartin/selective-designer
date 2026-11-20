@@ -264,6 +264,10 @@ Docs: [Cloudflare TanStack Start](https://developers.cloudflare.com/workers/fram
 
 Vercel supports TanStack Start with Nitro, and this repo already has the required `nitro()` Vite plugin.
 
+`vercel.json` selects `pnpm build:vercel` for Git deployments and manual redeploys. It builds the app first, then runs `pnpm db:migrate` for the Production environment before Vercel publishes the deployment. A failed build or migration fails the release. Configure `DATABASE_MIGRATION_URL` with the direct production database connection and `DATABASE_MIGRATION_DRIVER=node-pg`. The migration journal and advisory lock make completed migrations safe to rerun. Preview deployments build without invoking migrations.
+
+Keep production migrations compatible with the app version serving traffic while the next deployment builds. Review migrations that require coordinated schema locks before merging.
+
 Deploy from Git:
 
 1. Import the repository in Vercel.

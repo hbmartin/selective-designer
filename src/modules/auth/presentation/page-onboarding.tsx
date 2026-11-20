@@ -35,10 +35,8 @@ export const PageOnboarding = () => {
       toast.success(
         t('auth:pageOnboarding.successMessage', { name: variables.name })
       );
-      // Refresh both Better Auth's client cache and the router-context
-      // session cache, then invalidate route guards so beforeLoad reruns
-      // and redirects the now-onboarded user out of /onboarding.
-      await session.refetch();
+      // Refetch the persisted profile before rerunning the onboarding guard.
+      await session.refetch({ throwOnError: true });
       clearAllQueryStateForAuthBoundary(queryClient);
       await router.invalidate();
     },
@@ -53,7 +51,8 @@ export const PageOnboarding = () => {
     },
     validators: { onSubmit: zFormFieldsOnboarding() },
     onSubmit: async ({ value }) => {
-      await submitOnboarding.mutateAsync(value);
+      // The mutation's onError reports failures while the form becomes retryable.
+      await submitOnboarding.mutateAsync(value).catch(() => undefined);
     },
   });
 
@@ -99,7 +98,7 @@ export const PageOnboarding = () => {
             {(field) => <field.FieldText type="text" size="lg" />}
           </form.AppField>
         </FormField>
-        <form.SubmitButton size="lg" loading={submitOnboarding.isSuccess}>
+        <form.SubmitButton size="lg">
           {t('auth:pageOnboarding.submit')}
         </form.SubmitButton>
       </Form>

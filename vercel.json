@@ -1,5 +1,6 @@
 {
   "$schema": "https://openapi.vercel.sh/vercel.json",
+  "buildCommand": "pnpm build:vercel",
   "crons": [
     { "path": "/api/internal/accounting/reconcile", "schedule": "0 7 * * *" },
     { "path": "/api/internal/rendering/cleanup", "schedule": "0 7 * * *" }

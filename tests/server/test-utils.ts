@@ -127,6 +127,7 @@ export const expectedPermissionRequest = (permissions: Permission) => ({
 });
 
 export function setupAuthenticatedUser() {
+  mockDb.query.user.findFirst.mockResolvedValue(mockUser);
   mockGetSession.mockResolvedValue({
     user: mockUser,
     session: mockSession,

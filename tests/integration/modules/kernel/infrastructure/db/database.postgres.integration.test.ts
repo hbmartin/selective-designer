@@ -103,6 +103,27 @@ describe('PostgreSQL database integration', () => {
     ).resolves.toMatchObject({ id: 'user-commit' });
   });
 
+  it('can rerun migrations on an up-to-date database without duplicating journal entries', async () => {
+    const initializedDb = getInitializedDb(db);
+    const before = await initializedDb.$client.query(
+      'SELECT count(*)::int AS count FROM drizzle.__drizzle_migrations'
+    );
+    const migrationDb = await createMigrationDbClient({
+      databaseUrl,
+      driver: 'node-pg',
+    });
+    try {
+      await migrateDatabase(migrationDb);
+      await migrateDatabase(migrationDb);
+    } finally {
+      await migrationDb.$close();
+    }
+    const after = await initializedDb.$client.query(
+      'SELECT count(*)::int AS count FROM drizzle.__drizzle_migrations'
+    );
+    expect(after.rows).toEqual(before.rows);
+  });
+
   it('rolls back failed transactions', async () => {
     const initializedDb = getInitializedDb(db);
 

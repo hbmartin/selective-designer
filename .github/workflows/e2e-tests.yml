@@ -147,7 +147,7 @@ jobs:
           mc anonymous set download "minio/$S3_BUCKET_NAME"
 
       - name: Migrate database
-        run: pnpm db:push
+        run: pnpm db:migrate
 
       - name: Add default data into database
         run: pnpm db:seed

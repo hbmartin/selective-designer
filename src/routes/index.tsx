@@ -5,7 +5,7 @@ import { observedBeforeLoad } from '@/platform/router/route-observability';
 export const Route = createFileRoute('/')({
   component: RouteComponent,
   beforeLoad: observedBeforeLoad('/', () => {
-    throw redirect({ to: '/login' });
+    throw redirect({ to: '/app/designs', replace: true });
   }),
 });
 

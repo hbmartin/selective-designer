@@ -56,6 +56,25 @@ const makeAuth = (
     },
   }) as unknown as Auth;
 
+const makeAppUser = (
+  overrides: Partial<{
+    id: string;
+    email: string;
+    name: string;
+    role: string;
+    onboardedAt: Date | null;
+  }> = {}
+) => ({
+  id: 'user-1',
+  email: 'user@example.com',
+  name: 'Test User',
+  image: null,
+  emailVerified: true,
+  role: 'user',
+  onboardedAt: null as Date | null,
+  ...overrides,
+});
+
 const makeDb = (
   input: {
     identityUserId?: string;
@@ -82,7 +101,9 @@ const makeDb = (
         ),
       },
       user: {
-        findFirst: vi.fn(async () => input.appUser ?? null),
+        findFirst: vi.fn(async () =>
+          input.appUser === undefined ? makeAppUser() : input.appUser
+        ),
       },
     },
     insert,
@@ -99,11 +120,18 @@ describe('SessionGatewayBetterAuth', () => {
     vi.clearAllMocks();
   });
 
-  it('keeps valid provider roles', async () => {
+  it('loads the current app profile when provider and app user IDs match', async () => {
     const { SessionGatewayBetterAuth } = await loadGateway();
-    const db = makeDb();
+    const onboardedAt = new Date('2026-06-01T00:00:00.000Z');
+    const db = makeDb({
+      appUser: makeAppUser({
+        role: 'admin',
+        name: 'Updated Name',
+        onboardedAt,
+      }),
+    });
     const gateway = new SessionGatewayBetterAuth(
-      makeAuth('admin'),
+      makeAuth('user'),
       db,
       undefined,
       telemetry
@@ -116,7 +144,7 @@ describe('SessionGatewayBetterAuth', () => {
       tag: 'Ok',
       value: {
         type: 'auth_session_found',
-        session: { user: { role: 'admin' } },
+        session: { user: { role: 'admin', name: 'Updated Name', onboardedAt } },
       },
     });
     expect(db.__insertValues).toHaveBeenCalledWith({
@@ -137,11 +165,11 @@ describe('SessionGatewayBetterAuth', () => {
     );
   });
 
-  it('falls back to the least-privileged role for unknown provider roles', async () => {
+  it('falls back to the least-privileged role for unknown app roles', async () => {
     const { SessionGatewayBetterAuth } = await loadGateway();
     const gateway = new SessionGatewayBetterAuth(
       makeAuth('owner'),
-      makeDb(),
+      makeDb({ appUser: makeAppUser({ role: 'owner' }) }),
       undefined,
       telemetry
     );
@@ -224,6 +252,49 @@ describe('SessionGatewayBetterAuth', () => {
     expect(session).toMatchObject({
       tag: 'Ok',
       value: { type: 'auth_session_missing' },
+    });
+  });
+
+  it.each([undefined, 'user-1'])(
+    'treats a missing app user as unauthenticated with identity %s',
+    async (identityUserId) => {
+      const { SessionGatewayBetterAuth } = await loadGateway();
+      const db = makeDb({ identityUserId, appUser: null });
+      const gateway = new SessionGatewayBetterAuth(
+        makeAuth('user'),
+        db,
+        undefined,
+        telemetry
+      );
+
+      expect(
+        await gateway.getSession({ headers: new Headers() })
+      ).toMatchObject({
+        tag: 'Ok',
+        value: { type: 'auth_session_missing' },
+      });
+      expect(db.insert).not.toHaveBeenCalled();
+    }
+  );
+
+  it('returns an application error when the current app profile cannot be read', async () => {
+    const { SessionGatewayBetterAuth } = await loadGateway();
+    const db = makeDb({ identityUserId: 'user-1' });
+    vi.mocked(db.query.user.findFirst).mockRejectedValueOnce(
+      new Error('database unavailable')
+    );
+    const gateway = new SessionGatewayBetterAuth(
+      makeAuth('user'),
+      db,
+      undefined,
+      telemetry
+    );
+
+    const result = await gateway.getSession({ headers: new Headers() });
+
+    expect(result).toMatchObject({
+      tag: 'Error',
+      error: { code: 'AUTH_SESSION_GATEWAY_ERROR' },
     });
   });
 
