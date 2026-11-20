@@ -273,7 +273,7 @@ Deploy from Git:
 1. Import the repository in Vercel.
 2. Use the TanStack Start preset if it is shown, otherwise use the default project settings.
 3. Set Node.js Version to `24.x`.
-4. Set Build Command to `pnpm build`.
+4. Use the repository's Build Command, `pnpm build:vercel`.
 5. Leave Output Directory empty/default.
 6. Add the environment variables from `.env.example`. Use a pooled Neon URL, a private R2 bucket with CORS for the app origin, and Upstash for shared auth state.
 7. Deploy.
@@ -285,7 +285,11 @@ pnpm dlx vercel
 pnpm dlx vercel --prod
 ```
 
-For Vercel preview URLs, this app can derive `VITE_BASE_URL` from Vercel's preview environment variables when `VITE_BASE_URL` is not set. Add `AUTH_ALLOWED_HOSTS="*.vercel.app"` if auth should accept Vercel preview hosts.
+Preview needs its own environment configuration. Generate a private `AUTH_SECRET` for Preview, separate from Production. Configure `AUTH_PROVIDER`, `DATABASE_DRIVER`, `PROVIDER_MODE`, `RENDER_ENABLED_MODELS`, the `S3_*` storage settings, and `VITE_S3_BUCKET_URL` for the resources Preview should use. The database, Redis, `FAL_KEY`, `BFL_API_KEY`, `S3_ACCESS_KEY_ID`, and `S3_SECRET_ACCESS_KEY` must also cover Preview. Sharing resources means preview edits, uploads, and provider usage can affect the same data, assets, and balances as Production. Keep cron and migration credentials in Production; Preview does not run migrations.
+
+The Vercel build wrapper derives an unset or blank Preview `VITE_BASE_URL` from `VERCEL_BRANCH_URL`, falling back to `VERCEL_URL`, using HTTPS. It passes the URL to the build so browser and server bundles agree without depending on framework-prefixed system variables. An explicit `VITE_BASE_URL` takes precedence. Enable access to Vercel system environment variables, and set `AUTH_ALLOWED_HOSTS="selective-designer-*-hbmartins-projects.vercel.app"` in Preview for this project's branch and deployment aliases. Set Preview telemetry environment labels to `preview` and `OTEL_LOCAL_SQLITE_ENABLED=false`.
+
+Keep the Vercel project's Node.js Version at `24.x` to match `package.json` and avoid the version override warning. Environment changes apply to new deployments, so redeploy after updating Preview settings.
 
 Docs: [TanStack Start on Vercel](https://vercel.com/docs/frameworks/full-stack/tanstack-start), [Vercel Node.js versions](https://vercel.com/docs/functions/runtimes/node-js/node-js-versions)
 

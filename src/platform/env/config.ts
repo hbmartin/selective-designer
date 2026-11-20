@@ -28,6 +28,9 @@ const isDev = () => {
 export const isDevEnvironment = isDev;
 
 const getBaseUrl = (env: RuntimeEnv) => {
+  if (typeof env.VITE_BASE_URL === 'string' && env.VITE_BASE_URL.trim()) {
+    return env.VITE_BASE_URL;
+  }
   const vercelUrlPreviewUrl =
     env.VITE_VERCEL_ENV === 'preview' ? env.VITE_VERCEL_BRANCH_URL : null;
 

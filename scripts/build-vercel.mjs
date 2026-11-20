@@ -5,12 +5,23 @@ import {
   resolvePnpmCliPath,
 } from './check-license-compliance.mjs';
 
+const buildEnvironment = { ...process.env, NODE_ENV: 'production' };
+if (
+  buildEnvironment.VERCEL_ENV === 'preview' &&
+  !buildEnvironment.VITE_BASE_URL?.trim()
+) {
+  const host =
+    buildEnvironment.VERCEL_BRANCH_URL?.trim() ||
+    buildEnvironment.VERCEL_URL?.trim();
+  if (host) buildEnvironment.VITE_BASE_URL = `https://${host}`;
+}
+
 function runScript(script) {
   console.log(`Running release stage: ${script}`);
   const command = pnpmCommand(resolvePnpmCliPath(), [script]);
   const result = spawnSync(command.file, command.args, {
     stdio: 'inherit',
-    env: { ...process.env, NODE_ENV: 'production' },
+    env: buildEnvironment,
   });
 
   if (result.error || result.status !== 0) {
