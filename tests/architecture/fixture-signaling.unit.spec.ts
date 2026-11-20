@@ -1,4 +1,5 @@
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import { unsafeFixtureSignals } from '@tests/support/fixture-signal-policy';
 import { expect, it } from 'vitest';
@@ -7,6 +8,10 @@ it.each([
   'process.kill(-pid, "SIGKILL")',
   'const original = process.kill; original(-pid)',
   'const { kill: signal } = process; signal(-pid)',
+  'const { "kill": signal } = process; signal(-pid)',
+  "const { 'kill': signal } = process; signal(-pid)",
+  'const { kill } = process; kill(-pid)',
+  'const original = process["kill"]; original(-pid)',
   'import { kill as signal } from "node:process"; signal(-pid)',
   'import runtime from "node:process"; runtime.kill(-pid)',
   'vi.spyOn(process, "kill")',
@@ -33,14 +38,61 @@ it('permits raw signaling only inside the verified implementation', () => {
     )
   ).toEqual([]);
 });
-it('keeps executable fixture support and security sources inside the signal boundary', () => {
+const executableExtensions = new Set([
+  '.ts',
+  '.tsx',
+  '.mts',
+  '.cts',
+  '.js',
+  '.jsx',
+  '.mjs',
+  '.cjs',
+]);
+function fixtureSignalSources(folders: string[]) {
   const files: string[] = [];
-  for (const folder of ['tests/support', 'tests/security']) {
-    for (const name of fs.readdirSync(folder)) {
-      if (/\.(?:ts|mjs|cjs)$/.test(name) && !/\.d\.[cm]?ts$/.test(name))
-        files.push(path.join(folder, name));
+  const visit = (folder: string) => {
+    for (const entry of fs.readdirSync(folder, { withFileTypes: true })) {
+      const file = path.join(folder, entry.name);
+      if (entry.isDirectory()) visit(file);
+      else if (
+        entry.isFile() &&
+        executableExtensions.has(path.extname(file)) &&
+        !/\.d\.[cm]?ts$/.test(file)
+      )
+        files.push(file);
     }
+  };
+  for (const folder of folders) visit(folder);
+  return files.sort();
+}
+it('discovers nested executable sources without declarations or symlinks', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'fixture-signaling-'));
+  try {
+    const nested = path.join(root, 'nested', 'helpers');
+    fs.mkdirSync(nested, { recursive: true });
+    const expected = [...executableExtensions]
+      .map((extension) => path.join(nested, `helper${extension}`))
+      .sort();
+    for (const file of expected)
+      fs.writeFileSync(file, 'const { "kill": signal } = process;');
+    for (const extension of ['.d.ts', '.d.mts', '.d.cts', '.json'])
+      fs.writeFileSync(path.join(root, `excluded${extension}`), '');
+    fs.symlinkSync(nested, path.join(root, 'directory-link'));
+    fs.symlinkSync(expected[0]!, path.join(root, 'file-link.ts'));
+    const files = fixtureSignalSources([root]);
+    expect(files).toEqual(expected);
+    expect(
+      files.map(
+        (file) =>
+          unsafeFixtureSignals(fs.readFileSync(file, 'utf8'), file).length
+      )
+    ).toEqual(expected.map(() => 1));
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
   }
+});
+it('keeps executable fixture support and security sources inside the signal boundary', () => {
+  const files = fixtureSignalSources(['tests/support', 'tests/security']);
   expect(
     files.flatMap((file) =>
       unsafeFixtureSignals(fs.readFileSync(file, 'utf8'), file).map(

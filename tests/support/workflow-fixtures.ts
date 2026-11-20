@@ -177,10 +177,18 @@ export type CommandResult = {
 };
 
 type CleanupBudget = { termUntil: number; deadline: number };
+type GroupCleanupOutcome =
+  | { type: 'stopped' }
+  | { type: 'unconfirmed'; error: Error };
+type GroupPass = {
+  completion: Promise<GroupCleanupOutcome>;
+  outcome?: GroupCleanupOutcome;
+  settle: (outcome: GroupCleanupOutcome) => void;
+};
 type OwnedGroup = FixtureProcessGroup & {
   owner: CommandControl;
   automatic: boolean;
-  pass?: Promise<void>;
+  pass?: GroupPass;
 };
 type CommandControl = {
   phase: 'starting' | 'running' | 'cleaning' | 'settled';
@@ -306,14 +314,28 @@ async function captureGroup(
   pid: number,
   automatic: boolean
 ): Promise<FixtureProcessGroupCapability> {
-  const initial = requireOpenFixture(fixture);
-  await Promise.all(
-    [...initial.commands.values()]
-      .filter((command) => command.phase === 'starting')
-      .map((command) => command.startup)
-  );
-  const state = requireOpenFixture(fixture);
-  const rows = inspectFixtureProcesses();
+  let state = requireOpenFixture(fixture);
+  let rows = inspectFixtureProcesses();
+  // An already-live owner must not wait for another command's startup.
+  // If birth reporting is pending, ancestry identifies the one relevant gate.
+  while (true) {
+    const ancestors = new Set<number>();
+    let ancestor = rows.get(pid);
+    while (ancestor && !ancestors.has(ancestor.pid)) {
+      ancestors.add(ancestor.pid);
+      ancestor = rows.get(ancestor.parent);
+    }
+    const pendingOwner = [...state.commands.values()].find(
+      (command) =>
+        command.phase === 'starting' &&
+        command.root &&
+        ancestors.has(command.root.pid)
+    );
+    if (!pendingOwner) break;
+    await pendingOwner.startup;
+    state = requireOpenFixture(fixture);
+    rows = inspectFixtureProcesses();
+  }
   const existing = [...state.groups].find((group) => group.pid === pid);
   if (existing) {
     if (!ownerIsLive(existing.owner, rows))
@@ -322,6 +344,7 @@ async function captureGroup(
       throw new Error(`Fixture group ${pid} has stopped`);
     const capability = state.capabilities.get(existing);
     if (capability) {
+      requireOpenFixture(fixture);
       if (automatic) existing.automatic = true;
       return capability;
     }
@@ -343,6 +366,7 @@ async function captureGroup(
     pid,
     [capabilityBrand]: true as const,
   });
+  requireOpenFixture(fixture);
   capturedGroups.set(capability, { retired: false, state, group });
   state.capabilities.set(group, capability);
   state.groups.add(group);
@@ -391,32 +415,43 @@ function failGroup(state: FixtureState, group: OwnedGroup, error: Error) {
 }
 async function runGroupPass(
   state: FixtureState,
-  groups: OwnedGroup[],
+  passes: ReadonlyMap<OwnedGroup, GroupPass>,
   budget: CleanupBudget,
   priorFailures: ReadonlyMap<CommandControl, Error | undefined>
 ) {
-  let remaining = groups.filter((group) => state.groups.has(group));
-  const errors: Error[] = [];
+  let remaining = [...passes.keys()];
+  const complete = (group: OwnedGroup, outcome: GroupCleanupOutcome) => {
+    const pass = passes.get(group)!;
+    if (group.pass === pass) group.pass = undefined;
+    pass.settle(outcome);
+  };
+  const unconfirmed = (group: OwnedGroup, error: Error) =>
+    complete(group, {
+      type: 'unconfirmed',
+      error: failGroup(state, group, error),
+    });
   const terminated = new Set<OwnedGroup>();
   const killed = new Set<OwnedGroup>();
   const noNewInspectionFailure = (group: OwnedGroup) => {
     const failure = group.owner.inspectionFailure;
     if (!failure || priorFailures.get(group.owner) === failure) return true;
-    errors.push(failGroup(state, group, failure));
+    unconfirmed(group, failure);
     return false;
   };
   while (remaining.length) {
+    remaining = remaining.filter((group) => {
+      if (state.groups.has(group)) return true;
+      complete(group, { type: 'stopped' });
+      return false;
+    });
     remaining = remaining.filter(noNewInspectionFailure);
     if (!remaining.length) break;
     const left = budget.deadline - performance.now();
     if (left < 100) {
       for (const group of remaining)
-        errors.push(
-          failGroup(
-            state,
-            group,
-            new Error(`Fixture cleanup deadline expired for group ${group.pid}`)
-          )
+        unconfirmed(
+          group,
+          new Error(`Fixture cleanup deadline expired for group ${group.pid}`)
         );
       break;
     }
@@ -425,8 +460,7 @@ async function runGroupPass(
       rows = inspectFixtureProcesses(left);
     } catch (cause) {
       const error = cause instanceof Error ? cause : new Error(String(cause));
-      for (const group of remaining)
-        errors.push(failGroup(state, group, error));
+      for (const group of remaining) unconfirmed(group, error);
       break; // A failed whole snapshot authorizes no signaling or retry.
     }
     remaining = remaining.filter((group) => {
@@ -434,6 +468,7 @@ async function runGroupPass(
       try {
         if (!fixtureGroupIsLive(group, rows)) {
           retireGroup(state, group);
+          complete(group, { type: 'stopped' });
           return false;
         }
         const guardOnly =
@@ -455,18 +490,18 @@ async function runGroupPass(
             signalFixtureGroup(group, 'SIGKILL', rows);
             killed.add(group);
           }
-        } else if (!group.owner.retireRequested && !terminated.has(group)) {
+        } else if (
+          !(group.owner.root === group && group.owner.retireRequested) &&
+          !terminated.has(group)
+        ) {
           signalFixtureGroup(group, 'SIGTERM', rows);
           terminated.add(group);
         }
         return true;
       } catch (cause) {
-        errors.push(
-          failGroup(
-            state,
-            group,
-            cause instanceof Error ? cause : new Error(String(cause))
-          )
+        unconfirmed(
+          group,
+          cause instanceof Error ? cause : new Error(String(cause))
         );
         return false; // This group's uncertainty cannot strand verified siblings.
       }
@@ -479,18 +514,13 @@ async function runGroupPass(
         : Math.min(50, Math.max(0, budget.deadline - performance.now() - 100))
     );
   }
-  if (errors.length)
-    throw new AggregateError(
-      errors,
-      `Fixture process cleanup could not be confirmed: ${errors.map((error) => error.message).join('; ')}`
-    );
 }
 async function stopGroups(
   state: FixtureState,
   groups: OwnedGroup[],
   explicitBudget?: CleanupBudget
 ) {
-  const passes = new Set<Promise<void>>();
+  const passes = new Map<OwnedGroup, GroupPass>();
   const batches = new Map<CleanupBudget, OwnedGroup[]>();
   const fresh = {
     termUntil: performance.now() + 2_000,
@@ -499,7 +529,7 @@ async function stopGroups(
   for (const group of groups) {
     if (!state.groups.has(group)) continue;
     if (group.pass) {
-      passes.add(group.pass);
+      passes.set(group, group.pass);
       continue;
     }
     const budget =
@@ -514,23 +544,77 @@ async function stopGroups(
     const priorFailures = new Map(
       batch.map((group) => [group.owner, group.owner.inspectionFailure])
     );
-    // Defer execution until locks are installed, including reentrant synthetic events.
-    const pass = Promise.resolve().then(() =>
-      runGroupPass(state, batch, budget, priorFailures)
-    );
-    for (const group of batch) group.pass = pass;
-    void pass
-      .finally(() => {
-        for (const group of batch)
+    const batchPasses = new Map<OwnedGroup, GroupPass>();
+    for (const group of batch) {
+      let resolve!: (outcome: GroupCleanupOutcome) => void;
+      const completion = new Promise<GroupCleanupOutcome>((done) => {
+        resolve = done;
+      });
+      const pass: GroupPass = {
+        completion,
+        settle(outcome) {
+          if (pass.outcome) return;
+          pass.outcome = outcome;
+          resolve(outcome);
+        },
+      };
+      group.pass = pass;
+      batchPasses.set(group, pass);
+      passes.set(group, pass);
+    }
+    // Install every lock before shared inspection or reentrant synthetic events.
+    void Promise.resolve()
+      .then(() => runGroupPass(state, batchPasses, budget, priorFailures))
+      .catch((cause) => {
+        const error = cause instanceof Error ? cause : new Error(String(cause));
+        for (const [group, pass] of batchPasses) {
+          if (pass.outcome) continue;
           if (group.pass === pass) group.pass = undefined;
-      })
-      .catch(() => {});
-    passes.add(pass);
+          pass.settle({
+            type: 'unconfirmed',
+            error: failGroup(state, group, error),
+          });
+        }
+      });
   }
-  const results = await Promise.allSettled(passes);
-  const errors = results.flatMap((result) =>
-    result.status === 'rejected' ? [result.reason] : []
+  const completion = Promise.all(
+    [...passes.values()].map((pass) => pass.completion)
   );
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    if (explicitBudget) {
+      await Promise.race([
+        completion,
+        new Promise<void>((resolve) => {
+          timer = setTimeout(
+            resolve,
+            Math.max(0, explicitBudget.deadline - performance.now())
+          );
+        }),
+      ]);
+    } else {
+      await completion;
+    }
+  } finally {
+    clearTimeout(timer);
+  }
+  const errors: Error[] = [];
+  for (const [group, pass] of passes) {
+    if (!pass.outcome) {
+      // Bound this caller without changing the shared pass's schedule or lock.
+      errors.push(
+        failGroup(
+          state,
+          group,
+          new Error(
+            `Fixture cleanup deadline expired while waiting for group ${group.pid}`
+          )
+        )
+      );
+    } else if (pass.outcome.type === 'unconfirmed') {
+      errors.push(pass.outcome.error);
+    }
+  }
   if (errors.length)
     throw new AggregateError(errors, 'Fixture process cleanup failed');
 }
@@ -649,10 +733,17 @@ export function runFixtureCommand(
   }: CommandOptions = {}
 ): Promise<CommandResult> {
   const startedAt = performance.now();
+  const commandArgs = [...args];
+  const environmentEntries: [string, string][] = [];
+  for (const key in env) {
+    const value = env[key];
+    if (value !== undefined) environmentEntries.push([key, value]);
+  }
+  const commandEnv = Object.fromEntries(environmentEntries);
   cwd = path.resolve(cwd);
   const failures: FixtureCleanupFailure[] = [];
   const result: CommandResult = {
-    command: [command, ...args].join(' '),
+    command: [command, ...commandArgs].join(' '),
     cwd,
     status: null,
     signal: null,
@@ -715,6 +806,7 @@ export function runFixtureCommand(
     }
     let settled = false;
     let closed = false;
+    let supervisorExited = false;
     let releaseIssued = false;
     let cleanup: Promise<void> | undefined;
     let executionTimer: ReturnType<typeof setTimeout> | undefined;
@@ -752,7 +844,7 @@ export function runFixtureCommand(
           control.retireRequested = false;
           if (!settled) {
             addError(error);
-            beginCleanup(error);
+            beginCleanup();
           }
         }
       );
@@ -789,6 +881,16 @@ export function runFixtureCommand(
     };
     const finish = () => {
       if (settled) return;
+      if (
+        supervisorExited &&
+        !control.targetTerminal &&
+        !result.aborted &&
+        !result.timedOut &&
+        !result.error
+      )
+        addError(
+          new Error('Fixture supervisor exited before reporting its workload')
+        );
       reconcilePipes();
       settled = true;
       control.phase = 'settled';
@@ -953,19 +1055,16 @@ export function runFixtureCommand(
           send({
             type: 'start',
             command,
-            args,
+            args: commandArgs,
             cwd,
-            env: Object.fromEntries(
-              Object.entries(env).filter(
-                (entry): entry is [string, string] => entry[1] !== undefined
-              )
-            ),
+            env: commandEnv,
           });
         } catch (cause) {
           const error =
             cause instanceof Error ? cause : new Error(String(cause));
+          control.transportError = error;
           addError(error);
-          beginCleanup(error);
+          beginCleanup();
         }
       } else if (message.type === 'workload') {
         if (
@@ -1005,20 +1104,12 @@ export function runFixtureCommand(
     });
     child.on('exit', (_status, exitSignal) => {
       if (settled) return;
+      supervisorExited = true;
       if (!control.targetTerminal && exitSignal !== null) {
         result.status = null;
         result.signal = exitSignal;
         result.terminationSource = 'supervisor';
       }
-      if (
-        !control.targetTerminal &&
-        !result.aborted &&
-        !result.timedOut &&
-        !result.error
-      )
-        addError(
-          new Error('Fixture supervisor exited before reporting its workload')
-        );
       beginCleanup();
     });
     child.on('close', () => {

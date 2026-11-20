@@ -112,10 +112,11 @@ it('exits an unreleased disconnected bootstrap without spawning or inspecting', 
   expect(h.spawned).not.toHaveBeenCalled();
 });
 it('ignores TERM only after release and accepts retirement only after a target terminal report', () => {
+  const unreleased = setup();
+  unreleased.ipc.emit('SIGTERM');
+  expect(unreleased.ipc.exit).toHaveBeenCalledWith(0);
+  expect(unreleased.spawned).not.toHaveBeenCalled();
   const h = setup();
-  h.ipc.emit('SIGTERM');
-  expect(h.ipc.exit).toHaveBeenCalledWith(0);
-  h.ipc.exit.mockClear();
   h.start();
   h.ipc.emit('SIGTERM');
   h.ipc.emit('message', control({ type: 'retire' }));

@@ -569,6 +569,7 @@ rules:
     pattern-regex: '^\s*import\s+.*\s+from\s+["''](?:drizzle-orm(?:/[^"'']*)?|@neondatabase/serverless|postgres|pg)["'']'
     paths:
       exclude:
+        - tests/**
         - src/modules/*/infrastructure/**
         - src/modules/kernel/infrastructure/**
         - src/composition/**
@@ -1516,8 +1517,12 @@ rules:
     languages: [typescript, javascript]
     severity: ERROR
     message: Fixture process signals must go through the identity-checked fixture process-group helper.
-    patterns:
-      - pattern: process.kill(...)
+    pattern-either:
+      - pattern: process.kill
+      - pattern: process['kill']
+      - pattern: 'const { kill: $SIGNAL, ... } = process;'
+      - pattern: 'let { kill: $SIGNAL, ... } = process;'
+      - pattern: 'var { kill: $SIGNAL, ... } = process;'
     paths:
       include:
         - tests/support/**

@@ -1,0 +1,35 @@
+# Preserve standard Semgrep exclusions while enabling fixture signal policies.
+# A project ignore file replaces Semgrep's default ignore list.
+.git
+.svn
+.hg
+_darcs
+CVS
+build/
+vendor/
+dist/
+*.min.js
+.env/
+.tox/
+node_modules/
+.npm/
+.yarn/
+.venv/
+_opam/
+_build/
+_cargo/
+test/
+testsuite/
+*_test.go
+
+# Keep the existing non-fixture test roots excluded. Fixture support and
+# security directories are intentionally absent so the scoped rules run.
+/tests/architecture/
+/tests/browser/
+/tests/browser-visual/
+/tests/e2e/
+/tests/integration/
+/tests/mocks/
+/tests/server/
+/tests/unit/
+/tests/*.*
