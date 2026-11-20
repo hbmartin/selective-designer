@@ -1,5 +1,5 @@
 import { expect, test } from '@tests/e2e/utils';
-import { makeTestDatabaseUrl } from '@tests/server/test-database-url';
+import { resolveE2EDatabase } from '@tests/server/e2e-database-config';
 import { eq } from 'drizzle-orm';
 import { randomBytes, randomUUID } from 'node:crypto';
 
@@ -22,14 +22,10 @@ for (const role of ['admin', 'user'] as const) {
         ? { width: 1440, height: 900 }
         : { width: 390, height: 844 }
     );
+    const config = resolveE2EDatabase();
     const db = createDbClient({
-      driver: 'node-pg',
-      url: makeTestDatabaseUrl({
-        host: '127.0.0.1',
-        port: 54329,
-        databaseName: 'postgres',
-        credentialLabel: 'onboarding-e2e',
-      }),
+      driver: config.driver,
+      url: config.databaseUrl,
     });
     const email = `onboarding-${randomUUID()}@e2e.local`;
     const password = randomBytes(24).toString('base64url');

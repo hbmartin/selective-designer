@@ -35,6 +35,9 @@ jobs:
       - name: Run Semgrep
         run: semgrep scan --config .semgrep.yml --error --quiet --sarif-output semgrep.sarif
 
+      - name: Test fixture signaling rules
+        run: python3 scripts/check-fixture-signal-rules.py
+
       - name: Upload Semgrep SARIF
         if: always()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2

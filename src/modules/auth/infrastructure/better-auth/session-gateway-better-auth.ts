@@ -1,6 +1,6 @@
 import { Option, Result } from '@bloodyowl/boxed';
 import { APIError } from 'better-auth/api';
-import { and, eq } from 'drizzle-orm';
+import { and, eq, isNull, or } from 'drizzle-orm';
 
 import {
   AppError,
@@ -135,17 +135,36 @@ export class SessionGatewayBetterAuth implements SessionGateway {
   private async resolveAppUser(
     providerUser: AuthenticatedUserSource
   ): Promise<Option<AuthenticatedUserSource>> {
-    const identity = await this.db.query.authIdentity.findFirst({
-      where: and(
-        eq(authIdentity.provider, 'better-auth'),
-        eq(authIdentity.providerUserId, providerUser.id)
-      ),
-      columns: { userId: true },
-    });
-    const userId = identity?.userId ?? providerUser.id;
-    const appUser = await this.db.query.user.findFirst({
-      where: eq(userTable.id, userId),
-    });
+    const [resolved] = await this.db
+      .select({
+        user: {
+          id: userTable.id,
+          email: userTable.email,
+          name: userTable.name,
+          image: userTable.image,
+          emailVerified: userTable.emailVerified,
+          role: userTable.role,
+          onboardedAt: userTable.onboardedAt,
+        },
+        identityUserId: authIdentity.userId,
+      })
+      .from(userTable)
+      .leftJoin(
+        authIdentity,
+        and(
+          eq(authIdentity.provider, 'better-auth'),
+          eq(authIdentity.providerUserId, providerUser.id)
+        )
+      )
+      .where(
+        or(
+          eq(userTable.id, authIdentity.userId),
+          and(isNull(authIdentity.userId), eq(userTable.id, providerUser.id))
+        )
+      )
+      .limit(1);
+    const appUser = resolved?.user;
+    const identity = resolved?.identityUserId;
     if (!identity && appUser) {
       await this.db
         .insert(authIdentity)

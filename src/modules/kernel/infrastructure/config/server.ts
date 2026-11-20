@@ -4,7 +4,7 @@ import {
   validateAiProvidersBuildConfig,
 } from './ai-providers';
 import { getAuthConfig } from './auth';
-import { getDatabaseConfig } from './database';
+import { getDatabaseConfig, getMigrationDatabaseConfig } from './database';
 import { getEmailConfig, getResendWebhookConfig } from './email';
 import { shouldSkipEnvValidation } from './env-schema';
 import { getHttpConfig } from './http';
@@ -36,4 +36,9 @@ export function validateServerBuildConfig() {
   if (shouldSkipEnvValidation()) return;
   validateInfrastructureConfig();
   validateAiProvidersBuildConfig();
+}
+
+/** Validate maintenance connection settings without opening a connection. */
+export function validateMigrationConfig(): void {
+  getMigrationDatabaseConfig();
 }

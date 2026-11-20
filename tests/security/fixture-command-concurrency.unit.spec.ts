@@ -285,3 +285,114 @@ it('reports a supervisor exit when no workload result arrives before final recon
     'exited before reporting its workload'
   );
 });
+
+it('keeps fixture disposal pending until an automatic scoped pass retires', async () => {
+  vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'performance'] });
+  const { fixture, fake } = setup();
+  const command = fake.start();
+  await fixtureTurn();
+  fake.row(4_000_001, command.child.workloadPid);
+  const capability = await captureFixtureProcessGroup(fixture, 4_000_001);
+  await registerFixtureProcessGroup(fixture, 4_000_001);
+  const original = fake.kill.getMockImplementation()!;
+  fake.kill.mockImplementation((pid, signal) =>
+    pid === -4_000_001 && signal === 'SIGTERM' ? true : original(pid, signal)
+  );
+  const scoped = disposeCapturedFixtureProcessGroup(capability);
+  await fixtureTurn();
+  let finished = false;
+  const disposal = disposeFixtureCommands(fixture).then(() => {
+    finished = true;
+  });
+  await vi.advanceTimersByTimeAsync(1_100);
+  const result = await command.running;
+  const historical = result.error;
+  expect(finished).toBe(false);
+  expect(result.cleanupFailures.map((failure) => failure.kind)).toEqual([
+    'owned-groups-unconfirmed',
+  ]);
+  await vi.advanceTimersByTimeAsync(1_000);
+  await Promise.all([scoped, disposal]);
+  expect(finished).toBe(true);
+  expect(
+    unresolvedFixtureCleanupFailures(fixture, result.cleanupFailures)
+  ).toEqual([]);
+  expect(result.error).toBe(historical);
+  expect(
+    fake.kill.mock.calls
+      .filter(([pid]) => pid === -4_000_001)
+      .map(([, signal]) => signal)
+  ).toEqual(['SIGTERM', 'SIGKILL']);
+});
+
+it('joins a recovery pass installed after the disposal snapshot and reconciles historical rejections', async () => {
+  vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'performance'] });
+  const { fixture, fake } = setup();
+  const command = fake.start();
+  await fixtureTurn();
+  fake.row(4_000_001, command.child.workloadPid);
+  const capability = await captureFixtureProcessGroup(fixture, 4_000_001);
+  await registerFixtureProcessGroup(fixture, 4_000_001);
+  const original = fake.kill.getMockImplementation()!;
+  let recovering = false;
+  fake.kill.mockImplementation((pid, signal) => {
+    if (pid === -4_000_001 && (signal === 'SIGTERM' || !recovering))
+      return true;
+    return original(pid, signal);
+  });
+  fake.start({ terminationGraceMs: 2_500 });
+  await fixtureTurn();
+  let finished = false;
+  const disposal = disposeFixtureCommands(fixture).then(() => {
+    finished = true;
+  });
+  await vi.advanceTimersByTimeAsync(1_100);
+  await command.running;
+  recovering = true;
+  const scoped = disposeCapturedFixtureProcessGroup(capability);
+  expect(finished).toBe(false);
+  await vi.advanceTimersByTimeAsync(2_100);
+  await Promise.all([scoped, disposal]);
+  expect(finished).toBe(true);
+});
+
+it('publishes a single deadline token when both a caller and its shared pass expire', async () => {
+  vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'performance'] });
+  const { fixture, fake } = setup();
+  const cancel = new AbortController();
+  const command = fake.start({ signal: cancel.signal });
+  await fixtureTurn();
+  fake.row(4_000_001, command.child.workloadPid);
+  const capability = await captureFixtureProcessGroup(fixture, 4_000_001);
+  await registerFixtureProcessGroup(fixture, 4_000_001);
+  const original = fake.kill.getMockImplementation()!;
+  fake.kill.mockImplementation((pid, signal) =>
+    pid === -4_000_001 ? true : original(pid, signal)
+  );
+  const scoped = disposeCapturedFixtureProcessGroup(capability).catch(
+    (error: unknown) => error
+  );
+  await fixtureTurn();
+  cancel.abort('bounded wait');
+  await vi.advanceTimersByTimeAsync(1_100);
+  const result = await command.running;
+  const historical = result.error;
+  const [token] = result.cleanupFailures;
+  expect(result.cleanupFailures).toHaveLength(1);
+  await vi.advanceTimersByTimeAsync(2_000);
+  const expired = await scoped;
+  expect(expired).toBeInstanceOf(AggregateError);
+  expect((expired as AggregateError).errors).toEqual([token?.error]);
+  expect(result.cleanupFailures).toEqual([token]);
+  expect(result.error).toBe(historical);
+  expect(
+    unresolvedFixtureCleanupFailures(fixture, result.cleanupFailures)
+  ).toEqual([token]);
+  fake.kill.mockImplementation(original);
+  const recovery = disposeFixtureCommands(fixture);
+  await vi.advanceTimersByTimeAsync(150);
+  await recovery;
+  expect(
+    unresolvedFixtureCleanupFailures(fixture, result.cleanupFailures)
+  ).toEqual([]);
+});

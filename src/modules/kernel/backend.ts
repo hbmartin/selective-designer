@@ -22,6 +22,7 @@ export {
 export { getHttpConfig } from './infrastructure/config/http';
 export { getRedisConfig } from './infrastructure/config/redis';
 export {
+  validateMigrationConfig,
   validateServerBuildConfig,
   validateServerConfig,
 } from './infrastructure/config/server';

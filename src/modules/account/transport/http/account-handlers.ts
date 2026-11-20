@@ -29,7 +29,7 @@ export const createAccountHandlers = ({ getUseCases }: AccountHandlerDeps) => {
         currentUserId: ctx.scope.userId,
         name: data.name,
       }),
-      accountReasonConfig
+      { ...accountReasonConfig, account_already_onboarded: () => undefined }
     );
   };
 

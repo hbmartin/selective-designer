@@ -114,3 +114,8 @@ _Avoid_: Drift alert
 **Model scorecard**:
 For each model, how often its render result was the preferred result.
 _Avoid_: Rating, leaderboard
+
+### Account access
+
+**Onboarding**:
+The one-time confirmation of a provisioned user's name before first use of Selective Designer. The first successful confirmation is retained; later name changes are profile edits.
