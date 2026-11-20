@@ -33,6 +33,40 @@ describe('getEnvClient URL security', () => {
     expect(getEnvClient().VITE_BASE_URL).toBe('https://app.example.com');
   });
 
+  it('preserves an explicit preview URL when framework-prefixed variables exist', async () => {
+    vi.stubEnv('NODE_ENV', 'production');
+    vi.stubEnv('VITE_BASE_URL', 'https://custom-preview.example.com');
+    vi.stubEnv('VITE_VERCEL_ENV', 'preview');
+    vi.stubEnv('VITE_VERCEL_BRANCH_URL', 'project-git-feature.vercel.app');
+    vi.stubEnv('VITE_S3_BUCKET_URL', 'https://cdn.example.com/bucket');
+    const { getEnvClient } = await import('@/platform/env/config');
+    expect(getEnvClient().VITE_BASE_URL).toBe(
+      'https://custom-preview.example.com'
+    );
+  });
+
+  it('retains framework-prefixed preview discovery without an explicit URL', async () => {
+    vi.stubEnv('NODE_ENV', 'production');
+    vi.stubEnv('VITE_BASE_URL', undefined);
+    vi.stubEnv('VITE_VERCEL_ENV', 'preview');
+    vi.stubEnv('VITE_VERCEL_BRANCH_URL', 'project-git-feature.vercel.app');
+    vi.stubEnv('VITE_S3_BUCKET_URL', 'https://cdn.example.com/bucket');
+    const { getEnvClient } = await import('@/platform/env/config');
+    expect(getEnvClient().VITE_BASE_URL).toBe(
+      'https://project-git-feature.vercel.app'
+    );
+  });
+
+  it('still rejects missing base URL configuration', async () => {
+    vi.stubEnv('NODE_ENV', 'production');
+    vi.stubEnv('VITE_BASE_URL', undefined);
+    vi.stubEnv('VITE_VERCEL_ENV', undefined);
+    vi.stubEnv('VITE_VERCEL_BRANCH_URL', undefined);
+    vi.stubEnv('VITE_S3_BUCKET_URL', 'https://cdn.example.com/bucket');
+    const { getEnvClient } = await import('@/platform/env/config');
+    expect(() => getEnvClient()).toThrow(/VITE_BASE_URL/);
+  });
+
   it('accepts cleartext localhost URLs in production', async () => {
     vi.stubEnv('NODE_ENV', 'production');
     vi.stubEnv('VITE_BASE_URL', 'http://localhost:3000');
