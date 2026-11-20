@@ -42,7 +42,7 @@ export const NavSidebar = (props: { children?: ReactNode }) => {
                   render={
                     <Link to="/manager">
                       <span>
-                        <Logo className="w-24 group-data-[collapsible=icon]:w-18" />
+                        <Logo className="w-32 group-data-[collapsible=icon]:w-18" />
                       </span>
                     </Link>
                   }

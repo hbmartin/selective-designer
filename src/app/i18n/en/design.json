@@ -4,7 +4,9 @@
     "archivedTitle": "Archived designs",
     "archivedToggle": "Archived",
     "newButton": "New design",
-    "empty": "No designs yet. Upload an architect's image to start.",
+    "empty": "No designs yet",
+    "emptyDescription": "Upload an architect's image to start placing products and materials.",
+    "emptyArchived": "No archived designs",
     "emptySearch": "No designs match \"{{searchTerm}}\".",
     "loadMore": "Load more"
   },

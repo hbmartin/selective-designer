@@ -1,7 +1,7 @@
 import { getUiState } from '@bearstudio/ui-state';
 import { useInfiniteQuery } from '@tanstack/react-query';
 import { Link, useRouter } from '@tanstack/react-router';
-import { ArchiveIcon, PlusIcon } from 'lucide-react';
+import { ArchiveIcon, ImageIcon, PlusIcon, SearchXIcon } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import { match, P } from 'ts-pattern';
 
@@ -13,6 +13,7 @@ import {
   AppPageLayoutTopBarTitle as PageLayoutTopBarTitle,
 } from '@/platform/components/page-layout';
 import { Button } from '@/platform/components/ui/button';
+import { EmptyState } from '@/platform/components/ui/empty-state';
 import { SearchInput } from '@/platform/components/ui/search-input';
 
 import { useCurrentScopeKey } from '@/modules/auth/client';
@@ -27,18 +28,20 @@ const DesignCard = ({ design }: { design: DesignView }) => (
   <Link
     to="/app/designs/$designId"
     params={{ designId: design.id }}
-    className="group flex flex-col gap-2"
+    className="group flex flex-col gap-2.5 rounded-xl outline-none"
     data-testid="design-card"
   >
-    <div className="aspect-[4/3] overflow-hidden rounded-md border bg-muted">
+    <div className="aspect-[4/3] overflow-hidden rounded-xl border bg-muted shadow-soft transition duration-300 group-hover:shadow-lift group-focus-visible:ring-[3px] group-focus-visible:ring-ring/50">
       <img
         src={design.baseImage.workingUrl}
         alt=""
         loading="lazy"
-        className="size-full object-cover transition duration-300 group-hover:scale-[1.02]"
+        className="size-full object-cover transition duration-500 group-hover:scale-[1.03]"
       />
     </div>
-    <span className="truncate text-sm font-medium">{design.name}</span>
+    <span className="truncate px-0.5 text-sm font-medium transition-colors group-hover:text-brand">
+      {design.name}
+    </span>
   </Link>
 );
 
@@ -108,33 +111,59 @@ export const PageDesigns = (props: { search: PageDesignsSearch }) => {
             navigateSearch({ searchTerm: value })
           }
           size="sm"
-          className="mb-4 max-w-xs"
+          className="mb-6 max-w-xs"
         />
         {ui
           .match('pending', () => (
-            <div className="grid grid-cols-2 gap-4 md:grid-cols-3">
-              {Array.from({ length: 6 }, (_, index) => (
+            <div className="grid grid-cols-2 gap-x-5 gap-y-7 md:grid-cols-3 xl:grid-cols-4">
+              {Array.from({ length: 8 }, (_, index) => (
                 <div
                   // eslint-disable-next-line @eslint-react/no-array-index-key
                   key={index}
-                  className="aspect-[4/3] animate-pulse rounded-md bg-muted"
-                />
+                  className="flex flex-col gap-2.5"
+                >
+                  <div className="aspect-[4/3] animate-pulse rounded-xl bg-muted" />
+                  <div className="h-4 w-2/3 animate-pulse rounded-md bg-muted" />
+                </div>
               ))}
             </div>
           ))
           .match('error', () => <PageError type="unknown-server-error" />)
-          .match('empty', () => (
-            <p className="text-sm text-muted-foreground">
-              {props.search.searchTerm
-                ? t('design:list.emptySearch', {
-                    searchTerm: props.search.searchTerm,
-                  })
-                : t('design:list.empty')}
-            </p>
-          ))
+          .match('empty', () =>
+            match(props.search)
+              .with({ searchTerm: P.string.minLength(1) }, (search) => (
+                <EmptyState
+                  icon={<SearchXIcon />}
+                  title={t('design:list.emptySearch', {
+                    searchTerm: search.searchTerm,
+                  })}
+                />
+              ))
+              .with({ archived: true }, () => (
+                <EmptyState
+                  icon={<ArchiveIcon />}
+                  title={t('design:list.emptyArchived')}
+                />
+              ))
+              .otherwise(() => (
+                <EmptyState
+                  icon={<ImageIcon />}
+                  title={t('design:list.empty')}
+                  description={t('design:list.emptyDescription')}
+                  action={
+                    <CreateDesignDialog>
+                      <Button>
+                        <PlusIcon />
+                        {t('design:list.newButton')}
+                      </Button>
+                    </CreateDesignDialog>
+                  }
+                />
+              ))
+          )
           .match('default', ({ items }) => (
-            <div className="flex flex-col gap-4">
-              <div className="grid grid-cols-2 gap-4 md:grid-cols-3">
+            <div className="flex flex-col gap-6">
+              <div className="grid grid-cols-2 gap-x-5 gap-y-7 md:grid-cols-3 xl:grid-cols-4">
                 {items.map((design) => (
                   <DesignCard key={design.id} design={design} />
                 ))}

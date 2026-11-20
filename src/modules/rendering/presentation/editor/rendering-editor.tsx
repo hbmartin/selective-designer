@@ -53,7 +53,7 @@ const EditorCanvas = lazy(async () => ({
 }));
 
 const nativeSelectClass =
-  'h-8 w-full rounded-md border border-input bg-background px-2 text-sm';
+  'h-8 w-full rounded-md border border-input bg-background px-2 text-sm shadow-xs outline-none transition-[color,box-shadow] focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50';
 const DEFAULT_PLACEMENT_WIDTH = 0.2;
 
 export type RenderingEditorProps = {
@@ -400,6 +400,7 @@ const EditorBody = (
                 step={0.005}
                 value={brushWidth}
                 onChange={(event) => setBrushWidth(Number(event.target.value))}
+                className="w-32 accent-primary"
               />
             </label>
             <Button
@@ -472,11 +473,13 @@ const EditorBody = (
       </div>
 
       <aside
-        className="flex flex-col gap-5"
+        className="flex flex-col gap-6 self-start rounded-xl border bg-card p-4 shadow-soft"
         aria-label={t('rendering:edits.title')}
       >
         <section className="flex flex-col gap-2">
-          <h2 className="text-sm font-medium">{t('rendering:items.title')}</h2>
+          <h2 className="text-xs font-semibold tracking-wide text-muted-foreground uppercase">
+            {t('rendering:items.title')}
+          </h2>
           {props.items.length === 0 ? (
             <p className="text-xs text-muted-foreground">
               {t('rendering:items.empty')}
@@ -489,7 +492,7 @@ const EditorBody = (
                   <li key={item.id}>
                     <button
                       type="button"
-                      className="flex w-full flex-col items-center gap-1 rounded-md border bg-card p-1 text-[10px] disabled:opacity-50"
+                      className="flex w-full flex-col items-center gap-1 rounded-lg border bg-card p-1 text-xs transition-colors hover:border-ring disabled:opacity-50"
                       draggable={placeable}
                       disabled={!placeable}
                       title={
@@ -513,7 +516,7 @@ const EditorBody = (
                         src={item.imageUrl}
                         alt=""
                         draggable={false}
-                        className="aspect-square w-full rounded bg-transparency-grid object-contain"
+                        className="aspect-square w-full rounded-md bg-transparency-grid object-contain"
                       />
                       <span className="w-full truncate">{item.name}</span>
                     </button>
@@ -525,11 +528,9 @@ const EditorBody = (
         </section>
 
         <section className="flex flex-col gap-2">
-          <h2 className="text-sm font-medium">
+          <h2 className="text-xs font-semibold tracking-wide text-muted-foreground uppercase">
             {t('rendering:regions.title')}{' '}
-            <span className="text-muted-foreground">
-              ({props.regions.length})
-            </span>
+            <span className="font-normal">({props.regions.length})</span>
           </h2>
           {props.regions.length === 0 ? (
             <p className="text-xs text-muted-foreground">
@@ -574,7 +575,9 @@ const EditorBody = (
         </section>
 
         <section className="flex flex-col gap-2">
-          <h2 className="text-sm font-medium">{t('rendering:edits.title')}</h2>
+          <h2 className="text-xs font-semibold tracking-wide text-muted-foreground uppercase">
+            {t('rendering:edits.title')}
+          </h2>
           {editSet.edits.length === 0 ? (
             <p className="text-xs text-muted-foreground">
               {t('rendering:edits.empty')}

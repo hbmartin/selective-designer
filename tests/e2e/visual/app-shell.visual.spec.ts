@@ -26,7 +26,10 @@ test.describe('App shell visual regression', () => {
     }) => {
       await page.to('/app');
       await expect(page.getByTestId('layout-app')).toBeVisible();
-      await expect(page.getByRole('link', { name: 'Home' })).toBeVisible();
+      await expect(
+        page.getByRole('link', { name: 'Designs', exact: true })
+      ).toBeVisible();
+      await expect(page.getByText('No designs yet')).toBeVisible();
       await expect(page.getByText(/access denied/i)).toBeHidden();
       await screenshot(page, 'authenticated-app-shell.png');
     });
@@ -40,7 +43,10 @@ test.describe('App shell visual regression', () => {
     }) => {
       await page.to('/app');
       await expect(page.getByTestId('layout-app')).toBeVisible();
-      await expect(page.getByRole('link', { name: 'Home' })).toBeVisible();
+      await expect(
+        page.getByRole('link', { name: 'Designs', exact: true })
+      ).toBeVisible();
+      await expect(page.getByText('No designs yet')).toBeVisible();
       await expect(page.getByText(/access denied/i)).toBeHidden();
       await screenshot(page, 'authenticated-app-shell-mobile.png');
     });

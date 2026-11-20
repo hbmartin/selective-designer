@@ -22,9 +22,9 @@ export const MainNavDesktop = () => {
         className="fixed top-0 right-0 left-0 flex items-center border-b border-b-shell-border bg-shell pt-safe-top"
         style={{ height: HEIGHT }}
       >
-        <div className="mx-auto flex w-full max-w-4xl items-center justify-between px-4">
+        <div className="mx-auto flex w-full max-w-6xl items-center justify-between px-4 md:px-6">
           <Link to="/app">
-            <Logo className="w-24" />
+            <Logo className="w-36" />
           </Link>
           <nav className="flex gap-0.5">
             {MAIN_NAV_LINKS.map(({ labelTranslationKey, ...item }) => (
@@ -49,10 +49,10 @@ const Item = ({
   return (
     <Link
       {...linkProps}
-      className="flex items-center justify-center gap-2 rounded-md px-2.5 py-2 text-shell-muted-foreground transition hover:bg-shell-accent hover:text-shell-accent-foreground [&.active]:text-shell-foreground"
+      className="flex items-center justify-center gap-2 rounded-full px-3.5 py-1.5 text-shell-muted-foreground transition hover:bg-shell-accent hover:text-shell-accent-foreground [&.active]:bg-shell-accent [&.active]:text-shell-foreground"
     >
       <Icon className="size-4 opacity-60 in-[.active]:hidden" />
-      <IconActive className="hidden size-4 in-[.active]:block" />
+      <IconActive className="hidden size-4 text-brand in-[.active]:block" />
       <span className="text-sm font-medium">{children}</span>
     </Link>
   );

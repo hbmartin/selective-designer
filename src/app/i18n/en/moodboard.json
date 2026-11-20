@@ -2,6 +2,7 @@
   "panel": {
     "title": "Mood board",
     "addButton": "Add item",
+    "emptyTitle": "Your mood board is empty",
     "empty": "Add product photos, swatches or extracts to place them in renders.",
     "removingBackground": "Removing background…",
     "cutoutDelayed": "Background removal is taking longer than expected",

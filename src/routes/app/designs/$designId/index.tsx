@@ -50,7 +50,9 @@ function RouteComponent() {
           <CreateDesignDialog copyFromDesignId={id}>
             <Button size="sm" variant="ghost">
               <CopyPlusIcon />
-              {t('design:detail.revised')}
+              <span className="max-md:sr-only">
+                {t('design:detail.revised')}
+              </span>
             </Button>
           </CreateDesignDialog>
         </>

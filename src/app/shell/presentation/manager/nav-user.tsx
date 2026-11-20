@@ -55,7 +55,7 @@ export function NavUser() {
   const session = useAuthSession();
   const { setOpenMobile } = useSidebar();
   const { theme, setTheme } = useTheme();
-  const selectedTheme = isTheme(theme) ? theme : 'system';
+  const selectedTheme = isTheme(theme) ? theme : 'light';
 
   const user = {
     avatar: session.data?.user.image ?? undefined,

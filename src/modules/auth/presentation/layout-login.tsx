@@ -5,17 +5,12 @@ import { Logo } from '@/platform/components/brand/logo';
 import { LocalSwitcher } from '@/platform/components/ui/local-switcher';
 import { ThemeSwitcher } from '@/platform/components/ui/theme-switcher';
 
-import { useMascotState } from '@/modules/auth/presentation/mascot';
-
-import image from './layout-login-image.jpg';
-import mascot from './mascot.png';
-import mascotError from './mascot-error.png';
+import { LoginBrandPanel } from './login-brand-panel';
 
 export const LayoutLogin = (props: {
   children?: ReactNode;
   footer?: ReactNode;
 }) => {
-  const mascotState = useMascotState();
   return (
     <div
       className="flex flex-1 bg-background pt-safe-top pb-safe-bottom"
@@ -24,7 +19,7 @@ export const LayoutLogin = (props: {
       <div className="flex w-full flex-1 flex-col gap-4 p-6 max-md:overflow-hidden md:p-10">
         <div className="flex items-center justify-between gap-4">
           <Link to="/" className="flex items-center gap-2 font-medium">
-            <Logo className="w-24" />
+            <Logo className="w-36" />
           </Link>
           <div className="flex flex-wrap justify-end gap-x-4">
             <ThemeSwitcher iconOnly />
@@ -32,22 +27,11 @@ export const LayoutLogin = (props: {
           </div>
         </div>
         <div className="flex flex-1 items-center justify-center">
-          <div className="w-full max-w-xs">{props.children}</div>
+          <div className="w-full max-w-sm">{props.children}</div>
         </div>
         {props.footer}
       </div>
-      <div className="relative hidden w-full flex-1 items-center justify-center bg-muted lg:flex">
-        <img
-          src={image}
-          alt=""
-          className="absolute inset-0 size-full object-cover"
-        />
-        <img
-          src={mascotState === 'error' ? mascotError : mascot}
-          alt=""
-          className="animate-float-in-space pointer-events-none absolute top-1/2 left-1/2 w-52 -translate-1/2"
-        />
-      </div>
+      <LoginBrandPanel />
     </div>
   );
 };

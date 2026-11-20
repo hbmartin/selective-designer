@@ -81,6 +81,13 @@ export const LICENSE_EXCEPTIONS = [
     reason:
       'Inter web font. SIL Open Font License explicitly permits embedding and redistribution of the font files.',
   },
+  {
+    name: '@fontsource-variable/fraunces',
+    license: 'OFL-1.1',
+    exactName: true,
+    reason:
+      'Fraunces display web font. SIL Open Font License explicitly permits embedding and redistribution of the font files.',
+  },
 ];
 
 function matchesException(packageName, license) {

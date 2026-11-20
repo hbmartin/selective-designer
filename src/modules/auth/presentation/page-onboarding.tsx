@@ -1,4 +1,3 @@
-import { useStore } from '@tanstack/react-form';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { useRouter } from '@tanstack/react-router';
 import { LogOutIcon } from 'lucide-react';
@@ -20,7 +19,6 @@ import {
 } from '@/modules/auth/client';
 import { ConfirmSignOut } from '@/modules/auth/presentation/confirm-signout';
 import { LayoutLogin } from '@/modules/auth/presentation/layout-login';
-import { useMascot } from '@/modules/auth/presentation/mascot';
 import { zFormFieldsOnboarding } from '@/modules/auth/presentation/schema';
 
 export const PageOnboarding = () => {
@@ -56,12 +54,6 @@ export const PageOnboarding = () => {
     },
   });
 
-  const isInvalidAfterSubmit = useStore(
-    form.store,
-    (s) => s.isSubmitted && !s.isValid
-  );
-  useMascot({ isError: isInvalidAfterSubmit });
-
   return (
     <LayoutLogin
       footer={
@@ -82,7 +74,7 @@ export const PageOnboarding = () => {
     >
       <Form form={form} className="flex flex-col gap-4 pb-12">
         <div className="flex flex-col gap-1">
-          <h1 className="text-lg font-bold text-balance">
+          <h1 className="font-display text-2xl font-medium tracking-tight text-balance">
             {t('auth:pageOnboarding.title')}
           </h1>
           <p className="text-sm text-balance break-words text-muted-foreground">

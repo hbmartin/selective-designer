@@ -44,4 +44,22 @@ describe('Providers', () => {
       undefined
     );
   }, 30_000);
+
+  it('defaults to the light theme instead of following the OS', async () => {
+    const { Providers } = await import('@/composition/providers');
+
+    renderToStaticMarkup(
+      <Providers client={{} as QueryClient}>
+        <span>child</span>
+      </Providers>
+    );
+
+    expect(themeProviderMock).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        defaultTheme: 'light',
+        storageKey: 'theme',
+      }),
+      undefined
+    );
+  }, 30_000);
 });

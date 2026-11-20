@@ -1,7 +1,8 @@
 {
   "history": {
     "title": "Renders",
-    "empty": "No renders yet.",
+    "empty": "No renders yet",
+    "emptyDescription": "Open the editor to place mood board items and start a render.",
     "batch": "Batch",
     "fromSource": "From an earlier result",
     "preferred": "Preferred",
@@ -190,6 +191,7 @@
     "finished": "Finished results",
     "preferred": "Preferred",
     "rate": "Preferred share",
+    "emptyTitle": "No preferences yet",
     "empty": "Mark preferred results to build the scorecard.",
     "nav": "Scorecard"
   }

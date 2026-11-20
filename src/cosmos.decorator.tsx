@@ -2,6 +2,7 @@ import { ThemeProvider } from 'next-themes';
 import type { ReactNode } from 'react';
 import { StrictMode, useEffect, useState } from 'react';
 import '@fontsource-variable/inter';
+import '@fontsource-variable/fraunces';
 import '@/platform/lib/temporal/polyfill';
 
 import type { LanguageKey } from '@/platform/lib/i18n/constants';

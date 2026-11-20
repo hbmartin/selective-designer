@@ -1,11 +1,13 @@
 import { useQuery } from '@tanstack/react-query';
-import { StarIcon } from 'lucide-react';
+import { ImagesIcon, StarIcon } from 'lucide-react';
 import type { ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
 
 import { useHydrated } from '@/platform/hooks/use-hydrated';
 
 import { Badge } from '@/platform/components/ui/badge';
+import { EmptyState } from '@/platform/components/ui/empty-state';
+import { Skeleton } from '@/platform/components/ui/skeleton';
 import { Spinner } from '@/platform/components/ui/spinner';
 
 import { useCurrentScopeKey } from '@/modules/auth/client';
@@ -35,13 +37,13 @@ const ResultTile = (props: {
 
   return (
     <li
-      className="flex flex-col gap-1 rounded-md border bg-card p-2"
+      className="flex flex-col gap-1.5 rounded-lg border bg-card p-2"
       data-testid="render-result"
       data-model={result.modelId}
       data-status={result.status}
     >
       <div
-        className="relative overflow-hidden rounded bg-muted"
+        className="relative overflow-hidden rounded-md bg-muted"
         style={{
           aspectRatio: result.outputSize
             ? `${result.outputSize.width} / ${result.outputSize.height}`
@@ -68,13 +70,13 @@ const ResultTile = (props: {
         <span className="flex items-center gap-1">
           {props.preferred && (
             <StarIcon
-              className="size-3 fill-current"
+              className="size-3 fill-current text-brand"
               aria-label={t('rendering:history.preferred')}
             />
           )}
           <Badge
             variant={result.status === 'failed' ? 'negative' : 'secondary'}
-            className="text-[10px]"
+            className="text-2xs"
           >
             {t(`rendering:status.${result.status}`)}
           </Badge>
@@ -215,13 +217,21 @@ export const RenderHistory = (props: {
       aria-label={t('rendering:history.title')}
       className="flex flex-col gap-3"
     >
-      <h2 className="text-sm font-medium">{t('rendering:history.title')}</h2>
+      <h2 className="font-display text-lg font-medium tracking-tight">
+        {t('rendering:history.title')}
+      </h2>
       {rendersQuery.isPending ? (
-        <Spinner />
+        <div className="grid grid-cols-2 gap-2">
+          <Skeleton className="aspect-[4/3] w-full rounded-lg" />
+          <Skeleton className="aspect-[4/3] w-full rounded-lg" />
+        </div>
       ) : renders.length === 0 ? (
-        <p className="text-sm text-muted-foreground">
-          {t('rendering:history.empty')}
-        </p>
+        <EmptyState
+          size="sm"
+          icon={<ImagesIcon />}
+          title={t('rendering:history.empty')}
+          description={t('rendering:history.emptyDescription')}
+        />
       ) : (
         <ol className="flex flex-col gap-4">
           {buildTree(renders).map((node) => (
