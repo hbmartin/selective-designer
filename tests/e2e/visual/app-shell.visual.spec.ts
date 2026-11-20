@@ -18,37 +18,57 @@ test.describe('App shell visual regression', () => {
 
   test.use({ storageState: USER_FILE });
 
-  test.describe('desktop', () => {
-    test.use({ viewport: desktopViewport });
+  for (const theme of ['light', 'dark'] as const) {
+    test.describe(theme, () => {
+      test.beforeEach(async ({ page }) => {
+        await page.addInitScript((value) => {
+          window.localStorage.setItem('theme', value);
+        }, theme);
+      });
 
-    test('authenticated app shell remains visually stable', async ({
-      page,
-    }) => {
-      await page.to('/app');
-      await expect(page.getByTestId('layout-app')).toBeVisible();
-      await expect(
-        page.getByRole('link', { name: 'Designs', exact: true })
-      ).toBeVisible();
-      await expect(page.getByText('No designs yet')).toBeVisible();
-      await expect(page.getByText(/access denied/i)).toBeHidden();
-      await screenshot(page, 'authenticated-app-shell.png');
+      test.describe('desktop', () => {
+        test.use({ viewport: desktopViewport });
+
+        test('authenticated app shell remains visually stable', async ({
+          page,
+        }) => {
+          await page.to('/app');
+          await expect(page.getByTestId('layout-app')).toBeVisible();
+          await expect(
+            page.getByRole('link', { name: 'Designs', exact: true })
+          ).toBeVisible();
+          await expect(page.getByText('No designs yet')).toBeVisible();
+          await expect(page.getByText(/access denied/i)).toBeHidden();
+          await screenshot(
+            page,
+            theme === 'dark'
+              ? 'authenticated-app-shell-dark.png'
+              : 'authenticated-app-shell.png'
+          );
+        });
+      });
+
+      test.describe('mobile', () => {
+        test.use({ viewport: mobileViewport });
+
+        test('authenticated app shell remains visually stable on mobile', async ({
+          page,
+        }) => {
+          await page.to('/app');
+          await expect(page.getByTestId('layout-app')).toBeVisible();
+          await expect(
+            page.getByRole('link', { name: 'Designs', exact: true })
+          ).toBeVisible();
+          await expect(page.getByText('No designs yet')).toBeVisible();
+          await expect(page.getByText(/access denied/i)).toBeHidden();
+          await screenshot(
+            page,
+            theme === 'dark'
+              ? 'authenticated-app-shell-mobile-dark.png'
+              : 'authenticated-app-shell-mobile.png'
+          );
+        });
+      });
     });
-  });
-
-  test.describe('mobile', () => {
-    test.use({ viewport: mobileViewport });
-
-    test('authenticated app shell remains visually stable on mobile', async ({
-      page,
-    }) => {
-      await page.to('/app');
-      await expect(page.getByTestId('layout-app')).toBeVisible();
-      await expect(
-        page.getByRole('link', { name: 'Designs', exact: true })
-      ).toBeVisible();
-      await expect(page.getByText('No designs yet')).toBeVisible();
-      await expect(page.getByText(/access denied/i)).toBeHidden();
-      await screenshot(page, 'authenticated-app-shell-mobile.png');
-    });
-  });
+  }
 });
