@@ -1,6 +1,9 @@
+import { configureE2EDatabase } from './tests/server/e2e-database-config';
 import { defineConfig, devices } from '@playwright/test';
 
 import { DEFAULT_LANGUAGE_KEY } from '@/platform/lib/i18n/constants';
+
+configureE2EDatabase();
 
 const shouldRunVisualTests = process.env.VITE_VISUAL_TEST === 'true';
 

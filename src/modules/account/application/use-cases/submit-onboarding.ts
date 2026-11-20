@@ -3,8 +3,8 @@ import { Result } from '@bloodyowl/boxed';
 import type { UserId } from '@/modules/kernel/domain/ids';
 
 import type {
+  AccountOnboardingOutcome,
   AccountResult,
-  AccountUpdateOutcome,
   AccountUseCaseDeps,
 } from './types';
 import { type AccountName, normalizeAccountName } from '../../domain/account';
@@ -17,7 +17,7 @@ export type SubmitOnboardingInput = {
 export async function submitOnboarding(
   deps: AccountUseCaseDeps,
   input: SubmitOnboardingInput
-): Promise<AccountResult<AccountUpdateOutcome>> {
+): Promise<AccountResult<AccountOnboardingOutcome>> {
   const allowed = await deps.permissionChecker.hasPermission(
     input.currentUserId,
     { account: ['update'] }

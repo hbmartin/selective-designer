@@ -1,3 +1,4 @@
+import cases from './fixture-signaling-cases.json';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -6,6 +7,16 @@ import { expect, it } from 'vitest';
 
 it.each([
   'process.kill(-pid, "SIGKILL")',
+  'const { ["kill"]: signal } = process; signal(-pid)',
+  'const { [`kill`]: signal } = process; signal(-pid)',
+  'let signal; ({ kill: signal } = process); signal(-pid)',
+  'let signal; ({ ["kill"]: signal } = process); signal(-pid)',
+  'function execute({ kill: signal } = process) { signal(-pid) }',
+  'function execute({ ["kill"]: signal } = process) { signal(-pid) }',
+  'const execute = ({ kill: signal } = process) => signal(-pid)',
+  'process[`kill`](-pid)',
+  'vi.spyOn(process, `kill`)',
+
   'const original = process.kill; original(-pid)',
   'const { kill: signal } = process; signal(-pid)',
   'const { "kill": signal } = process; signal(-pid)',
@@ -24,6 +35,10 @@ it.each([
 it.each([
   'vi.spyOn(process, "kill").mockImplementation(() => true)',
   'vi.spyOn(process, "kill").mockReturnValue(true)',
+  'vi.spyOn(process, `kill`).mockImplementation(() => true)',
+  'const { ["kill"]: signal } = other; signal(-pid)',
+  'function execute({ title } = process) {}',
+
   'import { signalFixtureGroup } from "./fixture-process-groups"; signalFixtureGroup(group, "SIGTERM", rows)',
 ])('accepts fully replaced spies and centralized operations: %s', (source) => {
   expect(
@@ -101,3 +116,12 @@ it('keeps executable fixture support and security sources inside the signal boun
     )
   ).toEqual([]);
 });
+
+it.each(cases)(
+  'checks the shared Semgrep corpus without executing it: $source',
+  ({ source, rules }) => {
+    expect(
+      unsafeFixtureSignals(source, 'tests/security/case.js').length > 0
+    ).toBe(rules.length > 0);
+  }
+);

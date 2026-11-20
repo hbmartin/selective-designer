@@ -29,15 +29,6 @@ export const PageOnboarding = () => {
 
   const submitOnboarding = useMutation({
     ...accountQueries.submitOnboarding(),
-    onSuccess: async (_, variables) => {
-      toast.success(
-        t('auth:pageOnboarding.successMessage', { name: variables.name })
-      );
-      // Refetch the persisted profile before rerunning the onboarding guard.
-      await session.refetch({ throwOnError: true });
-      clearAllQueryStateForAuthBoundary(queryClient);
-      await router.invalidate();
-    },
     onError: () => {
       toast.error(t('auth:pageOnboarding.errorMessage'));
     },
@@ -49,8 +40,27 @@ export const PageOnboarding = () => {
     },
     validators: { onSubmit: zFormFieldsOnboarding() },
     onSubmit: async ({ value }) => {
-      // The mutation's onError reports failures while the form becomes retryable.
-      await submitOnboarding.mutateAsync(value).catch(() => undefined);
+      if (!submitOnboarding.isSuccess) {
+        try {
+          await submitOnboarding.mutateAsync(value);
+        } catch {
+          return; // Persistence errors are reported by the mutation.
+        }
+      }
+      try {
+        const refreshed = await session.refetch({ throwOnError: true });
+        clearAllQueryStateForAuthBoundary(queryClient);
+        await router.invalidate();
+        if (refreshed.data?.user) {
+          toast.success(
+            t('auth:pageOnboarding.successMessage', {
+              name: refreshed.data.user.name,
+            })
+          );
+        }
+      } catch {
+        toast.error(t('auth:pageOnboarding.refreshErrorMessage'));
+      }
     },
   });
 
@@ -87,7 +97,17 @@ export const PageOnboarding = () => {
             {t('auth:common.name.onboardingLabel')}
           </FormFieldLabel>
           <form.AppField name="name">
-            {(field) => <field.FieldText type="text" size="lg" />}
+            {(field) => (
+              <form.Subscribe selector={(state) => state.isSubmitting}>
+                {(isSubmitting) => (
+                  <field.FieldText
+                    type="text"
+                    size="lg"
+                    readOnly={isSubmitting || submitOnboarding.isSuccess}
+                  />
+                )}
+              </form.Subscribe>
+            )}
           </form.AppField>
         </FormField>
         <form.SubmitButton size="lg">

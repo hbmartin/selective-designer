@@ -1,5 +1,16 @@
 import ts from 'typescript';
 
+function staticName(node: ts.Node): string | undefined {
+  if (ts.isComputedPropertyName(node)) return staticName(node.expression);
+  if (
+    ts.isIdentifier(node) ||
+    ts.isStringLiteral(node) ||
+    ts.isNoSubstitutionTemplateLiteral(node)
+  )
+    return node.text;
+  return undefined;
+}
+
 /** Inspect syntax only: these examples must never execute their process calls. */
 export function unsafeFixtureSignals(source: string, file: string): string[] {
   const tree = ts.createSourceFile(file, source, ts.ScriptTarget.Latest, true);
@@ -37,7 +48,8 @@ export function unsafeFixtureSignals(source: string, file: string): string[] {
     if (
       ts.isElementAccessExpression(node) &&
       node.argumentExpression &&
-      ts.isStringLiteral(node.argumentExpression)
+      (ts.isStringLiteral(node.argumentExpression) ||
+        ts.isNoSubstitutionTemplateLiteral(node.argumentExpression))
     )
       return { object: node.expression, name: node.argumentExpression.text };
     return undefined;
@@ -57,22 +69,33 @@ export function unsafeFixtureSignals(source: string, file: string): string[] {
       );
     if (
       !allowed &&
-      ts.isVariableDeclaration(node) &&
+      (ts.isVariableDeclaration(node) || ts.isParameter(node)) &&
       node.initializer &&
       ts.isIdentifier(node.initializer) &&
       processNames.has(node.initializer.text) &&
       ts.isObjectBindingPattern(node.name) &&
-      node.name.elements.some((entry) => {
-        const name = entry.propertyName ?? entry.name;
-        return (
-          (ts.isIdentifier(name) || ts.isStringLiteral(name)) &&
-          name.text === 'kill'
-        );
-      })
+      node.name.elements.some(
+        (entry) => staticName(entry.propertyName ?? entry.name) === 'kill'
+      )
     )
       problems.push(
         'Destructured process signaling bypasses verified fixture helper'
       );
+    if (
+      !allowed &&
+      ts.isBinaryExpression(node) &&
+      node.operatorToken.kind === ts.SyntaxKind.EqualsToken &&
+      ts.isIdentifier(node.right) &&
+      processNames.has(node.right.text) &&
+      ts.isObjectLiteralExpression(node.left) &&
+      node.left.properties.some(
+        (entry) => entry.name && staticName(entry.name) === 'kill'
+      )
+    ) {
+      problems.push(
+        'Assigned process signaling bypasses verified fixture helper'
+      );
+    }
     if (
       ts.isCallExpression(node) &&
       property(node.expression)?.name === 'spyOn'
@@ -83,7 +106,8 @@ export function unsafeFixtureSignals(source: string, file: string): string[] {
         ts.isIdentifier(target) &&
         processNames.has(target.text) &&
         method &&
-        ts.isStringLiteral(method) &&
+        (ts.isStringLiteral(method) ||
+          ts.isNoSubstitutionTemplateLiteral(method)) &&
         method.text === 'kill'
       ) {
         const parent = node.parent;

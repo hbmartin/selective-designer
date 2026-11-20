@@ -1,0 +1,78 @@
+[
+  {
+    "source": "process.kill(-pid)",
+    "rules": ["fixture-signaling-requires-verified-helper"]
+  },
+  {
+    "source": "const signal = process.kill",
+    "rules": ["fixture-signaling-requires-verified-helper"]
+  },
+  {
+    "source": "const { kill: signal } = process",
+    "rules": ["fixture-signaling-requires-verified-helper"]
+  },
+  {
+    "source": "const { \"kill\": signal } = process",
+    "rules": ["fixture-signaling-requires-verified-helper"]
+  },
+  {
+    "source": "const { [\"kill\"]: signal } = process",
+    "rules": ["fixture-signaling-requires-verified-helper"]
+  },
+  {
+    "source": "const { [`kill`]: signal } = process",
+    "rules": ["fixture-signaling-requires-verified-helper"]
+  },
+  {
+    "source": "let signal; ({ kill: signal } = process)",
+    "rules": ["fixture-signaling-requires-verified-helper"]
+  },
+  {
+    "source": "let signal; ({ [\"kill\"]: signal } = process)",
+    "rules": ["fixture-signaling-requires-verified-helper"]
+  },
+  {
+    "source": "function execute({ kill: signal } = process) {}",
+    "rules": ["fixture-signaling-requires-verified-helper"]
+  },
+  {
+    "source": "function execute({ [\"kill\"]: signal } = process) {}",
+    "rules": ["fixture-signaling-requires-verified-helper"]
+  },
+  {
+    "source": "const execute = ({ kill: signal } = process) => signal(-pid)",
+    "rules": ["fixture-signaling-requires-verified-helper"]
+  },
+  {
+    "source": "process[`kill`](-pid)",
+    "rules": ["fixture-signaling-requires-verified-helper"]
+  },
+  {
+    "source": "vi.spyOn(process, \"kill\")",
+    "rules": ["fixture-kill-spy-requires-persistent-replacement"]
+  },
+  {
+    "source": "vi.spyOn(process, `kill`)",
+    "rules": ["fixture-kill-spy-requires-persistent-replacement"]
+  },
+  {
+    "source": "vi.spyOn(process, \"kill\").mockImplementationOnce(() => true)",
+    "rules": ["fixture-kill-spy-requires-persistent-replacement"]
+  },
+  {
+    "source": "vi.spyOn(process, \"kill\").mockImplementation(() => true)",
+    "rules": []
+  },
+  {
+    "source": "vi.spyOn(process, `kill`).mockReturnValue(true)",
+    "rules": []
+  },
+  {
+    "source": "const { [\"kill\"]: signal } = other",
+    "rules": []
+  },
+  {
+    "source": "function execute({ title } = process) {}",
+    "rules": []
+  }
+]

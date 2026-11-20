@@ -1523,6 +1523,16 @@ rules:
       - pattern: 'const { kill: $SIGNAL, ... } = process;'
       - pattern: 'let { kill: $SIGNAL, ... } = process;'
       - pattern: 'var { kill: $SIGNAL, ... } = process;'
+      - pattern: 'const { ["kill"]: $SIGNAL, ... } = process;'
+      - pattern: 'let { ["kill"]: $SIGNAL, ... } = process;'
+      - pattern: 'var { ["kill"]: $SIGNAL, ... } = process;'
+      - pattern: '({ kill: $SIGNAL, ... } = process)'
+      - pattern: '({ ["kill"]: $SIGNAL, ... } = process)'
+      - pattern: 'function $F(..., { kill: $SIGNAL, ... } = process, ...) { ... }'
+      - pattern: 'function $F(..., { ["kill"]: $SIGNAL, ... } = process, ...) { ... }'
+      - pattern: '(..., { kill: $SIGNAL, ... } = process, ...) => $BODY'
+      - pattern: '(..., { ["kill"]: $SIGNAL, ... } = process, ...) => $BODY'
+      - pattern: process[`kill`]
     paths:
       include:
         - tests/support/**

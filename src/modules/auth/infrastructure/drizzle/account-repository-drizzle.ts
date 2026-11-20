@@ -1,5 +1,5 @@
 import { Result } from '@bloodyowl/boxed';
-import { eq } from 'drizzle-orm';
+import { and, eq, isNull } from 'drizzle-orm';
 
 import type {
   AccountOnboardingUpdate,
@@ -93,10 +93,31 @@ export class AccountRepositoryDrizzle implements AccountRepository {
           name: input.name,
           onboardedAt: input.onboardedAt,
         })
-        .where(eq(userTable.id, userId))
+        .where(and(eq(userTable.id, userId), isNull(userTable.onboardedAt)))
         .returning({ id: userTable.id });
 
-      return this.toAccountUpdatedResult(updatedUser);
+      if (updatedUser) return this.toAccountUpdatedResult(updatedUser);
+      const existing = await this.db.query.user.findFirst({
+        where: eq(userTable.id, userId),
+        columns: { id: true, onboardedAt: true },
+      });
+      if (!existing) return Result.Ok({ type: 'account_not_found' });
+      if (!existing.onboardedAt) {
+        return Result.Error(
+          new AppError({
+            code: 'ACCOUNT_ONBOARDING_UPDATE_UNCONFIRMED',
+            category: 'system',
+            status: 500,
+            message: 'Onboarding update could not be confirmed',
+          })
+        );
+      }
+      const id = parseAccountRowValue(toUserId(existing.id));
+      if (id.isError()) return Result.Error(id.getError());
+      return Result.Ok({
+        type: 'account_already_onboarded',
+        account: { id: id.get() },
+      });
     } catch (error) {
       return Result.Error(mapDbError(error));
     }

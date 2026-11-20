@@ -13,6 +13,7 @@ const mocks = vi.hoisted(() => ({
   invalidate: vi.fn(),
   clear: vi.fn(),
   error: vi.fn(),
+  success: vi.fn(),
 }));
 
 vi.mock('@tanstack/react-router', async (importOriginal) => ({
@@ -45,18 +46,18 @@ vi.mock('@/modules/auth/presentation/confirm-signout', () => ({
   ConfirmSignOut: ({ children }: PropsWithChildren) => <>{children}</>,
 }));
 
-vi.mock('sonner', () => ({ toast: { success: vi.fn(), error: mocks.error } }));
+vi.mock('sonner', () => ({
+  toast: { success: mocks.success, error: mocks.error },
+}));
 
 beforeEach(() => {
   vi.clearAllMocks();
   mocks.save.mockResolvedValue(undefined);
-  mocks.refetch.mockResolvedValue({ data: {} });
+  mocks.refetch.mockResolvedValue({ data: { user: { name: 'Saved User' } } });
   mocks.invalidate.mockResolvedValue(undefined);
 });
 
-test('allows retry after the saved profile cannot refresh its session', async () => {
-  const user = userEvent.setup();
-  mocks.refetch.mockRejectedValueOnce(new Error('Session unavailable'));
+function renderOnboarding() {
   const client = new QueryClient({
     defaultOptions: { mutations: { retry: false } },
   });
@@ -65,17 +66,98 @@ test('allows retry after the saved profile cannot refresh its session', async ()
       <PageOnboarding />
     </QueryClientProvider>
   );
+  return {
+    client,
+    submit: page.getByRole('button', { name: 'Continue', exact: true }),
+    name: page.getByRole('textbox'),
+  };
+}
 
-  const submit = page.getByRole('button', { name: 'Continue', exact: true });
+test('retries session refresh without saving the completed profile again', async () => {
+  const user = userEvent.setup();
+  mocks.refetch.mockRejectedValueOnce(new Error('Session unavailable'));
+  const { client, submit, name } = renderOnboarding();
   await user.click(submit);
   await expect.poll(() => mocks.error.mock.calls.length).toBe(1);
   await expect.element(submit).toBeEnabled();
-  expect(mocks.refetch).toHaveBeenCalledWith({ throwOnError: true });
+  await expect.element(name).toHaveAttribute('readonly');
+  expect(mocks.success).not.toHaveBeenCalled();
+  expect(mocks.error).toHaveBeenCalledWith(
+    expect.stringContaining('profile was saved')
+  );
   expect(mocks.invalidate).not.toHaveBeenCalled();
-
   await user.click(submit);
+  await expect.poll(() => mocks.success.mock.calls.length).toBe(1);
+  expect(mocks.save).toHaveBeenCalledTimes(1);
+  expect(mocks.refetch).toHaveBeenCalledTimes(2);
+  expect(mocks.refetch).toHaveBeenCalledWith({ throwOnError: true });
+  expect(mocks.clear).toHaveBeenCalledWith(client);
+  expect(mocks.success).toHaveBeenCalledWith(
+    expect.stringContaining('Saved User')
+  );
+});
+
+test('leaves failed persistence editable and retries the save', async () => {
+  mocks.save.mockRejectedValueOnce(new Error('Database unavailable'));
+  const { submit, name } = renderOnboarding();
+  await userEvent.click(submit);
+  await expect.poll(() => mocks.error.mock.calls.length).toBe(1);
+  await expect.element(name).not.toHaveAttribute('readonly');
+  await expect.element(submit).toBeEnabled();
+  expect(mocks.refetch).not.toHaveBeenCalled();
+  await userEvent.click(submit);
+  await expect.poll(() => mocks.success.mock.calls.length).toBe(1);
+  expect(mocks.save).toHaveBeenCalledTimes(2);
+});
+
+test('retries route invalidation without resaving and uses the authoritative name', async () => {
+  mocks.invalidate.mockRejectedValueOnce(new Error('Route unavailable'));
+  mocks.refetch.mockResolvedValue({
+    data: { user: { name: 'Concurrent Winner' } },
+  });
+  const { submit } = renderOnboarding();
+  await userEvent.click(submit);
+  await expect.poll(() => mocks.error.mock.calls.length).toBe(1);
+  await expect.element(submit).toBeEnabled();
+  expect(mocks.success).not.toHaveBeenCalled();
+  await userEvent.click(submit);
+  await expect.poll(() => mocks.success.mock.calls.length).toBe(1);
+  expect(mocks.save).toHaveBeenCalledTimes(1);
+  expect(mocks.success).toHaveBeenCalledWith(
+    expect.stringContaining('Concurrent Winner')
+  );
+});
+
+test.each(['save', 'refetch', 'invalidate'] as const)(
+  'keeps Continue pending throughout %s',
+  async (phase) => {
+    let release!: () => void;
+    const pending = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    mocks[phase].mockImplementationOnce(async () => {
+      await pending;
+      return phase === 'refetch'
+        ? { data: { user: { name: 'Saved User' } } }
+        : undefined;
+    });
+    const { submit, name } = renderOnboarding();
+    await userEvent.click(submit);
+    await expect.poll(() => mocks[phase].mock.calls.length).toBe(1);
+    await expect.element(submit).toBeDisabled();
+    await expect.element(name).toHaveAttribute('readonly');
+    expect(mocks.save).toHaveBeenCalledTimes(1);
+    release();
+    await expect.poll(() => mocks.success.mock.calls.length).toBe(1);
+  }
+);
+
+test('lets the route guard handle a missing refreshed session without a success toast', async () => {
+  mocks.refetch.mockResolvedValue({ data: null });
+  const { submit } = renderOnboarding();
+  await userEvent.click(submit);
   await expect.poll(() => mocks.invalidate.mock.calls.length).toBe(1);
   await expect.element(submit).toBeEnabled();
-  expect(mocks.save).toHaveBeenCalledTimes(2);
-  expect(mocks.clear).toHaveBeenCalledWith(client);
+  expect(mocks.success).not.toHaveBeenCalled();
+  expect(mocks.error).not.toHaveBeenCalled();
 });

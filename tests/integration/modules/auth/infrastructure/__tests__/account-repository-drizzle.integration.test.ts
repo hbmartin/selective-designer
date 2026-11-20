@@ -87,4 +87,49 @@ describe('AccountRepositoryDrizzle integration', () => {
     });
     expect(finalUser).toMatchObject({ name: testAccountName('Final Name') });
   });
+  it('preserves the first confirmation and treats repeated onboarding as a no-op', async () => {
+    const repository = createAccountRepository({ db: database.db });
+    const userId = unwrapParseResult(toUserId('user-1'));
+    await database.db.insert(userTable).values(makeUserRow());
+    const first = {
+      name: testAccountName('First Confirmation'),
+      onboardedAt: new Date('2026-01-01T12:00:00Z'),
+    };
+    expect(getOk(await repository.submitOnboarding(userId, first)).type).toBe(
+      'account_updated'
+    );
+    const before = await database.db.query.user.findFirst({
+      where: eq(userTable.id, userId),
+    });
+    expect(
+      getOk(
+        await repository.submitOnboarding(userId, {
+          name: testAccountName('Repeated Name'),
+          onboardedAt: new Date('2026-01-02T12:00:00Z'),
+        })
+      ).type
+    ).toBe('account_already_onboarded');
+    const after = await database.db.query.user.findFirst({
+      where: eq(userTable.id, userId),
+    });
+    expect(after).toEqual(before);
+    expect(after).toMatchObject(first);
+    expect(
+      getOk(
+        await repository.submitOnboarding(
+          unwrapParseResult(toUserId('missing')),
+          first
+        )
+      )
+    ).toEqual({ type: 'account_not_found' });
+    await repository.updateInfo(userId, {
+      name: testAccountName('Profile Edit'),
+    });
+    await repository.submitOnboarding(userId, first);
+    expect(
+      await database.db.query.user.findFirst({
+        where: eq(userTable.id, userId),
+      })
+    ).toMatchObject({ name: 'Profile Edit', onboardedAt: first.onboardedAt });
+  });
 });

@@ -1,3 +1,8 @@
+import { eq } from 'drizzle-orm';
+import { createAccountRepository } from '@/modules/auth/infrastructure/drizzle/account-repository-drizzle';
+import { testAccountName } from '@tests/support/branded-values';
+import { toUserId } from '@/modules/kernel/domain/ids';
+import { unwrapParseResult } from '@/modules/kernel/testing';
 import type { StartedPostgreSqlContainer } from '@testcontainers/postgresql';
 import { PostgreSqlContainer } from '@testcontainers/postgresql';
 import { makeUserRow } from '@tests/server/db-fixtures';
@@ -83,6 +88,93 @@ describe('PostgreSQL database integration', () => {
     vi.unstubAllEnvs();
     await db?.$close();
     await container?.stop();
+  });
+
+  it('allows exactly one concurrent onboarding confirmation and preserves its complete pair', async () => {
+    const initializedDb = getInitializedDb(db);
+    await initializedDb.insert(userTable).values(makeUserRow());
+    const other = createDbClient({ driver: 'node-pg', url: databaseUrl });
+    try {
+      const submissions = [
+        {
+          name: testAccountName('First Candidate'),
+          onboardedAt: new Date('2026-01-01T12:00:00Z'),
+        },
+        {
+          name: testAccountName('Second Candidate'),
+          onboardedAt: new Date('2026-01-02T12:00:00Z'),
+        },
+      ];
+      let unlock!: () => void;
+      let announceLock!: () => void;
+      const release = new Promise<void>((resolve) => {
+        unlock = resolve;
+      });
+      const locked = new Promise<void>((resolve) => {
+        announceLock = resolve;
+      });
+      const blocker = initializedDb.transaction(async (tx) => {
+        await tx
+          .select({ id: userTable.id })
+          .from(userTable)
+          .where(eq(userTable.id, 'user-1'))
+          .for('update');
+        announceLock();
+        await release;
+      });
+      await locked;
+      const pending = Promise.all(
+        [initializedDb, other].map((connection, index) =>
+          createAccountRepository({ db: connection }).submitOnboarding(
+            unwrapParseResult(toUserId('user-1')),
+            submissions[index]!
+          )
+        )
+      );
+      try {
+        await expect
+          .poll(
+            async () => {
+              const waiting = await initializedDb.$client.query<{
+                count: number;
+              }>(
+                "select count(*)::int as count from pg_stat_activity where datname = current_database() and wait_event_type = 'Lock' and query ilike 'update %'"
+              );
+              return waiting.rows[0]?.count;
+            },
+            { timeout: 10_000 }
+          )
+          .toBe(2);
+      } finally {
+        unlock();
+        await blocker;
+      }
+      const results = await pending;
+      const outcomes = results.map((result) => {
+        if (result.isError()) throw result.getError();
+        return result.get().type;
+      });
+      expect(outcomes.toSorted()).toEqual([
+        'account_already_onboarded',
+        'account_updated',
+      ]);
+      const winner = submissions[outcomes.indexOf('account_updated')];
+      const before = await initializedDb.query.user.findFirst({
+        where: (table, { eq }) => eq(table.id, 'user-1'),
+      });
+      expect(before).toMatchObject(winner!);
+      await createAccountRepository({ db: other }).submitOnboarding(
+        unwrapParseResult(toUserId('user-1')),
+        submissions[1]!
+      );
+      expect(
+        await initializedDb.query.user.findFirst({
+          where: (table, { eq }) => eq(table.id, 'user-1'),
+        })
+      ).toEqual(before);
+    } finally {
+      await other.$close();
+    }
   });
 
   it('applies migrations and commits transactions', async () => {

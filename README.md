@@ -173,7 +173,7 @@ If you want to use the same set of custom duotone icons that Start UI is already
 
 ### E2E Tests
 
-E2E tests are setup with Playwright.
+E2E tests use Playwright with a fresh in-memory PGlite database for every run, locally and in CI. The webserver migrates and seeds that database before serving the app. Playwright workers, onboarding setup, and the webserver share the declared loopback connection; ambient application and migration database settings are replaced. Keep MinIO running for storage tests. A separate native PostgreSQL suite covers database-specific contracts.
 
 ```sh
 pnpm e2e:setup  # Setup context to be used across test for more efficient execution 
@@ -264,7 +264,11 @@ Docs: [Cloudflare TanStack Start](https://developers.cloudflare.com/workers/fram
 
 Vercel supports TanStack Start with Nitro, and this repo already has the required `nitro()` Vite plugin.
 
-`vercel.json` selects `pnpm build:vercel` for Git deployments and manual redeploys. It builds the app first, then runs `pnpm db:migrate` for the Production environment before Vercel publishes the deployment. A failed build or migration fails the release. Configure `DATABASE_MIGRATION_URL` with the direct production database connection and `DATABASE_MIGRATION_DRIVER=node-pg`. The migration journal and advisory lock make completed migrations safe to rerun. Preview deployments build without invoking migrations.
+`vercel.json` selects `pnpm build:vercel` for Git deployments and manual redeploys. Enable Vercel system environment variables: this command requires `VERCEL_ENV=production` or `preview`; `VERCEL_TARGET_ENV`, when present, must match. Missing, Development, custom, and contradictory targets fail before any release stage. Use `pnpm build` for ordinary local builds.
+
+**Before the first Production merge**, configure `DATABASE_MIGRATION_URL` with the direct or session-sticky production maintenance connection and `DATABASE_MIGRATION_DRIVER=node-pg`. A direct/session-sticky `DATABASE_URL` can serve as the fallback; a transaction-pooled URL is rejected. Run `pnpm db:validate-migration-config` to validate the connection settings without opening a database connection. This check is separate from ordinary application environment validation.
+
+Production runs migration configuration validation, then the app build, then `pnpm db:migrate` before Vercel publishes the deployment. A failed stage fails the release. The migration journal and advisory lock make completed migrations safe to rerun. Preview builds explicitly report that migrations are disabled.
 
 Keep production migrations compatible with the app version serving traffic while the next deployment builds. Review migrations that require coordinated schema locks before merging.
 

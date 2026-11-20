@@ -108,4 +108,24 @@ describe('AccountRepositoryDrizzle', () => {
       status: 500,
     });
   });
+  it('reports an unconfirmed update when a no-row write is followed by an incomplete account', async () => {
+    const repository = createAccountRepository({
+      db: {
+        ...makeReturningDb(undefined),
+        query: {
+          user: {
+            findFirst: async () => ({ id: 'user-1', onboardedAt: null }),
+          },
+        },
+      } as unknown as DbLike,
+    });
+    const result = await repository.submitOnboarding(
+      unwrapParseResult(toUserId('user-1')),
+      { name: testAccountName('User'), onboardedAt: new Date('2026-01-01') }
+    );
+    expect(getError(result)).toMatchObject({
+      code: 'ACCOUNT_ONBOARDING_UPDATE_UNCONFIRMED',
+      category: 'system',
+    });
+  });
 });

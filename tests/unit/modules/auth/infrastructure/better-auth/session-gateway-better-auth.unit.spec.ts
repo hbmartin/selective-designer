@@ -93,23 +93,26 @@ const makeDb = (
   const values = vi.fn(() => ({ onConflictDoNothing }));
   const insert = vi.fn(() => ({ values }));
 
+  const appUser = input.appUser === undefined ? makeAppUser() : input.appUser;
+  const lookup = vi.fn(async () =>
+    appUser
+      ? [{ user: appUser, identityUserId: input.identityUserId ?? null }]
+      : []
+  );
+  const chain = {
+    from: vi.fn(() => chain),
+    leftJoin: vi.fn(() => chain),
+    where: vi.fn(() => chain),
+    limit: lookup,
+  };
   return {
-    query: {
-      authIdentity: {
-        findFirst: vi.fn(async () =>
-          input.identityUserId ? { userId: input.identityUserId } : null
-        ),
-      },
-      user: {
-        findFirst: vi.fn(async () =>
-          input.appUser === undefined ? makeAppUser() : input.appUser
-        ),
-      },
-    },
+    select: vi.fn(() => chain),
+    __profileLookup: lookup,
     insert,
     __insertValues: values,
     __onConflictDoNothing: onConflictDoNothing,
   } as unknown as Database & {
+    __profileLookup: typeof lookup;
     __insertValues: typeof values;
     __onConflictDoNothing: typeof onConflictDoNothing;
   };
@@ -280,9 +283,7 @@ describe('SessionGatewayBetterAuth', () => {
   it('returns an application error when the current app profile cannot be read', async () => {
     const { SessionGatewayBetterAuth } = await loadGateway();
     const db = makeDb({ identityUserId: 'user-1' });
-    vi.mocked(db.query.user.findFirst).mockRejectedValueOnce(
-      new Error('database unavailable')
-    );
+    db.__profileLookup.mockRejectedValueOnce(new Error('database unavailable'));
     const gateway = new SessionGatewayBetterAuth(
       makeAuth('user'),
       db,

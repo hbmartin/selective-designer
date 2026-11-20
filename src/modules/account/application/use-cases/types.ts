@@ -4,6 +4,7 @@ import type { PermissionChecker } from '@/modules/kernel/application/ports/permi
 import type { ApplicationResult } from '@/modules/kernel/application/result';
 
 import type {
+  AccountOnboardingRepositoryOutcome,
   AccountRepository,
   AccountUpdateRepositoryOutcome,
 } from '../ports/account-repository';
@@ -17,6 +18,10 @@ export type AccountUseCaseDeps = {
 
 export type AccountUpdateOutcome =
   | AccountUpdateRepositoryOutcome
+  | { type: 'account_forbidden' };
+
+export type AccountOnboardingOutcome =
+  | AccountOnboardingRepositoryOutcome
   | { type: 'account_forbidden' };
 
 export type AccountResult<TOutcome> = ApplicationResult<TOutcome>;

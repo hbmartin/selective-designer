@@ -1,3 +1,4 @@
+import { makeUserRow } from '@tests/server/db-fixtures';
 import { createRecoveryTestDatabase } from '@tests/server/recovery-database';
 import { createUpstashRestFixture } from '@tests/server/upstash-rest-fixture';
 import { testAccountName } from '@tests/support/branded-values';
@@ -13,11 +14,18 @@ import {
   vi,
 } from 'vitest';
 
-import { createAuth } from '@/modules/auth/infrastructure/better-auth/auth';
+import {
+  type Auth,
+  createAuth,
+} from '@/modules/auth/infrastructure/better-auth/auth';
 import { writeOperatorPassword } from '@/modules/auth/infrastructure/better-auth/password-credentials';
 import { SessionGatewayBetterAuth } from '@/modules/auth/infrastructure/better-auth/session-gateway-better-auth';
 import { createAccountRepository } from '@/modules/auth/infrastructure/drizzle/account-repository-drizzle';
 import { InMemorySecondaryStore } from '@/modules/auth/infrastructure/secondary-store/in-memory-secondary-store';
+import {
+  authIdentity,
+  user as userTable,
+} from '@/modules/auth/infrastructure/drizzle/schema';
 import { toUserId } from '@/modules/kernel/domain/ids';
 import { unwrapParseResult } from '@/modules/kernel/testing';
 import { envClient } from '@/platform/env/client';
@@ -134,6 +142,61 @@ describe('onboarding with cached auth sessions', () => {
       } finally {
         await fixture?.close();
       }
+    }
+  );
+  it.each([false, true])(
+    'joins the mapped profile with a conflicting provider-ID account: %s',
+    async (conflict) => {
+      await database.db.insert(userTable).values(
+        makeUserRow({
+          id: 'mapped-user',
+          email: 'mapped@example.com',
+          name: 'Mapped Profile',
+        })
+      );
+      if (conflict)
+        await database.db.insert(userTable).values(
+          makeUserRow({
+            id: 'provider-user',
+            email: 'conflict@example.com',
+            name: 'Conflicting Profile',
+          })
+        );
+      await database.db.insert(authIdentity).values({
+        provider: 'better-auth',
+        providerUserId: 'provider-user',
+        userId: 'mapped-user',
+      });
+      const auth = {
+        api: {
+          getSession: async () => ({
+            user: { id: 'provider-user', email: 'provider@example.com' },
+            session: {
+              id: 'test-session',
+              createdAt: new Date(),
+              expiresAt: new Date('2099-01-01'),
+            },
+          }),
+        },
+      } as unknown as Auth;
+      const gateway = new SessionGatewayBetterAuth(
+        auth,
+        database.db,
+        undefined,
+        createNoOpTelemetry()
+      );
+      expect(
+        okValue(await gateway.getSession({ headers: new Headers() }))
+      ).toMatchObject({
+        type: 'auth_session_found',
+        session: {
+          user: {
+            id: 'mapped-user',
+            name: 'Mapped Profile',
+            email: 'mapped@example.com',
+          },
+        },
+      });
     }
   );
 });

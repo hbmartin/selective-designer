@@ -465,3 +465,69 @@ it('does not release or inspect a malformed startup identity again automatically
   expect(fake.inspect).not.toHaveBeenCalled();
   expect(fake.kill).not.toHaveBeenCalled();
 });
+
+it.each(['exit-first', 'report-first'] as const)(
+  'normalizes buffered spawn failure with %s ordering',
+  async (order) => {
+    const { fake } = setup();
+    const command = fake.start();
+    await fixtureTurn();
+    const report = () =>
+      command.child.message({
+        type: 'spawn-failed',
+        error: {
+          name: 'Error',
+          message: 'spawn missing ENOENT',
+          code: 'ENOENT',
+        },
+      });
+    if (order === 'exit-first') command.child.emit('exit', null, 'SIGKILL');
+    report();
+    fake.rows.delete(command.child.pid);
+    fake.rows.delete(command.child.workloadPid);
+    await command.child.close(null, 'SIGKILL');
+    const result = await command.running;
+    expect(result).toMatchObject({
+      status: null,
+      signal: null,
+      terminationSource: null,
+      spawnError: { code: 'ENOENT' },
+    });
+    const historical = { ...result };
+    command.child.message({
+      type: 'target-exit',
+      status: 9,
+      signal: 'SIGTERM',
+    });
+    expect(result).toEqual(historical);
+  }
+);
+
+it('retains an unexpected supervisor exit alongside a subsequent inspection failure', async () => {
+  const { fake } = setup();
+  const command = fake.start();
+  await fixtureTurn();
+  fake.failInspection(new Error('cleanup inspection failed'));
+  await command.child.close(null, 'SIGKILL');
+  const result = await command.running;
+  expect(result.error?.message).toContain('cleanup inspection failed');
+  expect(result.error?.message).toContain(
+    'exited before reporting its workload'
+  );
+});
+
+it('does not describe an inspection-driven cleanup exit as an unexpected crash', async () => {
+  const { fake } = setup();
+  const command = fake.start();
+  await fixtureTurn();
+  fake.failInspection();
+  command.child.message({
+    type: 'inspection-failed',
+    stage: 'workload',
+    error: { name: 'Error', message: 'startup inspection failed' },
+  });
+  await command.child.close(null, 'SIGKILL');
+  expect((await command.running).error?.message).not.toContain(
+    'exited before reporting its workload'
+  );
+});
