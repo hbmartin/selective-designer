@@ -12,31 +12,31 @@
   --color-white: #fff;
   --color-black: #000;
 
-  /* Warm stone neutrals: paper (#faf8f5) → ink (#12100e). */
-  --color-neutral-50: oklch(0.98 0.005 78);
-  --color-neutral-100: oklch(0.958 0.008 74);
-  --color-neutral-200: oklch(0.918 0.011 74);
-  --color-neutral-300: oklch(0.865 0.013 70);
-  --color-neutral-400: oklch(0.71 0.014 62);
-  --color-neutral-500: oklch(0.535 0.012 58);
-  --color-neutral-600: oklch(0.445 0.011 60);
-  --color-neutral-700: oklch(0.372 0.01 58);
-  --color-neutral-800: oklch(0.285 0.008 56);
-  --color-neutral-900: oklch(0.226 0.006 56);
-  --color-neutral-950: oklch(0.175 0.005 56);
+  /* Achromatic surfaces keep product and material colors independent of the UI. */
+  --color-neutral-50: oklch(0.98 0 0);
+  --color-neutral-100: oklch(0.958 0 0);
+  --color-neutral-200: oklch(0.918 0 0);
+  --color-neutral-300: oklch(0.865 0 0);
+  --color-neutral-400: oklch(0.71 0 0);
+  --color-neutral-500: oklch(0.535 0 0);
+  --color-neutral-600: oklch(0.445 0 0);
+  --color-neutral-700: oklch(0.372 0 0);
+  --color-neutral-800: oklch(0.285 0 0);
+  --color-neutral-900: oklch(0.226 0 0);
+  --color-neutral-950: oklch(0.175 0 0);
 
-  /* Brand accent: terracotta (600 ≈ #b4532a). Use via the --brand tokens. */
-  --color-terracotta-50: oklch(0.975 0.012 50);
-  --color-terracotta-100: oklch(0.948 0.027 48);
-  --color-terracotta-200: oklch(0.895 0.055 46);
-  --color-terracotta-300: oklch(0.815 0.09 44);
-  --color-terracotta-400: oklch(0.72 0.125 42);
-  --color-terracotta-500: oklch(0.64 0.14 41);
-  --color-terracotta-600: oklch(0.557 0.1375 42);
-  --color-terracotta-700: oklch(0.48 0.12 40);
-  --color-terracotta-800: oklch(0.405 0.098 38);
-  --color-terracotta-900: oklch(0.345 0.078 37);
-  --color-terracotta-950: oklch(0.245 0.055 36);
+  /* Steel-blue accent. Consume through the semantic primary and brand tokens. */
+  --color-steel-50: #f2f7fb;
+  --color-steel-100: #e3edf5;
+  --color-steel-200: #c6dbeb;
+  --color-steel-300: #a9cbe5;
+  --color-steel-400: #8ab8db;
+  --color-steel-500: #4f7fa3;
+  --color-steel-600: #315f85;
+  --color-steel-700: #264b6a;
+  --color-steel-800: #1e3b54;
+  --color-steel-900: #172d40;
+  --color-steel-950: #0f1c28;
 
   --color-negative-50: oklch(0.971 0.013 17.38);
   --color-negative-100: oklch(0.936 0.032 17.717);
@@ -91,11 +91,11 @@
   --container-4xs: 12rem; /* 192px */
   /* Tailwind --container-3xs: 16rem; (256px) */
 
-  /* Warm, low-alpha layered shadows. */
+  /* Neutral, low-alpha layered shadows. */
   --shadow-soft:
-    0 1px 2px oklch(0.3 0.02 56 / 0.05), 0 2px 8px oklch(0.3 0.02 56 / 0.04);
+    0 1px 2px oklch(0.3 0 0 / 0.05), 0 2px 8px oklch(0.3 0 0 / 0.04);
   --shadow-lift:
-    0 2px 4px oklch(0.3 0.02 56 / 0.06), 0 12px 32px oklch(0.3 0.02 56 / 0.1);
+    0 2px 4px oklch(0.3 0 0 / 0.06), 0 12px 32px oklch(0.3 0 0 / 0.1);
 }
 
 :root {
@@ -107,7 +107,8 @@
   --card-foreground: var(--color-neutral-950);
   --popover: var(--color-white);
   --popover-foreground: var(--color-neutral-950);
-  --primary: var(--color-terracotta-600);
+  --primary: var(--color-steel-600);
+  --primary-hover: var(--color-steel-700);
   --primary-foreground: var(--color-white);
   --secondary: var(--color-neutral-100);
   --secondary-foreground: var(--color-neutral-900);
@@ -115,15 +116,15 @@
   --muted-foreground: var(--color-neutral-500);
   --accent: var(--color-neutral-100);
   --accent-foreground: var(--color-neutral-900);
-  --brand: var(--color-terracotta-600);
+  --brand: var(--color-steel-600);
   --brand-foreground: var(--color-white);
-  --brand-subtle: var(--color-terracotta-100);
-  --brand-subtle-foreground: var(--color-terracotta-700);
+  --brand-subtle: var(--color-steel-100);
+  --brand-subtle-foreground: var(--color-steel-700);
   --destructive: var(--color-negative-600);
   --destructive-foreground: var(--color-negative-50);
   --border: var(--color-neutral-200);
   --input: var(--color-neutral-200);
-  --ring: var(--color-terracotta-400);
+  --ring: var(--color-steel-600);
   --canvas: var(--color-neutral-50);
   --shell: var(--color-white);
   --shell-foreground: var(--color-neutral-950);
@@ -160,12 +161,12 @@
   --radius: 0.75rem;
   --sidebar: var(--color-white);
   --sidebar-foreground: var(--color-neutral-600);
-  --sidebar-primary: var(--color-terracotta-600);
+  --sidebar-primary: var(--color-steel-600);
   --sidebar-primary-foreground: var(--color-white);
   --sidebar-accent: var(--color-neutral-100);
   --sidebar-accent-foreground: var(--color-neutral-900);
   --sidebar-border: var(--color-neutral-200);
-  --sidebar-ring: var(--color-terracotta-400);
+  --sidebar-ring: var(--color-steel-600);
 }
 
 .dark {
@@ -177,7 +178,8 @@
   --card-foreground: var(--color-neutral-50);
   --popover: var(--color-neutral-900);
   --popover-foreground: var(--color-neutral-50);
-  --primary: var(--color-terracotta-500);
+  --primary: var(--color-steel-400);
+  --primary-hover: var(--color-steel-300);
   --primary-foreground: var(--color-neutral-950);
   --secondary: var(--color-neutral-800);
   --secondary-foreground: var(--color-neutral-50);
@@ -185,19 +187,15 @@
   --muted-foreground: var(--color-neutral-400);
   --accent: var(--color-neutral-800);
   --accent-foreground: var(--color-neutral-50);
-  --brand: var(--color-terracotta-400);
+  --brand: var(--color-steel-400);
   --brand-foreground: var(--color-neutral-950);
-  --brand-subtle: color-mix(
-    in oklch,
-    var(--color-terracotta-500) 18%,
-    transparent
-  );
-  --brand-subtle-foreground: var(--color-terracotta-200);
+  --brand-subtle: color-mix(in oklch, var(--color-steel-500) 18%, transparent);
+  --brand-subtle-foreground: var(--color-steel-200);
   --destructive: var(--color-negative-700);
   --destructive-foreground: var(--color-white);
   --border: var(--color-neutral-800);
   --input: var(--color-neutral-800);
-  --ring: var(--color-terracotta-500);
+  --ring: var(--color-steel-400);
   --canvas: var(--color-neutral-950);
   --shell: var(--color-neutral-900);
   --shell-foreground: var(--color-neutral-50);
@@ -249,12 +247,12 @@
   --chart-5: oklch(0.645 0.246 16.439);
   --sidebar: var(--color-neutral-900);
   --sidebar-foreground: var(--color-neutral-300);
-  --sidebar-primary: var(--color-terracotta-500);
+  --sidebar-primary: var(--color-steel-400);
   --sidebar-primary-foreground: var(--color-neutral-950);
   --sidebar-accent: var(--color-neutral-800);
   --sidebar-accent-foreground: var(--color-neutral-50);
   --sidebar-border: var(--color-neutral-800);
-  --sidebar-ring: var(--color-terracotta-500);
+  --sidebar-ring: var(--color-steel-400);
 }
 
 @theme inline {
@@ -265,6 +263,7 @@
   --color-popover: var(--popover);
   --color-popover-foreground: var(--popover-foreground);
   --color-primary: var(--primary);
+  --color-primary-hover: var(--primary-hover);
   --color-primary-foreground: var(--primary-foreground);
   --color-secondary: var(--secondary);
   --color-secondary-foreground: var(--secondary-foreground);

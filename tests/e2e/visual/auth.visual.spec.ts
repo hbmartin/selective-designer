@@ -15,29 +15,49 @@ test.describe('Auth visual regression', () => {
     chromiumOnlyMessage
   );
 
-  test.describe('desktop', () => {
-    test.use({ viewport: desktopViewport });
+  for (const theme of ['light', 'dark'] as const) {
+    test.describe(theme, () => {
+      test.beforeEach(async ({ page }) => {
+        await page.addInitScript((value) => {
+          window.localStorage.setItem('theme', value);
+        }, theme);
+      });
 
-    test('login page remains visually stable', async ({ page }) => {
-      await page.to('/login');
-      await expect(page.getByTestId('auth-login-form')).toHaveAttribute(
-        'data-hydrated',
-        'true'
-      );
-      await screenshot(page, 'login-page.png');
+      test.describe('desktop', () => {
+        test.use({ viewport: desktopViewport });
+
+        test('login page remains visually stable', async ({ page }) => {
+          await page.to('/login');
+          await expect(page.getByTestId('auth-login-form')).toHaveAttribute(
+            'data-hydrated',
+            'true'
+          );
+          await screenshot(
+            page,
+            theme === 'dark' ? 'login-page-dark.png' : 'login-page.png'
+          );
+        });
+      });
+
+      test.describe('mobile', () => {
+        test.use({ viewport: mobileViewport });
+
+        test('login page remains visually stable on mobile', async ({
+          page,
+        }) => {
+          await page.to('/login');
+          await expect(page.getByTestId('auth-login-form')).toHaveAttribute(
+            'data-hydrated',
+            'true'
+          );
+          await screenshot(
+            page,
+            theme === 'dark'
+              ? 'login-page-mobile-dark.png'
+              : 'login-page-mobile.png'
+          );
+        });
+      });
     });
-  });
-
-  test.describe('mobile', () => {
-    test.use({ viewport: mobileViewport });
-
-    test('login page remains visually stable on mobile', async ({ page }) => {
-      await page.to('/login');
-      await expect(page.getByTestId('auth-login-form')).toHaveAttribute(
-        'data-hydrated',
-        'true'
-      );
-      await screenshot(page, 'login-page-mobile.png');
-    });
-  });
+  }
 });

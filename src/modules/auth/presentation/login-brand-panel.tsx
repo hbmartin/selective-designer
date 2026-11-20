@@ -13,7 +13,7 @@ export const LoginBrandPanel = () => {
         <p className="font-display text-4xl font-medium tracking-tight text-balance text-foreground">
           {t('auth:brandPanel.headline')}
         </p>
-        <p className="text-base text-balance text-muted-foreground">
+        <p className="text-base text-balance text-brand-subtle-foreground">
           {t('auth:brandPanel.tagline')}
         </p>
       </div>
