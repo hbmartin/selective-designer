@@ -27,7 +27,7 @@ import { MODEL_CATALOG } from '../../domain/model-catalog';
 import type { RecipeProblemResponse } from '../../transport/http/rendering-handlers';
 
 const nativeSelectClass =
-  'h-9 w-full rounded-md border border-input bg-background px-2 text-sm';
+  'h-9 w-full rounded-md border border-input bg-background px-2 text-sm shadow-xs outline-none transition-[color,box-shadow] focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50';
 
 export const RenderDialog = (props: {
   open: boolean;
@@ -128,7 +128,7 @@ export const RenderDialog = (props: {
               <Spinner /> {t('rendering:render.checking')}
             </p>
           ) : response.type === 'problem' ? (
-            <p className="text-sm text-negative-600">
+            <p className="text-sm text-destructive">
               {describeProblem(response)}
             </p>
           ) : (
@@ -145,7 +145,7 @@ export const RenderDialog = (props: {
                     data-decision={model.decision}
                   >
                     {model.decision === 'include' ? (
-                      <CheckIcon className="mt-0.5 size-4 text-positive-600" />
+                      <CheckIcon className="mt-0.5 size-4 text-status-positive-foreground" />
                     ) : (
                       <MinusCircleIcon className="mt-0.5 size-4 text-muted-foreground" />
                     )}
@@ -171,7 +171,7 @@ export const RenderDialog = (props: {
                 ))}
               </ul>
               {response.plan.warnings.length > 0 && (
-                <section className="flex flex-col gap-1 rounded-md border border-warning-300 bg-warning-50 p-2 text-xs">
+                <section className="flex flex-col gap-1 rounded-md bg-status-warning p-2 text-xs text-status-warning-foreground">
                   <h3 className="flex items-center gap-1 font-medium">
                     <AlertTriangleIcon className="size-3.5" />
                     {t('rendering:render.smallItems')}
@@ -191,12 +191,12 @@ export const RenderDialog = (props: {
                 </section>
               )}
               {!canRender && (
-                <p className="text-sm text-negative-600">
+                <p className="text-sm text-destructive">
                   {t('rendering:render.noModels')}
                 </p>
               )}
               {placements.length > 0 && placeable.length >= 2 && (
-                <details className="rounded-md border p-2 text-sm">
+                <details className="rounded-lg border p-3 text-sm">
                   <summary className="cursor-pointer font-medium">
                     {t('rendering:render.batch')}
                   </summary>

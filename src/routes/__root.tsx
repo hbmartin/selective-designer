@@ -59,7 +59,7 @@ export const Route = createRootRouteWithContext<RouterContext>()({
       },
       {
         name: 'apple-mobile-web-app-status-bar-style',
-        content: 'black-translucent',
+        content: 'default',
       },
       {
         name: 'mobile-web-app-capable',

@@ -35,12 +35,15 @@ export const ChangeCheckBadge = (props: { check: ChangeCheck | undefined }) => {
       title={t('rendering:check.advisory')}
     >
       {check.warning ? (
-        <Badge variant="warning" className="text-[10px]">
+        <Badge variant="warning" className="text-2xs">
           <AlertTriangleIcon className="size-3" />
           {t('rendering:check.warning')}
         </Badge>
       ) : (
-        <CheckCircle2Icon className="size-3.5 text-positive-600" aria-hidden />
+        <CheckCircle2Icon
+          className="size-3.5 text-status-positive-foreground"
+          aria-hidden
+        />
       )}
       {t('rendering:check.result', { percent: check.percent.toFixed(1) })}
     </span>

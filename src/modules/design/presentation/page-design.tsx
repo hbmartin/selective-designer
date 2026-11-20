@@ -75,7 +75,9 @@ export const PageDesign = (props: {
                 }
               >
                 <DownloadIcon />
-                {t('design:detail.download')}
+                <span className="max-md:sr-only">
+                  {t('design:detail.download')}
+                </span>
               </Button>
               {design.archivedAt ? (
                 <Button
@@ -85,7 +87,9 @@ export const PageDesign = (props: {
                   onClick={() => unarchive.mutate({ id: design.id })}
                 >
                   <ArchiveRestoreIcon />
-                  {t('design:detail.unarchive')}
+                  <span className="max-md:sr-only">
+                    {t('design:detail.unarchive')}
+                  </span>
                 </Button>
               ) : (
                 <Button
@@ -95,7 +99,9 @@ export const PageDesign = (props: {
                   onClick={() => archive.mutate({ id: design.id })}
                 >
                   <ArchiveIcon />
-                  {t('design:detail.archive')}
+                  <span className="max-md:sr-only">
+                    {t('design:detail.archive')}
+                  </span>
                 </Button>
               )}
             </>
@@ -107,13 +113,13 @@ export const PageDesign = (props: {
         </PageLayoutTopBarTitle>
       </PageLayoutTopBar>
       <PageLayoutContent className="pb-20">
-        <div className="grid gap-6 lg:grid-cols-[minmax(0,1fr)_320px]">
+        <div className="grid gap-8 lg:grid-cols-[minmax(0,1fr)_320px]">
           {design ? (
             <div className="flex flex-col gap-3">
               {props.renderBaseImage ? (
                 props.renderBaseImage(design.baseImage)
               ) : (
-                <div className="overflow-hidden rounded-md border bg-muted">
+                <div className="overflow-hidden rounded-xl border bg-muted shadow-soft">
                   <img
                     src={design.baseImage.workingUrl}
                     alt={t('design:detail.baseImageAlt')}
@@ -132,7 +138,7 @@ export const PageDesign = (props: {
               </p>
             </div>
           ) : (
-            <Skeleton className="aspect-video w-full" />
+            <Skeleton className="aspect-video w-full rounded-xl" />
           )}
           {props.aside}
         </div>

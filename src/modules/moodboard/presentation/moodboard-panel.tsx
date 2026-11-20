@@ -1,6 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   AlertTriangleIcon,
+  PackageIcon,
   PencilIcon,
   PlusIcon,
   RotateCwIcon,
@@ -12,6 +13,7 @@ import { toast } from 'sonner';
 
 import { Badge } from '@/platform/components/ui/badge';
 import { Button } from '@/platform/components/ui/button';
+import { EmptyState } from '@/platform/components/ui/empty-state';
 import { Spinner } from '@/platform/components/ui/spinner';
 
 import { useCurrentScopeKey } from '@/modules/auth/client';
@@ -49,11 +51,11 @@ const ItemCard = (props: { item: ItemView; designId: DesignId }) => {
 
   return (
     <li
-      className="flex flex-col gap-1 rounded-md border bg-card p-2"
+      className="flex flex-col gap-1.5 rounded-lg border bg-card p-2"
       data-testid="moodboard-item"
       data-cutout-status={status}
     >
-      <div className="relative aspect-square overflow-hidden rounded bg-transparency-grid">
+      <div className="relative aspect-square overflow-hidden rounded-md bg-transparency-grid">
         <img
           src={imageUrl}
           alt={item.name}
@@ -71,17 +73,17 @@ const ItemCard = (props: { item: ItemView; designId: DesignId }) => {
         <span className="truncate text-xs font-medium" title={item.name}>
           {item.name}
         </span>
-        <Badge variant="secondary" className="ml-auto shrink-0 text-[10px]">
+        <Badge variant="secondary" className="ml-auto shrink-0 text-2xs">
           {t(`moodboard:kinds.${item.kind}`)}
         </Badge>
       </div>
       {item.vendor && (
-        <span className="truncate text-[11px] text-muted-foreground">
+        <span className="truncate text-xs text-muted-foreground">
           {item.vendor}
         </span>
       )}
       {item.cutoutRetryable && (
-        <div className="flex items-center gap-1 text-[11px] text-destructive">
+        <div className="flex items-center gap-1 text-xs text-destructive">
           <AlertTriangleIcon className="size-3" />
           {status === 'pending'
             ? t('moodboard:panel.cutoutDelayed')
@@ -153,11 +155,13 @@ export const MoodboardPanel = (props: { designId: DesignId }) => {
 
   return (
     <aside
-      className="flex flex-col gap-4"
+      className="flex flex-col gap-4 self-start rounded-xl border bg-card p-4 shadow-soft"
       aria-label={t('moodboard:panel.title')}
     >
-      <div className="flex items-center justify-between">
-        <h2 className="text-sm font-semibold">{t('moodboard:panel.title')}</h2>
+      <div className="flex items-center justify-between gap-2">
+        <h2 className="font-display text-lg font-medium tracking-tight">
+          {t('moodboard:panel.title')}
+        </h2>
         <ItemFormDialog designId={props.designId}>
           <Button size="sm" variant="secondary">
             <PlusIcon />
@@ -166,13 +170,16 @@ export const MoodboardPanel = (props: { designId: DesignId }) => {
         </ItemFormDialog>
       </div>
       {itemsQuery.status === 'success' && groups.length === 0 && (
-        <p className="text-xs text-muted-foreground">
-          {t('moodboard:panel.empty')}
-        </p>
+        <EmptyState
+          size="sm"
+          icon={<PackageIcon />}
+          title={t('moodboard:panel.emptyTitle')}
+          description={t('moodboard:panel.empty')}
+        />
       )}
       {groups.map((group) => (
         <section key={group.category} className="flex flex-col gap-2">
-          <h3 className="text-xs font-medium text-muted-foreground uppercase">
+          <h3 className="text-xs font-medium tracking-wide text-muted-foreground uppercase">
             {group.category}
           </h3>
           <ul className="grid grid-cols-2 gap-2">

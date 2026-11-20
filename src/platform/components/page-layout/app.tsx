@@ -11,7 +11,7 @@ export const PageLayoutContainer = (props: {
   return (
     <div
       className={cn(
-        'mx-auto flex w-full max-w-4xl min-w-0 flex-1 flex-col px-4',
+        'mx-auto flex w-full max-w-6xl min-w-0 flex-1 flex-col px-4 md:px-6',
         props.className
       )}
     >
@@ -64,7 +64,7 @@ export const PageLayoutTopBarTitle = (props: {
   return (
     <h1
       className={cn(
-        'min-w-0 truncate text-base font-medium md:text-sm',
+        'min-w-0 truncate font-display text-lg font-medium tracking-tight md:text-xl',
         props.className
       )}
     >
@@ -88,7 +88,7 @@ export const PageLayoutContent = (props: {
               props.children
             ) : (
               <PageLayoutContainer
-                className={cn('py-4', props.containerClassName)}
+                className={cn('py-6', props.containerClassName)}
               >
                 {props.children}
               </PageLayoutContainer>

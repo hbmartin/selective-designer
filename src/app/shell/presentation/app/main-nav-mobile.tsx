@@ -41,7 +41,7 @@ const Item = ({
   return (
     <Link
       {...linkProps}
-      className="flex flex-1 flex-col items-center justify-center text-shell-muted-foreground [&.active]:text-shell-foreground"
+      className="flex flex-1 flex-col items-center justify-center gap-0.5 text-shell-muted-foreground [&.active]:text-brand"
     >
       <Icon className="size-6 opacity-60 in-[.active]:hidden" />
       <IconActive className="hidden size-6 in-[.active]:block" />

@@ -26,9 +26,9 @@ export const Logo = (props: SVGProps<SVGSVGElement>) => (
       x="128"
       y="80"
       fill="currentColor"
-      fontFamily="inherit"
+      className="font-display"
       fontSize="58"
-      fontWeight="700"
+      fontWeight="600"
       letterSpacing="-1"
     >
       Selective Designer

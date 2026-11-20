@@ -9,14 +9,11 @@ import {
 } from '@/platform/components/ui/alert';
 import { ButtonLink } from '@/platform/components/ui/button-link';
 
-import { useMascot } from '@/modules/auth/presentation/mascot';
-
 export default function PageLoginError({
   search,
 }: {
   search: { error?: string };
 }) {
-  useMascot({ initialState: 'error' });
   const { t } = useTranslation(['auth']);
   if (search.error === 'signup_disabled') {
     return (

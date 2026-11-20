@@ -114,7 +114,10 @@ export const RegionsView = (props: RegionsViewProps) => {
         >
           {t('segmentation:tools.showAll')}
         </Button>
-        <form onSubmit={onFind} className="flex flex-1 items-center gap-2">
+        <form
+          onSubmit={onFind}
+          className="flex min-w-60 flex-1 items-center gap-2"
+        >
           <Input
             value={text}
             onChange={(event) => setText(event.target.value)}
@@ -173,12 +176,12 @@ export const RegionsView = (props: RegionsViewProps) => {
               key={region.id}
               data-testid="region-chip"
               data-source={region.source}
-              className="flex items-center gap-1 rounded border bg-card py-0.5 pr-0.5 pl-2 text-xs"
+              className="flex items-center gap-1 rounded-md border bg-card py-0.5 pr-0.5 pl-2 text-xs"
               onMouseEnter={() => setActiveId(region.id)}
               onMouseLeave={() => setActiveId(null)}
             >
               <span>{region.label}</span>
-              <Badge variant="secondary" className="text-[10px]">
+              <Badge variant="secondary" className="text-2xs">
                 {t(`segmentation:sources.${region.source}`)}
               </Badge>
               {region.isSuggestion && (

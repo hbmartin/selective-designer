@@ -4,6 +4,7 @@ import { type ReactNode, useEffect } from 'react';
 import '@/platform/lib/temporal/polyfill';
 import '@/platform/lib/i18n';
 import '@fontsource-variable/inter';
+import '@fontsource-variable/fraunces';
 
 import { QueryClientProvider } from '@/platform/lib/tanstack-query/provider';
 
@@ -25,6 +26,7 @@ export const Providers = (props: {
     <ThemeProvider
       attribute="class"
       storageKey="theme"
+      defaultTheme="light"
       disableTransitionOnChange
       nonce={cspNonce}
       forcedTheme={props.forcedTheme}

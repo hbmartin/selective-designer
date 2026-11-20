@@ -28,12 +28,12 @@ function RouteComponent() {
   const { t } = useTranslation(['rendering']);
   return (
     <PageLayout>
-      <PageLayoutTopBar>
+      <PageLayoutTopBar containerClassName="max-w-3xl">
         <PageLayoutTopBarTitle>
           {t('rendering:scorecard.title')}
         </PageLayoutTopBarTitle>
       </PageLayoutTopBar>
-      <PageLayoutContent className="flex max-w-2xl flex-col gap-3 pb-20">
+      <PageLayoutContent className="pb-20" containerClassName="max-w-3xl gap-4">
         <p className="text-sm text-muted-foreground">
           {t('rendering:scorecard.description')}
         </p>

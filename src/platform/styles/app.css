@@ -7,21 +7,36 @@
   --font-sans:
     'Inter Variable', ui-sans-serif, system-ui, sans-serif, 'Apple Color Emoji',
     'Segoe UI Emoji', 'Segoe UI Symbol', 'Noto Color Emoji';
+  --font-display: 'Fraunces Variable', ui-serif, Georgia, Cambria, serif;
   --color-*: initial;
   --color-white: #fff;
   --color-black: #000;
 
-  --color-neutral-50: oklch(0.985 0 0);
-  --color-neutral-100: oklch(0.967 0.001 286.375);
-  --color-neutral-200: oklch(0.92 0.004 286.32);
-  --color-neutral-300: oklch(0.871 0.006 286.286);
-  --color-neutral-400: oklch(0.705 0.015 286.067);
-  --color-neutral-500: oklch(0.552 0.016 285.938);
-  --color-neutral-600: oklch(0.442 0.017 285.786);
-  --color-neutral-700: oklch(0.37 0.013 285.805);
-  --color-neutral-800: oklch(0.274 0.006 286.033);
-  --color-neutral-900: oklch(0.21 0.006 285.885);
-  --color-neutral-950: oklch(0.141 0.005 285.823);
+  /* Warm stone neutrals: paper (#faf8f5) → ink (#12100e). */
+  --color-neutral-50: oklch(0.98 0.005 78);
+  --color-neutral-100: oklch(0.958 0.008 74);
+  --color-neutral-200: oklch(0.918 0.011 74);
+  --color-neutral-300: oklch(0.865 0.013 70);
+  --color-neutral-400: oklch(0.71 0.014 62);
+  --color-neutral-500: oklch(0.535 0.012 58);
+  --color-neutral-600: oklch(0.445 0.011 60);
+  --color-neutral-700: oklch(0.372 0.01 58);
+  --color-neutral-800: oklch(0.285 0.008 56);
+  --color-neutral-900: oklch(0.226 0.006 56);
+  --color-neutral-950: oklch(0.175 0.005 56);
+
+  /* Brand accent: terracotta (600 ≈ #b4532a). Use via the --brand tokens. */
+  --color-terracotta-50: oklch(0.975 0.012 50);
+  --color-terracotta-100: oklch(0.948 0.027 48);
+  --color-terracotta-200: oklch(0.895 0.055 46);
+  --color-terracotta-300: oklch(0.815 0.09 44);
+  --color-terracotta-400: oklch(0.72 0.125 42);
+  --color-terracotta-500: oklch(0.64 0.14 41);
+  --color-terracotta-600: oklch(0.557 0.1375 42);
+  --color-terracotta-700: oklch(0.48 0.12 40);
+  --color-terracotta-800: oklch(0.405 0.098 38);
+  --color-terracotta-900: oklch(0.345 0.078 37);
+  --color-terracotta-950: oklch(0.245 0.055 36);
 
   --color-negative-50: oklch(0.971 0.013 17.38);
   --color-negative-100: oklch(0.936 0.032 17.717);
@@ -75,28 +90,40 @@
   --container-5xs: 8rem; /* 128px */
   --container-4xs: 12rem; /* 192px */
   /* Tailwind --container-3xs: 16rem; (256px) */
+
+  /* Warm, low-alpha layered shadows. */
+  --shadow-soft:
+    0 1px 2px oklch(0.3 0.02 56 / 0.05), 0 2px 8px oklch(0.3 0.02 56 / 0.04);
+  --shadow-lift:
+    0 2px 4px oklch(0.3 0.02 56 / 0.06), 0 12px 32px oklch(0.3 0.02 56 / 0.1);
 }
 
 :root {
+  color-scheme: light;
+
   --background: var(--color-white);
   --foreground: var(--color-neutral-950);
   --card: var(--color-white);
   --card-foreground: var(--color-neutral-950);
   --popover: var(--color-white);
   --popover-foreground: var(--color-neutral-950);
-  --primary: var(--color-neutral-900);
-  --primary-foreground: var(--color-neutral-50);
+  --primary: var(--color-terracotta-600);
+  --primary-foreground: var(--color-white);
   --secondary: var(--color-neutral-100);
   --secondary-foreground: var(--color-neutral-900);
   --muted: var(--color-neutral-100);
   --muted-foreground: var(--color-neutral-500);
   --accent: var(--color-neutral-100);
   --accent-foreground: var(--color-neutral-900);
+  --brand: var(--color-terracotta-600);
+  --brand-foreground: var(--color-white);
+  --brand-subtle: var(--color-terracotta-100);
+  --brand-subtle-foreground: var(--color-terracotta-700);
   --destructive: var(--color-negative-600);
   --destructive-foreground: var(--color-negative-50);
   --border: var(--color-neutral-200);
   --input: var(--color-neutral-200);
-  --ring: var(--color-neutral-300);
+  --ring: var(--color-terracotta-400);
   --canvas: var(--color-neutral-50);
   --shell: var(--color-white);
   --shell-foreground: var(--color-neutral-950);
@@ -130,15 +157,15 @@
   --chart-3: oklch(0.398 0.07 227.392);
   --chart-4: oklch(0.828 0.189 84.429);
   --chart-5: oklch(0.769 0.188 70.08);
-  --radius: 0.625rem;
+  --radius: 0.75rem;
   --sidebar: var(--color-white);
   --sidebar-foreground: var(--color-neutral-600);
-  --sidebar-primary: var(--color-neutral-900);
-  --sidebar-primary-foreground: var(--color-neutral-50);
+  --sidebar-primary: var(--color-terracotta-600);
+  --sidebar-primary-foreground: var(--color-white);
   --sidebar-accent: var(--color-neutral-100);
   --sidebar-accent-foreground: var(--color-neutral-900);
   --sidebar-border: var(--color-neutral-200);
-  --sidebar-ring: var(--color-neutral-300);
+  --sidebar-ring: var(--color-terracotta-400);
 }
 
 .dark {
@@ -148,21 +175,29 @@
   --foreground: var(--color-neutral-50);
   --card: var(--color-neutral-900);
   --card-foreground: var(--color-neutral-50);
-  --popover: var(--color-neutral-950);
+  --popover: var(--color-neutral-900);
   --popover-foreground: var(--color-neutral-50);
-  --primary: var(--color-neutral-50);
-  --primary-foreground: var(--color-neutral-900);
+  --primary: var(--color-terracotta-500);
+  --primary-foreground: var(--color-neutral-950);
   --secondary: var(--color-neutral-800);
   --secondary-foreground: var(--color-neutral-50);
   --muted: var(--color-neutral-900);
   --muted-foreground: var(--color-neutral-400);
   --accent: var(--color-neutral-800);
   --accent-foreground: var(--color-neutral-50);
+  --brand: var(--color-terracotta-400);
+  --brand-foreground: var(--color-neutral-950);
+  --brand-subtle: color-mix(
+    in oklch,
+    var(--color-terracotta-500) 18%,
+    transparent
+  );
+  --brand-subtle-foreground: var(--color-terracotta-200);
   --destructive: var(--color-negative-700);
   --destructive-foreground: var(--color-white);
   --border: var(--color-neutral-800);
   --input: var(--color-neutral-800);
-  --ring: var(--color-neutral-600);
+  --ring: var(--color-terracotta-500);
   --canvas: var(--color-neutral-950);
   --shell: var(--color-neutral-900);
   --shell-foreground: var(--color-neutral-50);
@@ -214,12 +249,12 @@
   --chart-5: oklch(0.645 0.246 16.439);
   --sidebar: var(--color-neutral-900);
   --sidebar-foreground: var(--color-neutral-300);
-  --sidebar-primary: var(--color-neutral-100);
-  --sidebar-primary-foreground: var(--color-neutral-900);
+  --sidebar-primary: var(--color-terracotta-500);
+  --sidebar-primary-foreground: var(--color-neutral-950);
   --sidebar-accent: var(--color-neutral-800);
   --sidebar-accent-foreground: var(--color-neutral-50);
   --sidebar-border: var(--color-neutral-800);
-  --sidebar-ring: var(--color-neutral-600);
+  --sidebar-ring: var(--color-terracotta-500);
 }
 
 @theme inline {
@@ -237,6 +272,10 @@
   --color-muted-foreground: var(--muted-foreground);
   --color-accent: var(--accent);
   --color-accent-foreground: var(--accent-foreground);
+  --color-brand: var(--brand);
+  --color-brand-foreground: var(--brand-foreground);
+  --color-brand-subtle: var(--brand-subtle);
+  --color-brand-subtle-foreground: var(--brand-subtle-foreground);
   --color-destructive: var(--destructive);
   --color-destructive-foreground: var(--destructive-foreground);
   --color-border: var(--border);
@@ -286,11 +325,14 @@
     @apply border-border outline-ring/50;
   }
   body {
-    @apply bg-canvas text-foreground;
+    @apply bg-canvas text-foreground antialiased;
 
     @media all and (display-mode: standalone) {
       height: 100lvh; /* Force full height on iOS standalone */
     }
+  }
+  ::selection {
+    @apply bg-brand-subtle text-brand-subtle-foreground;
   }
 }
 
@@ -319,22 +361,6 @@
     ::view-transition-new(*) {
       animation: none !important;
     }
-  }
-}
-
-@layer components {
-  @keyframes float-in-space {
-    0%,
-    100% {
-      transform: translate(-10px, 10px) rotate(-2deg);
-    }
-    50% {
-      transform: translate(20px, -20px) rotate(5deg);
-    }
-  }
-
-  .animate-float-in-space {
-    animation: float-in-space 8s ease-in-out infinite;
   }
 }
 

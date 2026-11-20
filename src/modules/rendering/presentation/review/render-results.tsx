@@ -122,13 +122,13 @@ const ResultCard = (props: {
         </h3>
         <div className="flex items-center gap-1">
           {result.framingChanged && (
-            <Badge variant="warning" className="text-[10px]">
+            <Badge variant="warning" className="text-2xs">
               {t('rendering:review.framingChanged')}
             </Badge>
           )}
           <Badge
             variant={result.status === 'failed' ? 'negative' : 'secondary'}
-            className="text-[10px]"
+            className="text-2xs"
           >
             {t(`rendering:status.${result.status}`)}
           </Badge>
