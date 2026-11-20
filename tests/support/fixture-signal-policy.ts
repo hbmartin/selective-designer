@@ -62,9 +62,13 @@ export function unsafeFixtureSignals(source: string, file: string): string[] {
       ts.isIdentifier(node.initializer) &&
       processNames.has(node.initializer.text) &&
       ts.isObjectBindingPattern(node.name) &&
-      node.name.elements.some(
-        (entry) => (entry.propertyName ?? entry.name).getText(tree) === 'kill'
-      )
+      node.name.elements.some((entry) => {
+        const name = entry.propertyName ?? entry.name;
+        return (
+          (ts.isIdentifier(name) || ts.isStringLiteral(name)) &&
+          name.text === 'kill'
+        );
+      })
     )
       problems.push(
         'Destructured process signaling bypasses verified fixture helper'

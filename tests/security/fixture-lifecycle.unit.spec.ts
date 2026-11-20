@@ -553,10 +553,21 @@ it.each(['sequential', 'simultaneous'] as const)(
       const a = await first.start();
       await a.dispose();
       const b = await second.start();
-      expect(b.pid).not.toBe(a.pid);
+      expect(
+        JSON.parse(fs.readFileSync(first.observation, 'utf8'))
+      ).toMatchObject({ pid: a.pid, parent: a.parent });
+      expect(
+        JSON.parse(fs.readFileSync(second.observation, 'utf8'))
+      ).toMatchObject({ pid: b.pid, parent: b.parent });
       await b.dispose();
     } else {
       const [a, b] = await Promise.all([first.start(), second.start()]);
+      expect(
+        JSON.parse(fs.readFileSync(first.observation, 'utf8'))
+      ).toMatchObject({ pid: a.pid, parent: a.parent });
+      expect(
+        JSON.parse(fs.readFileSync(second.observation, 'utf8'))
+      ).toMatchObject({ pid: b.pid, parent: b.parent });
       expect(a.release).not.toBe(b.release);
       await Promise.all([a.dispose(), b.dispose()]);
     }
