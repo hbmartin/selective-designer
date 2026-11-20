@@ -156,9 +156,9 @@ describe('auth redirect helpers', () => {
     ).toBe('/manager/designs?page=2#details');
   });
 
-  it('routes authenticated users to their highest-permission app', () => {
-    expect(resolvePostAuthDestination({ role: 'admin' })).toBe('/manager');
-    expect(resolvePostAuthDestination({ role: 'user' })).toBe('/app');
+  it('defaults authenticated users and admins to designs', () => {
+    expect(resolvePostAuthDestination({ role: 'admin' })).toBe('/app/designs');
+    expect(resolvePostAuthDestination({ role: 'user' })).toBe('/app/designs');
     expect(resolvePostAuthDestination({ role: null })).toBe('/');
   });
 

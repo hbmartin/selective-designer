@@ -2,7 +2,7 @@ import { hasRolePermission, parseRole } from '@/modules/auth';
 import type { CurrentSessionLike } from '@/platform/router/context';
 
 export type InternalRedirectPath = `/${string}`;
-export type PostAuthDestination = '/' | '/app' | '/manager';
+export type PostAuthDestination = '/' | '/app' | '/app/designs' | '/manager';
 export type ParsedSafeRedirectPath = {
   to: InternalRedirectPath;
   search: Record<string, string>;
@@ -80,11 +80,11 @@ export const resolvePostAuthDestination = (
   user: Pick<CurrentSessionLike['user'], 'role'> | { role?: string | null }
 ): PostAuthDestination => {
   const role = parseRole(user.role);
+  if (role && hasRolePermission(role, { apps: ['app'] })) {
+    return '/app/designs';
+  }
   if (role && hasRolePermission(role, { apps: ['manager'] })) {
     return '/manager';
-  }
-  if (role && hasRolePermission(role, { apps: ['app'] })) {
-    return '/app';
   }
   return '/';
 };

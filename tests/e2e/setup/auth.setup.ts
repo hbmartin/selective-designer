@@ -30,7 +30,7 @@ const authenticate = async (
   };
 
   page.authDebug('setup.authenticate.start', debugPayload);
-  await page.to('/login');
+  await page.goto(`/login?redirect=${encodeURIComponent(input.targetRoute)}`);
   page.authDebug('setup.login_page.opened', debugPayload);
 
   await page.login({ email: input.email });

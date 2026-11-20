@@ -36,6 +36,7 @@
     "dev": "run-p env dev:*",
     "dev:app": "pnpm gen:build-info && vite dev",
     "build": "cross-env NODE_ENV=production run-p env gen:build-info && vite build",
+    "build:vercel": "node scripts/build-vercel.mjs",
     "start": "dotenv -- node .output/server/index.mjs",
     "env": "run-p env:*",
     "env:client": "dotenv -- node ./run-jiti ./src/platform/env/client.ts",

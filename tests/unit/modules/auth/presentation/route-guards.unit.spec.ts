@@ -111,7 +111,7 @@ describe('auth route guards', () => {
     });
   });
 
-  it('redirects onboarded admins to the manager app after login', async () => {
+  it('redirects onboarded admins to designs after login', async () => {
     const error = await getThrown(() =>
       redirectAuthenticatedRoute({
         context: makeContext(makeSession({ role: 'admin' })),
@@ -119,12 +119,12 @@ describe('auth route guards', () => {
     );
 
     expect(error.options).toMatchObject({
-      to: '/manager',
+      to: '/app/designs',
       replace: true,
     });
   });
 
-  it('redirects onboarded users to the user app after login', async () => {
+  it('redirects onboarded users to designs after login', async () => {
     const error = await getThrown(() =>
       redirectAuthenticatedRoute({
         context: makeContext(makeSession({ role: 'user' })),
@@ -132,7 +132,7 @@ describe('auth route guards', () => {
     );
 
     expect(error.options).toMatchObject({
-      to: '/app',
+      to: '/app/designs',
       replace: true,
     });
   });
@@ -148,6 +148,23 @@ describe('auth route guards', () => {
 
     expect(context.auth.getSession).toHaveBeenCalledTimes(1);
   });
+
+  it.each(['admin', 'user'] as const)(
+    'defaults completed onboarding to designs for %s',
+    async (role) => {
+      const error = await getThrown(() =>
+        requireOnboardingRoute({
+          context: makeContext(makeSession({ role })),
+          location: { href: '/onboarding', pathname: '/onboarding' },
+        })
+      );
+
+      expect(error.options).toMatchObject({
+        to: '/app/designs',
+        replace: true,
+      });
+    }
+  );
 
   it('throws forbidden route errors for missing app permissions', async () => {
     await expect(

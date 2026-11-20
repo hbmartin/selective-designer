@@ -143,7 +143,10 @@ export class SessionGatewayBetterAuth implements SessionGateway {
       columns: { userId: true },
     });
     const userId = identity?.userId ?? providerUser.id;
-    if (!identity) {
+    const appUser = await this.db.query.user.findFirst({
+      where: eq(userTable.id, userId),
+    });
+    if (!identity && appUser) {
       await this.db
         .insert(authIdentity)
         .values({
@@ -153,12 +156,6 @@ export class SessionGatewayBetterAuth implements SessionGateway {
         })
         .onConflictDoNothing();
     }
-    if (userId === providerUser.id) return Option.Some(providerUser);
-
-    const appUser = await this.db.query.user.findFirst({
-      where: eq(userTable.id, userId),
-    });
-
     return Option.fromNullable(appUser);
   }
 
