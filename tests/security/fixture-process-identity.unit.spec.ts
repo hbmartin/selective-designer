@@ -1,6 +1,7 @@
 import {
   fixtureGroupIsLive,
   signalFixtureGroup,
+  signalFixtureProcess,
   type FixtureProcessGroup,
 } from '@tests/support/fixture-process-groups';
 import {
@@ -112,4 +113,26 @@ it.each([
   '2 1 2 S valid',
 ])('rejects partial or malformed global process authority: %s', (text) => {
   expect(() => parseFixtureProcessSnapshot(text, 1)).toThrow();
+});
+
+it('signals only the freshly verified descendant process and rejects reused or unrelated identities', () => {
+  const kill = vi.spyOn(process, 'kill').mockImplementation(() => true);
+  const runner = member(process.pid, process.pid);
+  const original = { ...member(2_000_017, 2_000_001), parent: process.pid };
+  signalFixtureProcess(original, 'SIGTERM', snapshot(runner, original));
+  expect(kill).toHaveBeenCalledWith(original.pid, 'SIGTERM');
+  kill.mockClear();
+  expect(() =>
+    signalFixtureProcess(
+      original,
+      'SIGKILL',
+      snapshot(runner, { ...original, started: 'reused' })
+    )
+  ).toThrow('identity changed');
+  const unrelated = { ...original, parent: 1 };
+  expect(() =>
+    signalFixtureProcess(unrelated, 'SIGKILL', snapshot(runner, unrelated))
+  ).toThrow('not an owned descendant');
+  signalFixtureProcess(original, 'SIGTERM', snapshot(runner));
+  expect(kill).not.toHaveBeenCalled();
 });

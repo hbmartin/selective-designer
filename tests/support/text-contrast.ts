@@ -4,6 +4,15 @@ export function measureTextContrast(element: Element) {
   canvas.width = canvas.height = 1;
   const context = canvas.getContext('2d');
   if (!context) throw new Error('A 2D canvas is required to measure contrast');
+  function assignColor(value: string) {
+    context!.fillStyle = '#010203';
+    context!.fillStyle = value;
+    const first = context!.fillStyle;
+    context!.fillStyle = '#040506';
+    context!.fillStyle = value;
+    if (context!.fillStyle !== first)
+      throw new Error('Unsupported canvas color');
+  }
 
   const ancestors: Element[] = [];
   for (
@@ -15,11 +24,18 @@ export function measureTextContrast(element: Element) {
 
   for (const ancestor of ancestors) {
     const style = getComputedStyle(ancestor);
-    if (style.backgroundImage !== 'none' || Number(style.opacity) !== 1)
+    if (
+      style.backgroundImage !== 'none' ||
+      Number(style.opacity) !== 1 ||
+      style.filter !== 'none' ||
+      style.backdropFilter !== 'none' ||
+      style.mixBlendMode !== 'normal' ||
+      style.backgroundBlendMode !== 'normal'
+    )
       throw new Error(
-        'Contrast measurement requires solid backgrounds without group opacity'
+        'Contrast measurement requires solid backgrounds without opacity, filters, or blending'
       );
-    context.fillStyle = style.backgroundColor;
+    assignColor(style.backgroundColor);
     context.fillRect(0, 0, 1, 1);
   }
   const background = [...context.getImageData(0, 0, 1, 1).data];
@@ -28,7 +44,7 @@ export function measureTextContrast(element: Element) {
       'Contrast measurement requires an opaque ancestor background'
     );
 
-  context.fillStyle = getComputedStyle(element).color;
+  assignColor(getComputedStyle(element).color);
   context.fillRect(0, 0, 1, 1);
   const foreground = [...context.getImageData(0, 0, 1, 1).data];
 

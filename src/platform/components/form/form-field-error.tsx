@@ -56,7 +56,7 @@ export const FormFieldError = ({
     <div
       id={fieldCtx?.errorId}
       className={cn(
-        'flex animate-in gap-1 text-sm text-destructive slide-in-from-top-1',
+        'flex animate-in gap-1 text-sm text-destructive-text slide-in-from-top-1',
         className
       )}
       role="alert"

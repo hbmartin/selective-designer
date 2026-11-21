@@ -1514,6 +1514,8 @@ rules:
         - '**/*.test.ts'
 
   - id: fixture-signaling-requires-verified-helper
+    options:
+      constant_propagation: false
     languages: [typescript, javascript]
     severity: ERROR
     message: Fixture process signals must go through the identity-checked fixture process-group helper.
@@ -1524,14 +1526,20 @@ rules:
       - pattern: 'let { kill: $SIGNAL, ... } = process;'
       - pattern: 'var { kill: $SIGNAL, ... } = process;'
       - pattern: 'const { ["kill"]: $SIGNAL, ... } = process;'
+      - pattern: 'const { [`kill`]: $SIGNAL, ... } = process;'
       - pattern: 'let { ["kill"]: $SIGNAL, ... } = process;'
+      - pattern: 'let { [`kill`]: $SIGNAL, ... } = process;'
       - pattern: 'var { ["kill"]: $SIGNAL, ... } = process;'
+      - pattern: 'var { [`kill`]: $SIGNAL, ... } = process;'
       - pattern: '({ kill: $SIGNAL, ... } = process)'
       - pattern: '({ ["kill"]: $SIGNAL, ... } = process)'
+      - pattern: '({ [`kill`]: $SIGNAL, ... } = process)'
       - pattern: 'function $F(..., { kill: $SIGNAL, ... } = process, ...) { ... }'
       - pattern: 'function $F(..., { ["kill"]: $SIGNAL, ... } = process, ...) { ... }'
+      - pattern: 'function $F(..., { [`kill`]: $SIGNAL, ... } = process, ...) { ... }'
       - pattern: '(..., { kill: $SIGNAL, ... } = process, ...) => $BODY'
       - pattern: '(..., { ["kill"]: $SIGNAL, ... } = process, ...) => $BODY'
+      - pattern: '(..., { [`kill`]: $SIGNAL, ... } = process, ...) => $BODY'
       - pattern: process[`kill`]
     paths:
       include:
@@ -1541,13 +1549,19 @@ rules:
         - tests/support/fixture-process-groups.ts
 
   - id: fixture-kill-spy-requires-persistent-replacement
+    options:
+      constant_propagation: false
     languages: [typescript, javascript]
     severity: ERROR
     message: Synthetic process IDs require a fully replaced kill spy; never allow calls to reach the host.
     patterns:
-      - pattern: $MOCK.spyOn(process, 'kill')
+      - pattern-either:
+          - pattern: $MOCK.spyOn(process, 'kill')
+          - pattern: $MOCK.spyOn(process, `kill`)
       - pattern-not-inside: $MOCK.spyOn(process, 'kill').mockImplementation(...)
       - pattern-not-inside: $MOCK.spyOn(process, 'kill').mockReturnValue(...)
+      - pattern-not-inside: $MOCK.spyOn(process, `kill`).mockImplementation(...)
+      - pattern-not-inside: $MOCK.spyOn(process, `kill`).mockReturnValue(...)
     paths:
       include:
         - tests/security/**

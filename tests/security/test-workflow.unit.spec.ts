@@ -269,7 +269,9 @@ it.for([
         'dir'
       );
       fs.symlinkSync(
-        path.resolve('node_modules/.bin/vitest'),
+        // pnpm's Linux shim resolves relative to the invocation directory.
+        // Link the installed CLI itself so the fixture still executes real Vitest.
+        fs.realpathSync(path.resolve('node_modules/vitest/vitest.mjs')),
         path.join(fixture.cwd, 'node_modules/.bin/vitest')
       );
       // Neither an absent launcher hint nor an npm parent may select the tool.

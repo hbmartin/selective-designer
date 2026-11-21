@@ -115,10 +115,12 @@ test('retries route invalidation without resaving and uses the authoritative nam
   mocks.refetch.mockResolvedValue({
     data: { user: { name: 'Concurrent Winner' } },
   });
-  const { submit } = renderOnboarding();
+  const { submit, name } = renderOnboarding();
   await userEvent.click(submit);
   await expect.poll(() => mocks.error.mock.calls.length).toBe(1);
   await expect.element(submit).toBeEnabled();
+  await expect.element(name).toHaveValue('Concurrent Winner');
+  await expect.element(name).toHaveAttribute('readonly');
   expect(mocks.success).not.toHaveBeenCalled();
   await userEvent.click(submit);
   await expect.poll(() => mocks.success.mock.calls.length).toBe(1);

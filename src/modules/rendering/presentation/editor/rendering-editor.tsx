@@ -53,7 +53,7 @@ const EditorCanvas = lazy(async () => ({
 }));
 
 const nativeSelectClass =
-  'h-8 w-full rounded-md border border-input bg-background px-2 text-sm shadow-xs outline-none transition-[color,box-shadow] focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50';
+  'h-8 w-full rounded-md border border-input bg-background px-2 text-sm shadow-xs outline-none transition-[color,box-shadow] focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background';
 const DEFAULT_PLACEMENT_WIDTH = 0.2;
 
 export type RenderingEditorProps = {

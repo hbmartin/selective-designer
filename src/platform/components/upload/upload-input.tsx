@@ -35,7 +35,7 @@ const uploadInputVariants = cva(
     'flex w-full items-center gap-2 rounded-md border text-left text-xs transition-[color,box-shadow]',
     'cursor-pointer',
     'hover:bg-accent/50',
-    'focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50 focus-visible:outline-none',
+    'focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background focus-visible:outline-none',
     'has-[[aria-invalid=true]]:border-destructive'
   ),
   {
@@ -268,7 +268,7 @@ export const UploadInput = ({
             ),
         isDragOver && 'border-solid border-ring bg-accent/50',
         uploadMutation.isError &&
-          'border-destructive ring-[3px] ring-destructive/20 dark:ring-destructive/40',
+          'border-destructive ring-[3px] ring-destructive/20 focus-visible:ring-ring dark:ring-destructive/40 dark:focus-visible:ring-ring',
         isDisabled && 'pointer-events-none opacity-50',
         className
       )}
@@ -296,7 +296,7 @@ export const UploadInput = ({
             <span
               className={cn(
                 'min-w-0 flex-1 truncate',
-                uploadMutation.isError && 'text-destructive'
+                uploadMutation.isError && 'text-destructive-text'
               )}
             >
               {file.name}
@@ -361,7 +361,7 @@ function FilePreview({
     ))
     .with('error', () => (
       <div className={cn(previewClass, 'bg-destructive/10')}>
-        <CircleAlertIcon className="size-3 text-destructive" />
+        <CircleAlertIcon className="size-3 text-destructive-text" />
       </div>
     ))
     .with('idle', 'success', () =>

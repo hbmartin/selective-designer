@@ -1,6 +1,6 @@
 import { Option, Result } from '@bloodyowl/boxed';
 import { APIError } from 'better-auth/api';
-import { and, eq, isNull, or } from 'drizzle-orm';
+import { and, eq, sql } from 'drizzle-orm';
 
 import {
   AppError,
@@ -157,9 +157,9 @@ export class SessionGatewayBetterAuth implements SessionGateway {
         )
       )
       .where(
-        or(
-          eq(userTable.id, authIdentity.userId),
-          and(isNull(authIdentity.userId), eq(userTable.id, providerUser.id))
+        eq(
+          userTable.id,
+          sql<string>`coalesce((select ${authIdentity.userId} from ${authIdentity} where ${authIdentity.provider} = ${'better-auth'} and ${authIdentity.providerUserId} = ${providerUser.id}), ${providerUser.id})`
         )
       )
       .limit(1);

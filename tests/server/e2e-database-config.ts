@@ -7,9 +7,16 @@ const databaseName = 'postgres';
 /** The webserver owns this disposable database; never select an ambient app URL. */
 export function resolveE2EDatabase(env: NodeJS.ProcessEnv = process.env) {
   const databaseUrl =
-    env.E2E_DATABASE_URL ??
+    env.E2E_DATABASE_URL?.trim() ||
     makeTestDatabaseUrl({ host, port, databaseName, credentialLabel: 'e2e' });
-  const parsed = new URL(databaseUrl);
+  let parsed: URL;
+  const invalidTarget = () =>
+    new Error('E2E database must use the disposable loopback PGlite endpoint');
+  try {
+    parsed = new URL(databaseUrl);
+  } catch {
+    throw invalidTarget();
+  }
   if (
     !['postgres:', 'postgresql:'].includes(parsed.protocol) ||
     parsed.hostname !== host ||
@@ -18,9 +25,7 @@ export function resolveE2EDatabase(env: NodeJS.ProcessEnv = process.env) {
     parsed.search ||
     parsed.hash
   ) {
-    throw new Error(
-      'E2E database must use the disposable loopback PGlite endpoint'
-    );
+    throw invalidTarget();
   }
   return {
     databaseUrl,

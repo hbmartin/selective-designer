@@ -35,7 +35,7 @@ function SelectValue({
 }
 
 const selectTriggerVariants = cva(
-  'flex w-full min-w-0 items-center justify-between gap-1.5 rounded-md border border-input bg-background whitespace-nowrap shadow-xs transition-colors outline-none select-none focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50 disabled:cursor-not-allowed disabled:opacity-50 aria-invalid:border-destructive aria-invalid:ring-[3px] aria-invalid:ring-destructive/20 data-placeholder:text-muted-foreground *:data-[slot=select-value]:line-clamp-1 dark:bg-input/30 dark:hover:bg-input/50 dark:aria-invalid:border-destructive/50 dark:aria-invalid:ring-destructive/40 [&_svg]:pointer-events-none [&_svg]:shrink-0',
+  'flex w-full min-w-0 items-center justify-between gap-1.5 rounded-md border border-input bg-background whitespace-nowrap shadow-xs transition-colors outline-none select-none focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background disabled:cursor-not-allowed disabled:opacity-50 aria-invalid:border-destructive aria-invalid:ring-[3px] aria-invalid:ring-destructive/20 aria-invalid:focus-visible:ring-ring data-placeholder:text-muted-foreground *:data-[slot=select-value]:line-clamp-1 dark:bg-input/30 dark:hover:bg-input/50 dark:aria-invalid:border-destructive/50 dark:aria-invalid:ring-destructive/40 dark:aria-invalid:focus-visible:ring-ring [&_svg]:pointer-events-none [&_svg]:shrink-0',
   {
     variants: {
       size: {

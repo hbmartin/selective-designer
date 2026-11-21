@@ -5,11 +5,12 @@ import { cva, type VariantProps } from 'class-variance-authority';
 import { cn } from '@/platform/lib/tailwind/utils';
 
 const badgeVariants = cva(
-  'inline-flex w-fit shrink-0 items-center justify-center gap-1 self-center overflow-hidden rounded-full border border-transparent font-medium whitespace-nowrap transition-all focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50 aria-invalid:border-destructive aria-invalid:ring-destructive/20 dark:aria-invalid:ring-destructive/40 [&>svg]:pointer-events-none [&>svg]:size-3',
+  'inline-flex w-fit shrink-0 items-center justify-center gap-1 self-center overflow-hidden rounded-full border border-transparent font-medium whitespace-nowrap transition-all focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background aria-invalid:border-destructive aria-invalid:ring-destructive/20 aria-invalid:focus-visible:ring-ring dark:aria-invalid:ring-destructive/40 dark:aria-invalid:focus-visible:ring-ring [&>svg]:pointer-events-none [&>svg]:size-3',
   {
     variants: {
       variant: {
-        default: 'bg-primary text-primary-foreground [a&]:hover:bg-primary/80',
+        default:
+          'bg-primary text-primary-foreground [a&]:hover:bg-primary-hover',
         secondary:
           'bg-secondary text-secondary-foreground [a&]:hover:bg-secondary/80',
         negative:

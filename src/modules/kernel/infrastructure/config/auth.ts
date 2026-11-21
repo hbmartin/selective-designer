@@ -1,10 +1,12 @@
-import { filter, isTruthy, map, pipe } from 'remeda';
+import { filter, isTruthy, map, pipe, unique } from 'remeda';
 import { z } from 'zod';
 
 import { baseEnvSchema, parseEnv, shouldSkipEnvValidation } from './env-schema';
 import { ConfigurationError } from '../../domain/errors/configuration-error';
 
 const AUTH_SECRET_MIN_LENGTH = 32;
+const previewHostFields = ['VERCEL_BRANCH_URL', 'VERCEL_URL'] as const;
+const exactHostname = z.hostname();
 const AUTH_SECRET_PLACEHOLDERS = new Set([
   'changeme',
   'change-me',
@@ -57,11 +59,25 @@ const betterAuthEnvSchema = baseEnvSchema
     AUTH_RATE_LIMIT_WINDOW_SECONDS: z.coerce.number().int().min(1).prefault(60),
     AUTH_RATE_LIMIT_MAX: z.coerce.number().int().min(1).prefault(100),
     AUTH_ALLOWED_HOSTS: z.string().optional(),
+    VERCEL_BRANCH_URL: z.string().optional(),
+    VERCEL_URL: z.string().optional(),
     AUTH_TRUSTED_ORIGINS: z.string().optional(),
     AUTH_ADMIN_ENDPOINTS_ENABLED: z.stringbool().default(false),
     AUTH_OPENAPI_ENABLED: z.stringbool().default(false),
   })
   .superRefine((env, ctx) => {
+    if (env.VERCEL_ENV === 'preview') {
+      for (const field of previewHostFields) {
+        const host = env[field]?.trim();
+        if (host && !exactHostname.safeParse(host).success) {
+          ctx.addIssue({
+            code: 'custom',
+            path: [field],
+            message: 'Preview metadata must contain an exact bare hostname',
+          });
+        }
+      }
+    }
     if (!shouldSkipEnvValidation(env)) {
       if (env.AUTH_SECRET.length < AUTH_SECRET_MIN_LENGTH) {
         ctx.addIssue({
@@ -128,7 +144,15 @@ export function getBetterAuthConfig(): BetterAuthConfig {
     sessionAbsoluteMaxInSeconds: env.AUTH_SESSION_ABSOLUTE_MAX_IN_SECONDS,
     rateLimitWindowSeconds: env.AUTH_RATE_LIMIT_WINDOW_SECONDS,
     rateLimitMax: env.AUTH_RATE_LIMIT_MAX,
-    allowedHosts: splitCsv(env.AUTH_ALLOWED_HOSTS),
+    allowedHosts: unique([
+      ...(splitCsv(env.AUTH_ALLOWED_HOSTS) ?? []),
+      ...(env.VERCEL_ENV === 'preview'
+        ? previewHostFields.flatMap((field) => {
+            const host = env[field]?.trim().toLowerCase();
+            return host ? [host] : [];
+          })
+        : []),
+    ]),
     trustedOrigins: splitCsv(env.AUTH_TRUSTED_ORIGINS),
     adminEndpointsEnabled: env.AUTH_ADMIN_ENDPOINTS_ENABLED,
     openApiEnabled: env.AUTH_OPENAPI_ENABLED,

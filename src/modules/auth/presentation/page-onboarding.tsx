@@ -39,7 +39,7 @@ export const PageOnboarding = () => {
       name: session.data?.user.name ?? '',
     },
     validators: { onSubmit: zFormFieldsOnboarding() },
-    onSubmit: async ({ value }) => {
+    onSubmit: async ({ value, formApi }) => {
       if (!submitOnboarding.isSuccess) {
         try {
           await submitOnboarding.mutateAsync(value);
@@ -49,6 +49,9 @@ export const PageOnboarding = () => {
       }
       try {
         const refreshed = await session.refetch({ throwOnError: true });
+        if (refreshed.data?.user) {
+          formApi.setFieldValue('name', refreshed.data.user.name ?? '');
+        }
         clearAllQueryStateForAuthBoundary(queryClient);
         await router.invalidate();
         if (refreshed.data?.user) {

@@ -1,7 +1,7 @@
 import { cva } from 'class-variance-authority';
 
 export const buttonVariants = cva(
-  "relative inline-flex w-fit max-w-full min-w-0 shrink-0 cursor-pointer items-center justify-center overflow-hidden rounded-md border border-transparent text-sm font-medium whitespace-nowrap transition-[color,background-color,border-color,box-shadow] outline-none focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50 disabled:pointer-events-none disabled:opacity-40 disabled:grayscale aria-invalid:border-destructive aria-invalid:ring-destructive/20 data-disabled:pointer-events-none data-disabled:opacity-40 data-disabled:grayscale dark:disabled:opacity-20 dark:aria-invalid:ring-destructive/40 dark:data-disabled:opacity-20 [&_svg]:pointer-events-none [&_svg]:shrink-0 [&_svg:not([class*='size-'])]:size-4 [&>span]:gap-2",
+  "relative inline-flex w-fit max-w-full min-w-0 shrink-0 cursor-pointer items-center justify-center overflow-hidden rounded-md border border-transparent text-sm font-medium whitespace-nowrap transition-[color,background-color,border-color,box-shadow] outline-none focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background disabled:pointer-events-none disabled:opacity-40 disabled:grayscale aria-invalid:border-destructive aria-invalid:ring-destructive/20 aria-invalid:focus-visible:ring-ring data-disabled:pointer-events-none data-disabled:opacity-40 data-disabled:grayscale dark:disabled:opacity-20 dark:aria-invalid:ring-destructive/40 dark:aria-invalid:focus-visible:ring-ring dark:data-disabled:opacity-20 [&_svg]:pointer-events-none [&_svg]:shrink-0 [&_svg:not([class*='size-'])]:size-4 [&>span]:gap-2",
   {
     variants: {
       variant: {
@@ -12,9 +12,9 @@ export const buttonVariants = cva(
         ghost:
           'hover:bg-accent hover:text-accent-foreground [a:hover_&]:bg-accent [a:hover_&]:text-accent-foreground [button:hover_&]:bg-accent [button:hover_&]:text-accent-foreground',
         destructive:
-          'bg-destructive text-destructive-foreground shadow-xs hover:bg-destructive/90 focus-visible:ring-destructive/20 dark:focus-visible:ring-destructive/40 [a:hover_&]:bg-destructive/90 [a:hover_&]:text-destructive-foreground dark:[a:hover_&]:bg-destructive/90 dark:[a:hover_&]:text-destructive-foreground [button:hover_&]:bg-destructive/90 [button:hover_&]:text-destructive-foreground dark:[button:hover_&]:bg-destructive/90 dark:[button:hover_&]:text-destructive-foreground',
+          'bg-destructive text-destructive-foreground shadow-xs hover:bg-destructive-hover focus-visible:ring-ring dark:focus-visible:ring-ring [a:hover_&]:bg-destructive-hover [a:hover_&]:text-destructive-foreground dark:[a:hover_&]:bg-destructive-hover dark:[a:hover_&]:text-destructive-foreground [button:hover_&]:bg-destructive-hover [button:hover_&]:text-destructive-foreground dark:[button:hover_&]:bg-destructive-hover dark:[button:hover_&]:text-destructive-foreground',
         'destructive-secondary':
-          'border-border bg-background text-destructive shadow-xs hover:border-transparent hover:bg-destructive/90 hover:text-destructive-foreground [a:hover_&]:bg-destructive/90 [a:hover_&]:text-destructive-foreground dark:[a:hover_&]:bg-destructive/90 dark:[a:hover_&]:text-destructive-foreground [button:hover_&]:bg-destructive/90 [button:hover_&]:text-destructive-foreground dark:[button:hover_&]:bg-destructive/90 dark:[button:hover_&]:text-destructive-foreground',
+          'border-border bg-background text-destructive-text shadow-xs hover:border-transparent hover:bg-destructive-hover hover:text-destructive-foreground [a:hover_&]:bg-destructive-hover [a:hover_&]:text-destructive-foreground dark:[a:hover_&]:bg-destructive-hover dark:[a:hover_&]:text-destructive-foreground [button:hover_&]:bg-destructive-hover [button:hover_&]:text-destructive-foreground dark:[button:hover_&]:bg-destructive-hover dark:[button:hover_&]:text-destructive-foreground',
 
         link: 'underline-offset-4 hover:underline [a:hover_&]:underline [button:hover_&]:underline',
       },

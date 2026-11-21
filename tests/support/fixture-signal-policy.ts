@@ -1,7 +1,12 @@
 import ts from 'typescript';
 
 function staticName(node: ts.Node): string | undefined {
-  if (ts.isComputedPropertyName(node)) return staticName(node.expression);
+  if (ts.isComputedPropertyName(node)) {
+    return ts.isStringLiteral(node.expression) ||
+      ts.isNoSubstitutionTemplateLiteral(node.expression)
+      ? node.expression.text
+      : undefined;
+  }
   if (
     ts.isIdentifier(node) ||
     ts.isStringLiteral(node) ||

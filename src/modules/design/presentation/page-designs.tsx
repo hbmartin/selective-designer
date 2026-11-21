@@ -31,7 +31,7 @@ const DesignCard = ({ design }: { design: DesignView }) => (
     className="group flex flex-col gap-2.5 rounded-xl outline-none"
     data-testid="design-card"
   >
-    <div className="aspect-[4/3] overflow-hidden rounded-xl border bg-muted shadow-soft transition duration-300 group-hover:shadow-lift group-focus-visible:ring-[3px] group-focus-visible:ring-ring/50">
+    <div className="aspect-[4/3] overflow-hidden rounded-xl border bg-muted shadow-soft transition duration-300 group-hover:shadow-lift group-focus-visible:ring-[3px] group-focus-visible:ring-ring group-focus-visible:ring-offset-2 group-focus-visible:ring-offset-background">
       <img
         src={design.baseImage.workingUrl}
         alt=""
