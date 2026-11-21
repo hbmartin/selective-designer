@@ -20,7 +20,18 @@ describe('disposable E2E database configuration', () => {
     expect(env.DATABASE_MIGRATION_DRIVER).toBe('node-pg');
     expect(resolveE2EDatabase(env)).toEqual(config);
   });
+  it.each(['', '   ', undefined])(
+    'uses the disposable default for blank input %s',
+    (value) => {
+      expect(
+        new URL(resolveE2EDatabase({ E2E_DATABASE_URL: value }).databaseUrl)
+          .host
+      ).toBe('127.0.0.1:54329');
+    }
+  );
   it.each([
+    'not a URL',
+    'postgres://',
     'postgres://remote.invalid:54329/postgres',
     'postgres://127.0.0.1:5432/postgres',
     'postgres://127.0.0.1:54329/production',

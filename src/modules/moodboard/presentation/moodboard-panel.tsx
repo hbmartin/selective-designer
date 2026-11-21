@@ -83,7 +83,7 @@ const ItemCard = (props: { item: ItemView; designId: DesignId }) => {
         </span>
       )}
       {item.cutoutRetryable && (
-        <div className="flex items-center gap-1 text-xs text-destructive">
+        <div className="flex items-center gap-1 text-xs text-destructive-text">
           <AlertTriangleIcon className="size-3" />
           {status === 'pending'
             ? t('moodboard:panel.cutoutDelayed')

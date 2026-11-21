@@ -26,10 +26,10 @@ const inputGroupVariants = cva(
     'has-[textarea:disabled]:cursor-not-allowed [&>textarea]:disabled:opacity-50',
 
     // Focus state.
-    'focus-within:border-ring focus-within:ring-[3px] focus-within:ring-ring/50',
+    'focus-within:border-ring focus-within:ring-[3px] focus-within:ring-ring focus-within:ring-offset-2 focus-within:ring-offset-background',
 
     // Error state.
-    'has-[[data-slot][aria-invalid=true]]:border-destructive has-[[data-slot][aria-invalid=true]]:ring-destructive/20 dark:has-[[data-slot][aria-invalid=true]]:ring-destructive/40'
+    'has-[[data-slot][aria-invalid=true]]:border-destructive has-[[data-slot][aria-invalid=true]]:ring-destructive/20 has-[[data-slot][aria-invalid=true]]:focus-within:ring-ring dark:has-[[data-slot][aria-invalid=true]]:ring-destructive/40 dark:has-[[data-slot][aria-invalid=true]]:focus-within:ring-ring'
   ),
   {
     variants: {

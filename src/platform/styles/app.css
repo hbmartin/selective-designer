@@ -120,7 +120,9 @@
   --brand-foreground: var(--color-white);
   --brand-subtle: var(--color-steel-100);
   --brand-subtle-foreground: var(--color-steel-700);
-  --destructive: var(--color-negative-600);
+  --destructive: var(--color-negative-700);
+  --destructive-hover: var(--color-negative-800);
+  --destructive-text: var(--color-negative-700);
   --destructive-foreground: var(--color-negative-50);
   --border: var(--color-neutral-200);
   --input: var(--color-neutral-200);
@@ -192,6 +194,8 @@
   --brand-subtle: color-mix(in oklch, var(--color-steel-500) 18%, transparent);
   --brand-subtle-foreground: var(--color-steel-200);
   --destructive: var(--color-negative-700);
+  --destructive-hover: var(--color-negative-800);
+  --destructive-text: var(--color-negative-400);
   --destructive-foreground: var(--color-white);
   --border: var(--color-neutral-800);
   --input: var(--color-neutral-800);
@@ -276,6 +280,8 @@
   --color-brand-subtle: var(--brand-subtle);
   --color-brand-subtle-foreground: var(--brand-subtle-foreground);
   --color-destructive: var(--destructive);
+  --color-destructive-hover: var(--destructive-hover);
+  --color-destructive-text: var(--destructive-text);
   --color-destructive-foreground: var(--destructive-foreground);
   --color-border: var(--border);
   --color-input: var(--input);
@@ -321,7 +327,7 @@
 
 @layer base {
   * {
-    @apply border-border outline-ring/50;
+    @apply border-border outline-ring;
   }
   body {
     @apply bg-canvas text-foreground antialiased;

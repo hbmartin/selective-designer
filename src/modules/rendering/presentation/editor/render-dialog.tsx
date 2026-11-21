@@ -27,7 +27,7 @@ import { MODEL_CATALOG } from '../../domain/model-catalog';
 import type { RecipeProblemResponse } from '../../transport/http/rendering-handlers';
 
 const nativeSelectClass =
-  'h-9 w-full rounded-md border border-input bg-background px-2 text-sm shadow-xs outline-none transition-[color,box-shadow] focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50';
+  'h-9 w-full rounded-md border border-input bg-background px-2 text-sm shadow-xs outline-none transition-[color,box-shadow] focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background';
 
 export const RenderDialog = (props: {
   open: boolean;
@@ -128,7 +128,7 @@ export const RenderDialog = (props: {
               <Spinner /> {t('rendering:render.checking')}
             </p>
           ) : response.type === 'problem' ? (
-            <p className="text-sm text-destructive">
+            <p className="text-sm text-destructive-text">
               {describeProblem(response)}
             </p>
           ) : (
@@ -191,7 +191,7 @@ export const RenderDialog = (props: {
                 </section>
               )}
               {!canRender && (
-                <p className="text-sm text-destructive">
+                <p className="text-sm text-destructive-text">
                   {t('rendering:render.noModels')}
                 </p>
               )}

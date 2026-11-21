@@ -74,5 +74,25 @@
   {
     "source": "function execute({ title } = process) {}",
     "rules": []
+  },
+  {
+    "source": "const kill = \"title\"; const { [kill]: title } = process;",
+    "rules": []
+  },
+  {
+    "source": "const method = \"kill\"; const { [method]: signal } = process;",
+    "rules": []
+  },
+  {
+    "source": "const method = \"kill\"; process[method](-pid);",
+    "rules": []
+  },
+  {
+    "source": "const { [\"ki\" + \"ll\"]: signal } = process;",
+    "rules": []
+  },
+  {
+    "source": "const part = \"kill\"; const { [`${part}`]: signal } = process;",
+    "rules": []
   }
 ]

@@ -71,6 +71,38 @@ export function signalFixtureGroup(
   }
 }
 
+/** Signal one freshly verified descendant, without terminating its whole group. */
+export function signalFixtureProcess(
+  original: ProcessRow,
+  signal: NodeJS.Signals,
+  rows = inspectFixtureProcesses()
+) {
+  const current = rows.get(original.pid);
+  if (!current || current.state.startsWith('Z')) return;
+  if (
+    original.pid <= 1 ||
+    current.started !== original.started ||
+    current.parent !== original.parent ||
+    current.group !== original.group
+  )
+    throw new Error('Fixture process identity changed');
+  const visited = new Set<number>();
+  let ancestor = rows.get(current.parent);
+  while (ancestor && !visited.has(ancestor.pid)) {
+    if (ancestor.pid === process.pid) {
+      try {
+        process.kill(current.pid, signal);
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== 'ESRCH') throw error;
+      }
+      return;
+    }
+    visited.add(ancestor.pid);
+    ancestor = rows.get(ancestor.parent);
+  }
+  throw new Error('Fixture process is not an owned descendant');
+}
+
 export function validateDetachedFixtureGroup(
   pid: number,
   roots: ReadonlySet<number>,

@@ -134,3 +134,13 @@ Mutation testing is intentionally slower. Use scoped commands during deep work, 
 ### Focused detection write recovery
 
 `pnpm test:integration tests/integration/composition/image-detection-intent.integration.test.ts` checks rollback, retries, and commit reconciliation through the local test database driver. To exercise PostgreSQL server-raised faults, set `RECOVERY_TEST_DATABASE_URL` to a disposable direct loopback PostgreSQL database whose name starts with `selective_designer_recovery_test_`, then run the same command. The suite applies migrations and truncates that database. The loopback connection must not tunnel to a remote database. The default socket emulator uses driver-shaped failures around real transaction rollbacks because repeated server error responses are not supported reliably by its protocol bridge.
+
+## E2E server ownership
+
+`pnpm e2e:webserver` loads `.env` then `.env.example` without replacing inherited settings, applies test labels and disabled email, and selects the disposable loopback binding. Blank `E2E_DATABASE_URL` values use the default; malformed and foreign targets fail with a credential-free diagnostic. The launcher owns the in-memory PGlite database, socket listener, and Vite development server. Validation, migrations, seed, and build-info generation reuse their existing Node entrypoints in finite child processes. No nested package-manager command owns a server.
+
+SIGINT/SIGTERM during startup or after readiness stops the active setup child and closes both listeners within ten seconds. Vite's awaited final-close hook includes database cleanup; a Vite restart preserves the database. Lifecycle regressions signal only the freshly verified launcher PID. Process-group signaling is reserved for emergency test cleanup so it cannot conceal an ownership defect. Normal Playwright group teardown remains supported.
+
+The fixture signaling policy decodes literal property names only: `kill`, `"kill"`, and computed string/no-substitution-template literals. Computed identifiers, concatenation, and interpolated templates are expressions, not names. Both the AST check and real Semgrep corpus document this limit; they do not perform constant propagation or claim general dynamic-access analysis. Synthetic signal mocks must remain persistent.
+
+Contrast measurements reject unsupported colors, opacity, images, filters, and blending rather than returning a plausible incorrect ratio. Browser coverage measures text and keyboard focus independently in both themes. Review intentional palette and focus changes before updating visual baselines.
