@@ -38,7 +38,11 @@ export const PageOnboarding = () => {
     defaultValues: {
       name: session.data?.user.name ?? '',
     },
-    validators: { onSubmit: zFormFieldsOnboarding() },
+    validators: {
+      onSubmit: submitOnboarding.isSuccess
+        ? undefined
+        : zFormFieldsOnboarding(),
+    },
     onSubmit: async ({ value, formApi }) => {
       if (!submitOnboarding.isSuccess) {
         try {
