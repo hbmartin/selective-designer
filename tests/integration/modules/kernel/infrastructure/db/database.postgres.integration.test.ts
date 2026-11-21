@@ -1,3 +1,4 @@
+import { runBlockedSubmissions } from '@tests/support/blocked-submissions';
 import type { Auth } from '@/modules/auth/infrastructure/better-auth/auth';
 import { SessionGatewayBetterAuth } from '@/modules/auth/infrastructure/better-auth/session-gateway-better-auth';
 import { authIdentity } from '@/modules/auth/infrastructure/drizzle/schema';
@@ -69,47 +70,32 @@ async function submitWithContention(
   >[1][],
   observe: (waiting: () => Promise<number | undefined>) => Promise<void>
 ) {
-  let unlock!: () => void;
-  let announceLock!: () => void;
-  const release = new Promise<void>((resolve) => {
-    unlock = resolve;
+  return runBlockedSubmissions({
+    block: (announceLock, release) =>
+      initializedDb.transaction(async (tx) => {
+        await tx
+          .select({ id: userTable.id })
+          .from(userTable)
+          .where(eq(userTable.id, 'user-1'))
+          .for('update');
+        announceLock();
+        await release;
+      }),
+    submissions: connections.map(
+      (connection, index) => () =>
+        createAccountRepository({ db: connection }).submitOnboarding(
+          unwrapParseResult(toUserId('user-1')),
+          submissions[index]!
+        )
+    ),
+    observe: () =>
+      observe(async () => {
+        const waiting = await initializedDb.$client.query<{ count: number }>(
+          "select count(*)::int as count from pg_stat_activity where datname = current_database() and wait_event_type = 'Lock' and query ilike 'update %'"
+        );
+        return waiting.rows[0]?.count;
+      }),
   });
-  const locked = new Promise<void>((resolve) => {
-    announceLock = resolve;
-  });
-  const blocker = initializedDb.transaction(async (tx) => {
-    await tx
-      .select({ id: userTable.id })
-      .from(userTable)
-      .where(eq(userTable.id, 'user-1'))
-      .for('update');
-    announceLock();
-    await release;
-  });
-  await locked;
-  const pending = Promise.all(
-    connections.map((connection, index) =>
-      createAccountRepository({ db: connection }).submitOnboarding(
-        unwrapParseResult(toUserId('user-1')),
-        submissions[index]!
-      )
-    )
-  );
-  void pending.catch(() => undefined);
-  try {
-    await observe(async () => {
-      const waiting = await initializedDb.$client.query<{
-        count: number;
-      }>(
-        "select count(*)::int as count from pg_stat_activity where datname = current_database() and wait_event_type = 'Lock' and query ilike 'update %'"
-      );
-      return waiting.rows[0]?.count;
-    });
-  } finally {
-    unlock();
-    await Promise.allSettled([blocker, pending]);
-  }
-  return await pending;
 }
 
 describe('PostgreSQL database integration', () => {
@@ -229,6 +215,60 @@ describe('PostgreSQL database integration', () => {
         )?.onboardedAt
       ).toBeInstanceOf(Date);
     } finally {
+      await other.$close();
+    }
+  });
+
+  it('propagates lock-holder failure before readiness without waiting forever', async () => {
+    const initializedDb = getInitializedDb(db);
+    const failure = new Error('Lock holder could not start');
+    const transaction = vi
+      .spyOn(initializedDb, 'transaction')
+      .mockRejectedValueOnce(failure);
+    const observe = vi.fn(async () => {});
+    try {
+      await expect(
+        submitWithContention(initializedDb, [], [], observe)
+      ).rejects.toBe(failure);
+      expect(observe).not.toHaveBeenCalled();
+    } finally {
+      transaction.mockRestore();
+    }
+  });
+
+  it('reports a real lock-holder rollback after release and drains both updates', async () => {
+    const initializedDb = getInitializedDb(db);
+    await initializedDb.insert(userTable).values(makeUserRow());
+    const other = createDbClient({ driver: 'node-pg', url: databaseUrl });
+    const failure = new Error('Lock holder rolled back');
+    const original = initializedDb.transaction.bind(initializedDb);
+    const transaction = vi
+      .spyOn(initializedDb, 'transaction')
+      .mockImplementationOnce((callback, config) =>
+        original(async (tx) => {
+          await callback(tx);
+          throw failure;
+        }, config)
+      );
+    try {
+      await expect(
+        submitWithContention(
+          initializedDb,
+          [initializedDb, other],
+          [1, 2].map((index) => ({
+            name: testAccountName(`Candidate ${index}`),
+            onboardedAt: new Date(),
+          })),
+          async (waiting) => {
+            await expect.poll(waiting, { timeout: 10_000 }).toBe(2);
+          }
+        )
+      ).rejects.toBe(failure);
+      const pool = other.$client as Pool;
+      expect(pool.waitingCount).toBe(0);
+      expect(pool.idleCount).toBe(pool.totalCount);
+    } finally {
+      transaction.mockRestore();
       await other.$close();
     }
   });
