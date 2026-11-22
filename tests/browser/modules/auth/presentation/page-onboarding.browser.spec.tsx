@@ -6,6 +6,7 @@ import { render } from 'vitest-browser-react';
 
 import { PageOnboarding } from '@/modules/auth/presentation/page-onboarding';
 import '@/platform/lib/i18n';
+import { ACCOUNT_NAME_MAX_LENGTH } from '@/modules/account';
 
 const mocks = vi.hoisted(() => ({
   save: vi.fn(),
@@ -128,6 +129,36 @@ test('retries route invalidation without resaving and uses the authoritative nam
   expect(mocks.success).toHaveBeenCalledWith(
     expect.stringContaining('Concurrent Winner')
   );
+});
+
+test.each(['', 'x'.repeat(ACCOUNT_NAME_MAX_LENGTH + 1)])(
+  'retries completion with an authoritative name outside the input schema (%j)',
+  async (savedName) => {
+    mocks.invalidate.mockRejectedValueOnce(new Error('Route unavailable'));
+    mocks.refetch.mockResolvedValue({ data: { user: { name: savedName } } });
+    const { submit, name } = renderOnboarding();
+    await userEvent.click(submit);
+    await expect.poll(() => mocks.error.mock.calls.length).toBe(1);
+    await expect.element(name).toHaveValue(savedName);
+    await expect.element(name).toHaveAttribute('readonly');
+    await expect.element(submit).toBeEnabled();
+    await userEvent.click(submit);
+    await expect.poll(() => mocks.success.mock.calls.length).toBe(1);
+    expect(mocks.save).toHaveBeenCalledTimes(1);
+    expect(mocks.refetch).toHaveBeenCalledTimes(2);
+    expect(mocks.invalidate).toHaveBeenCalledTimes(2);
+    await expect.element(name).toHaveValue(savedName);
+  }
+);
+
+test('validates the editable name before the first save', async () => {
+  const { submit, name } = renderOnboarding();
+  await userEvent.fill(name, '');
+  await userEvent.click(submit);
+  await expect.element(name).toHaveAttribute('aria-invalid', 'true');
+  expect(mocks.save).not.toHaveBeenCalled();
+  expect(mocks.refetch).not.toHaveBeenCalled();
+  await expect.element(name).not.toHaveAttribute('readonly');
 });
 
 test.each(['save', 'refetch', 'invalidate'] as const)(
