@@ -13,7 +13,8 @@ export function inspectFixtureProcesses(timeoutMs = 500) {
   );
   if (result.error || result.status !== 0 || result.stderr.trim()) {
     throw new Error(
-      `Cannot inspect fixture processes: ${result.error?.message ?? result.stderr}; exit ${result.status}`
+      `Cannot inspect fixture processes: ${result.error?.message ?? result.stderr}; exit ${result.status}`,
+      { cause: result.error }
     );
   }
   return parseFixtureProcessSnapshot(result.stdout, process.pid);

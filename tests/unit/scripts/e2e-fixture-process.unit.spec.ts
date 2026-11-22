@@ -10,6 +10,9 @@ const mocks = vi.hoisted(() => ({
   rm: vi.fn(),
 }));
 vi.mock('node:child_process', () => ({ spawn: mocks.spawn }));
+vi.mock('node:timers/promises', () => ({
+  setTimeout: (ms: number) => new Promise((resolve) => setTimeout(resolve, ms)),
+}));
 vi.mock('node:fs/promises', () => ({
   mkdtemp: async () => '/synthetic/e2e-owned',
   writeFile: async () => {},
@@ -141,4 +144,122 @@ it('bounds disposal and retains the root until later verified recovery', async (
   expect(mocks.rm).not.toHaveBeenCalled();
   await fixture.dispose();
   expect(mocks.rm).toHaveBeenCalledOnce();
+});
+
+it.each(['ETIMEDOUT', 'EINTR', 'EAGAIN', 'EBUSY'])(
+  'retries transient %s inspection before granting group authority',
+  async (code) => {
+    mocks.inspect.mockImplementationOnce(() => {
+      throw new Error('Inspection temporarily unavailable', {
+        cause: { code },
+      });
+    });
+    const [fixture] = await Promise.all([
+      launchE2EFixture(),
+      vi.advanceTimersByTimeAsync(20),
+    ]);
+    expect(mocks.inspect).toHaveBeenCalledTimes(2);
+    expect(mocks.validate).toHaveBeenCalledOnce();
+    await fixture.dispose();
+  }
+);
+it('retains the last inspection cause when the original startup budget expires', async () => {
+  const failure = new Error('Inspection timed out', {
+    cause: { code: 'ETIMEDOUT' },
+  });
+  mocks.inspect.mockImplementation(() => {
+    throw failure;
+  });
+  await Promise.all([
+    expect(launchE2EFixture()).rejects.toMatchObject({
+      message: 'Fixture process-group confirmation timed out',
+      cause: failure,
+    }),
+    vi.advanceTimersByTimeAsync(5000),
+  ]);
+  expect(child.kill).toHaveBeenCalledWith('SIGKILL');
+  expect(mocks.validate).not.toHaveBeenCalled();
+});
+it.each(['ENOENT', 'EACCES'])(
+  'does not retry an unsupported inspection with %s',
+  async (code) => {
+    const failure = new Error('Inspection cannot run', { cause: { code } });
+    mocks.inspect.mockImplementationOnce(() => {
+      throw failure;
+    });
+    await expect(launchE2EFixture()).rejects.toBe(failure);
+    expect(mocks.inspect).toHaveBeenCalledOnce();
+  }
+);
+it.each(['inspect', 'signal'] as const)(
+  'falls back to the retained child after cleanup %s fails, retaining the group error',
+  async (stage) => {
+    const fixture = await launchE2EFixture();
+    const failure = new Error('Group cleanup unavailable');
+    mocks[stage].mockImplementationOnce(() => {
+      throw failure;
+    });
+    await expect(fixture.dispose()).rejects.toMatchObject({ cause: failure });
+    expect(child.kill).toHaveBeenCalledWith('SIGKILL');
+    expect(mocks.rm).not.toHaveBeenCalled();
+    await fixture.dispose();
+    expect(mocks.rm).toHaveBeenCalledOnce();
+  }
+);
+it('bounds failed fallback draining without retiring unconfirmed descendants', async () => {
+  const fixture = await launchE2EFixture();
+  const failure = new Error('Group inspection unavailable');
+  mocks.inspect.mockImplementationOnce(() => {
+    throw failure;
+  });
+  child.kill.mockImplementationOnce(() => false);
+  await Promise.all([
+    expect(fixture.dispose()).rejects.toMatchObject({
+      cause: failure,
+      errors: [
+        failure,
+        expect.objectContaining({
+          message: 'Fixture process exit remains unconfirmed',
+        }),
+      ],
+    }),
+    vi.advanceTimersByTimeAsync(3000),
+  ]);
+  expect(mocks.rm).not.toHaveBeenCalled();
+  await fixture.dispose();
+});
+it('accepts buffered IPC delivered after process exit and before disconnect', async () => {
+  const fixture = await launchE2EFixture();
+  child.exitCode = 0;
+  child.emit('exit', 0, null);
+  const message = fixture.message('buffered');
+  child.emit('message', { type: 'buffered' });
+  child.emit('disconnect');
+  child.emit('close', 0, null);
+  const [received] = await Promise.all([
+    message,
+    vi.advanceTimersByTimeAsync(20),
+  ]);
+  expect(received).toEqual({ type: 'buffered' });
+  await fixture.dispose();
+});
+it('reports a missing message only after the IPC channel drains', async () => {
+  const fixture = await launchE2EFixture();
+  child.emit('message', { type: 'last' });
+  child.emit('disconnect');
+  await expect(fixture.message('last')).resolves.toEqual({ type: 'last' });
+  await expect(fixture.message('absent')).rejects.toThrow(
+    'IPC closed before absent'
+  );
+  await fixture.dispose();
+});
+it('retains the twenty-second message deadline when IPC remains open', async () => {
+  const fixture = await launchE2EFixture();
+  await Promise.all([
+    expect(fixture.message('absent')).rejects.toThrow(
+      'message timed out: absent'
+    ),
+    vi.advanceTimersByTimeAsync(20_000),
+  ]);
+  await fixture.dispose();
 });
