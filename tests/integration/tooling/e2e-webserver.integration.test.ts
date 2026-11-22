@@ -5,6 +5,7 @@ import {
   inspectFixtureProcesses,
   fixtureGroupIsLive,
   signalFixtureProcess,
+  signalFixtureGroup,
 } from '@tests/support/fixture-process-groups';
 
 import {
@@ -413,3 +414,119 @@ it.each(['SIGINT', 'SIGTERM'] as const)(
   },
   30_000
 );
+
+it.each(['SIGINT', 'SIGTERM'] as const)(
+  'cancels setup successfully after verified process-group %s',
+  async (signal) => {
+    const fixture = await launch('waiting');
+    try {
+      await expect
+        .poll(fixture.output, { timeout: 20_000 })
+        .toContain('Fixture setup waiting');
+      signalFixtureGroup(fixture.group, signal, inspectFixtureProcesses());
+      expect(await fixture.waitForExit()).toEqual([0, null]);
+      expect(fixture.output()).not.toContain('E2E startup failed');
+      await expectListenersClosed(fixture);
+    } finally {
+      await fixture.dispose();
+    }
+  },
+  30_000
+);
+it('joins repeated Ctrl-C while final output is held without an extra SIGINT listener', async () => {
+  const fixture = await launch('final-flush');
+  try {
+    await fixture.ready();
+    signalFixtureProcess(fixture.identity, 'SIGINT');
+    await fixture.message('flush-held');
+    signalFixtureProcess(fixture.identity, 'SIGINT');
+    fixture.child.send('ping-during-flush');
+    await fixture.message('pong-during-flush');
+    expect(fixture.child.exitCode).toBeNull();
+    expect(fixture.child.signalCode).toBeNull();
+    fixture.child.send('release-flush');
+    expect(await fixture.waitForExit()).toEqual([0, null]);
+    await expectListenersClosed(fixture);
+  } finally {
+    await fixture.dispose();
+  }
+}, 30_000);
+it.each(['restart-fail', 'restart-recover'])(
+  'preserves the active server and database through %s and closes all instances',
+  async (mode) => {
+    const fixture = await launch(mode);
+    let client: Client | undefined;
+    try {
+      const ready = await fixture.ready();
+      client = new Client({ connectionString: ready.databaseUrl });
+      await client.connect();
+      await client.query(
+        'create table partial_restart(value integer); insert into partial_restart values(42)'
+      );
+      const rounds = mode === 'restart-recover' ? 3 : 1;
+      for (let round = 0; round < rounds; round++) {
+        const count = fixture.messages.filter(
+          (message) => message.type === 'restarted'
+        ).length;
+        fixture.child.send('restart');
+        await expect
+          .poll(
+            () =>
+              fixture.messages.filter((message) => message.type === 'restarted')
+                .length,
+            { timeout: 20_000 }
+          )
+          .toBe(count + 1);
+        expect(
+          (await client.query('select value from partial_restart')).rows
+        ).toEqual([{ value: 42 }]);
+        expect((await fetch(`http://127.0.0.1:${ready.http}/`)).status).toBe(
+          200
+        );
+      }
+      expect(fixture.output()).toContain('server restart failed');
+      await client.end();
+      client = undefined;
+      fixture.child.send('close');
+      expect(await fixture.message('closed')).toMatchObject({
+        watchersClosed: true,
+        instances: rounds + 1,
+      });
+      fixture.child.send('ping-after-close');
+      await fixture.message('pong-after-close');
+      await expectListenersClosed(fixture);
+      const replacement = await launch('ready', {
+        database: ready.database,
+        http: ready.http,
+      });
+      try {
+        expect(await replacement.ready()).toMatchObject({
+          database: ready.database,
+          http: ready.http,
+        });
+      } finally {
+        await replacement.dispose();
+      }
+    } finally {
+      await client?.end();
+      await fixture.dispose();
+    }
+  },
+  60_000
+);
+it('warns before forcing exit at the terminal deadline when final flushing stalls', async () => {
+  const fixture = await launch('final-flush-stalled');
+  try {
+    await fixture.ready();
+    signalFixtureProcess(fixture.identity, 'SIGINT');
+    await fixture.message('flush-held');
+    signalFixtureProcess(fixture.identity, 'SIGINT');
+    expect(await fixture.waitForExit()).toEqual([1, null]);
+    expect(fixture.output()).toContain(
+      'shutdown remains pending after nine seconds'
+    );
+    await expectListenersClosed(fixture);
+  } finally {
+    await fixture.dispose();
+  }
+}, 30_000);

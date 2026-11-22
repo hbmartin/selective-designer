@@ -18,6 +18,8 @@ export type E2EFixtureMessage = {
   httpPort?: number;
   pid?: number;
   exitCode?: string | number;
+  watchersClosed?: boolean;
+  instances?: number;
 };
 type Exit = {
   status: number | null;
@@ -35,9 +37,15 @@ export async function launchE2EFixture(
   let exited: Promise<Exit> | undefined;
   let closed: Promise<void> | undefined;
   let spawnError: Error | undefined;
+  let ipcDrained = false;
   const transportErrors: Error[] = [];
   const messages: E2EFixtureMessage[] = [];
   let output = '';
+
+  function stopDirectChild() {
+    if (child && child.exitCode === null && child.signalCode === null)
+      child.kill('SIGKILL');
+  }
 
   async function waitForExit(deadline = performance.now() + 12_000) {
     if (!exited || !closed) throw new Error('Fixture did not spawn');
@@ -63,16 +71,17 @@ export async function launchE2EFixture(
           Math.max(1, Math.ceil(deadline - performance.now()))
         );
         signalFixtureGroup(group, 'SIGKILL', rows);
-      } else if (
-        child &&
-        child.exitCode === null &&
-        child.signalCode === null
-      ) {
+      } else {
         // This retained direct-child handle does not authorize a group signal.
-        child.kill('SIGKILL');
+        stopDirectChild();
       }
     } catch (error) {
       failures.push(error);
+      try {
+        stopDirectChild();
+      } catch (fallbackError) {
+        failures.push(fallbackError);
+      }
     }
     if (exited && closed) {
       try {
@@ -133,6 +142,9 @@ export async function launchE2EFixture(
     launched.on('message', (message: E2EFixtureMessage) =>
       messages.push(message)
     );
+    launched.once('disconnect', () => {
+      ipcDrained = true;
+    });
     exited = new Promise((resolve) => {
       launched.on('error', (error) => {
         if (launched.pid === undefined) {
@@ -146,20 +158,39 @@ export async function launchE2EFixture(
       launched.once('close', () => resolve());
     });
     const deadline = performance.now() + 5_000;
-    let rows = inspectFixtureProcesses(
-      Math.max(1, Math.ceil(deadline - performance.now()))
-    );
-    while (!launched.pid || rows.get(launched.pid)?.group !== launched.pid) {
+    let lastInspectionError: unknown;
+    let rows: ReturnType<typeof inspectFixtureProcesses>;
+    while (true) {
       if (spawnError) throw spawnError;
       if (launched.exitCode !== null || launched.signalCode !== null)
         throw new Error('Fixture exited before process-group confirmation');
       const remaining = deadline - performance.now();
       if (remaining <= 0)
-        throw new Error('Fixture process-group confirmation timed out');
-      await delay(Math.min(20, remaining));
-      rows = inspectFixtureProcesses(
-        Math.max(1, Math.ceil(deadline - performance.now()))
-      );
+        throw new Error('Fixture process-group confirmation timed out', {
+          cause: lastInspectionError,
+        });
+      try {
+        rows = inspectFixtureProcesses(Math.max(1, Math.ceil(remaining)));
+        if (
+          performance.now() < deadline &&
+          launched.pid &&
+          rows.get(launched.pid)?.group === launched.pid
+        )
+          break;
+      } catch (error) {
+        const cause = error instanceof Error ? error.cause : undefined;
+        if (
+          !cause ||
+          typeof cause !== 'object' ||
+          !('code' in cause) ||
+          !['ETIMEDOUT', 'EINTR', 'EAGAIN', 'EBUSY'].includes(
+            String(cause.code)
+          )
+        )
+          throw error;
+        lastInspectionError = error;
+      }
+      await delay(Math.max(0, Math.min(20, deadline - performance.now())));
     }
     const identity = rows.get(launched.pid!)!;
     group = validateDetachedFixtureGroup(
@@ -177,8 +208,8 @@ export async function launchE2EFixture(
       async message(type: string) {
         const deadline = performance.now() + 20_000;
         while (!messages.some((message) => message.type === type)) {
-          if (launched.exitCode !== null || launched.signalCode !== null)
-            throw new Error(`Fixture exited before ${type}: ${output}`);
+          if (ipcDrained)
+            throw new Error(`Fixture IPC closed before ${type}: ${output}`);
           const remaining = deadline - performance.now();
           if (remaining <= 0)
             throw new Error(`Fixture message timed out: ${type}`);

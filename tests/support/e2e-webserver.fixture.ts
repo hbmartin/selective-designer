@@ -1,5 +1,6 @@
 import type { AddressInfo } from 'node:net';
 import { spawn } from 'node:child_process';
+import type { ViteDevServer } from 'vite';
 import {
   runE2EWebserverCommand,
   startE2EWebserver,
@@ -11,8 +12,30 @@ const ports = JSON.parse(requestedPorts) as {
   database?: number;
   http?: number;
 };
-process.on('SIGINT', () => console.log('Fixture signal received'));
-process.on('SIGTERM', () => console.log('Fixture signal received'));
+if (!mode.startsWith('final-flush')) {
+  process.on('SIGINT', () => console.log('Fixture signal received'));
+  process.on('SIGTERM', () => console.log('Fixture signal received'));
+}
+const servers: ViteDevServer[] = [];
+const watchers: { closed: boolean }[] = [];
+let restartFailures =
+  mode === 'restart-fail' ? 1 : mode === 'restart-recover' ? 2 : 0;
+const heldOutput: (() => void)[] = [];
+let emptyWrites = 0;
+let outputReleased = false;
+if (mode.startsWith('final-flush')) {
+  for (const stream of [process.stdout, process.stderr]) {
+    const write = stream.write.bind(stream);
+    stream.write = ((...args: Parameters<typeof stream.write>) => {
+      if (args[0] === '' && ++emptyWrites > 2 && !outputReleased) {
+        heldOutput.push(() => write(...args));
+        process.send?.({ type: 'flush-held' });
+        return true;
+      }
+      return write(...args);
+    }) as typeof stream.write;
+  }
+}
 const released = new Promise<void>((resolve) =>
   process.on('message', (message: unknown) => {
     if (message === 'release') resolve();
@@ -53,6 +76,18 @@ try {
         {
           name: 'fixture-lifecycle',
           async configureServer(server) {
+            servers.push(server);
+            const watcher = { closed: false };
+            watchers.push(watcher);
+            const closeWatcher = server.watcher.close.bind(server.watcher);
+            server.watcher.close = async () => {
+              await closeWatcher();
+              watcher.closed = true;
+            };
+            if (servers.length > 1 && restartFailures > 0) {
+              restartFailures--;
+              throw new Error('Fixture controlled restart failure');
+            }
             if (mode === 'nonzero-status' || mode.startsWith('programmatic'))
               process.exitCode = 7;
             if (mode.includes('lingering') || mode === 'cleanup-failure')
@@ -138,13 +173,22 @@ try {
           .then(() => process.send?.({ type: 'restarted' }));
       if (message === 'close')
         void Promise.all([owner.close(), owner.close()]).then(
-          () => process.send?.({ type: 'closed' }),
+          () =>
+            process.send?.({
+              type: 'closed',
+              watchersClosed: watchers.every((watcher) => watcher.closed),
+              instances: servers.length,
+            }),
           () =>
             process.send?.({
               type: 'close-failed',
               exitCode: process.exitCode ?? 'unset',
             })
         );
+      if (message === 'release-flush') {
+        outputReleased = true;
+        for (const write of heldOutput.splice(0)) write();
+      }
       if (typeof message === 'string' && message.startsWith('ping'))
         process.send?.({
           type: message.replace('ping', 'pong'),

@@ -18,9 +18,24 @@ export function createE2ETerminal() {
   let deadline: ReturnType<typeof setTimeout> | undefined;
   let forceStop = () => {};
   const reported = new Set<unknown>();
+  function report(error: unknown, label: string) {
+    if (reported.has(error)) return;
+    reported.add(error);
+    if (error instanceof AggregateError && error.errors.length) {
+      for (const failure of error.errors) report(failure, label);
+    } else console.error(`${label}: ${describeE2EFailure(error)}`);
+  }
   function begin() {
     if (deadline) return;
     process.exitCode ??= 0;
+    setTimeout(() => {
+      console.error(
+        'E2E webserver shutdown remains pending after nine seconds; hard stop at ten seconds'
+      );
+      void flushE2EOutput().catch((error: unknown) =>
+        report(error, 'E2E output flush failed')
+      );
+    }, 9_000);
     deadline = setTimeout(() => {
       try {
         forceStop();
@@ -35,15 +50,14 @@ export function createE2ETerminal() {
       return deadline !== undefined;
     },
     begin,
+    report,
     setForceStop(action: () => void) {
       forceStop = action;
     },
     fail(error: unknown, label: string) {
       begin();
       process.exitCode = 1;
-      if (reported.has(error)) return;
-      reported.add(error);
-      console.error(`${label}: ${describeE2EFailure(error)}`);
+      report(error, label);
     },
     async finish(): Promise<never> {
       begin();
