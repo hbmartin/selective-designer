@@ -23,13 +23,17 @@ export async function runBlockedSubmissions<T>({
   );
   const pending: Promise<T>[] = [];
   let primaryFailure: { error: unknown } | undefined;
+  let blockerFailedBeforeReadiness = false;
   try {
     const ready = await Promise.race([
       locked.then(() => ({ type: 'locked' as const })),
       blockerOutcome.then((outcome) => ({ type: 'settled' as const, outcome })),
     ]);
     if (ready.type === 'settled') {
-      if (ready.outcome.status === 'rejected') throw ready.outcome.reason;
+      if (ready.outcome.status === 'rejected') {
+        blockerFailedBeforeReadiness = true;
+        throw ready.outcome.reason;
+      }
       throw new Error('Lock holder completed before announcing readiness');
     }
     for (const submit of submissions) {
@@ -47,8 +51,21 @@ export async function runBlockedSubmissions<T>({
     blockerOutcome,
     Promise.allSettled(pending),
   ]);
-  if (primaryFailure) throw primaryFailure.error;
-  if (blocked.status === 'rejected') throw blocked.reason;
+  const failures: unknown[] = [];
+  if (primaryFailure && !blockerFailedBeforeReadiness)
+    failures.push(primaryFailure.error);
+  if (blocked.status === 'rejected') failures.push(blocked.reason);
+  for (const outcome of completed)
+    if (outcome.status === 'rejected') failures.push(outcome.reason);
+  if (failures.length === 1) throw failures[0];
+  if (failures.length > 1) {
+    const primary = failures[0];
+    throw new AggregateError(
+      failures,
+      primary instanceof Error ? primary.message : String(primary),
+      { cause: primary }
+    );
+  }
   return completed.map((outcome) => {
     if (outcome.status === 'rejected') throw outcome.reason;
     return outcome.value;

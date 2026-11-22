@@ -60,24 +60,30 @@ it('propagates a blocker failure after release and drains submissions', async ()
 });
 it('keeps the observation failure ahead of blocker and submission failures', async () => {
   const failure = new Error('poll failed');
+  const blockerFailure = new Error('commit failed');
+  const submissionFailure = new Error('submission failed');
   let released = false;
   await expect(
     runBlockedSubmissions({
       block: async (...args) => {
         await hold(...args);
         released = true;
-        throw new Error('commit failed');
+        throw blockerFailure;
       },
       submissions: [
         async () => {
-          throw new Error('submission failed');
+          throw submissionFailure;
         },
       ],
       observe: async () => {
         throw failure;
       },
     })
-  ).rejects.toBe(failure);
+  ).rejects.toMatchObject({
+    message: failure.message,
+    cause: failure,
+    errors: [failure, blockerFailure, submissionFailure],
+  });
   expect(released).toBe(true);
 });
 it('drains a delayed sibling after an earlier submission rejects', async () => {
@@ -113,6 +119,7 @@ it('reports submission failures in launch order after all operations settle', as
   const first = deferred<number>();
   const later = deferred<void>();
   const failure = new Error('first in launch order');
+  const laterFailure = new Error('later failure');
   const result = runBlockedSubmissions({
     block: hold,
     submissions: [
@@ -136,10 +143,14 @@ it('reports submission failures in launch order after all operations settle', as
           throw failure;
         },
         async () => {
-          throw new Error('later failure');
+          throw laterFailure;
         },
       ],
       observe: async () => {},
     })
-  ).rejects.toBe(failure);
+  ).rejects.toMatchObject({
+    message: failure.message,
+    cause: failure,
+    errors: [failure, laterFailure],
+  });
 });

@@ -1,19 +1,16 @@
-import { spawn } from 'node:child_process';
-import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import net, { type AddressInfo } from 'node:net';
-import os from 'node:os';
-import path from 'node:path';
 import { Client } from 'pg';
 import { expect, it } from 'vitest';
 import {
   inspectFixtureProcesses,
-  signalFixtureGroup,
+  fixtureGroupIsLive,
   signalFixtureProcess,
-  validateDetachedFixtureGroup,
 } from '@tests/support/fixture-process-groups';
 
-type Ports = { database?: number; http?: number };
-type Message = { type: string; databaseUrl?: string; httpPort?: number };
+import {
+  launchE2EFixture as launch,
+  type E2EFixturePorts as Ports,
+} from '@tests/support/e2e-fixture-process';
 
 async function listen(server: net.Server, port = 0) {
   await new Promise<void>((resolve, reject) => {
@@ -42,114 +39,14 @@ async function canListen(port: number) {
     await closeListener(server);
   }
 }
-async function launch(mode = 'ready', requestedPorts: Ports = {}) {
-  const root = await mkdtemp(path.join(os.tmpdir(), 'e2e-owner-'));
-  let group: ReturnType<typeof validateDetachedFixtureGroup> | undefined;
-  let child: ReturnType<typeof spawn> | undefined;
-  let closed: Promise<[number | null, NodeJS.Signals | null]> | undefined;
-  try {
-    await writeFile(path.join(root, 'index.html'), '<h1>Owned server</h1>');
-    child = spawn(
-      process.execPath,
-      [
-        path.resolve('run-jiti.js'),
-        path.resolve('tests/support/e2e-webserver.fixture.ts'),
-        root,
-        mode,
-        JSON.stringify(requestedPorts),
-      ],
-      {
-        detached: true,
-        stdio: ['ignore', 'pipe', 'pipe', 'ipc'],
-        env: {
-          ...process.env,
-          E2E_DATABASE_URL: '',
-          NODE_ENV: 'test',
-          TEST_E2E_SETUP_FAILURE: String(mode.startsWith('failure-')),
-        },
-      }
-    );
-    const launched = child;
-    let output = '';
-    launched.stdout!.on('data', (chunk) => {
-      output += String(chunk);
-    });
-    launched.stderr!.on('data', (chunk) => {
-      output += String(chunk);
-    });
-    const messages: Message[] = [];
-    launched.on('message', (message: Message) => messages.push(message));
-    closed = new Promise((resolve, reject) => {
-      launched.once('error', reject);
-      launched.once('close', (status, signal) => resolve([status, signal]));
-    });
-    void closed.catch(() => undefined);
-    await expect
-      .poll(() => inspectFixtureProcesses().get(launched.pid!)?.group, {
-        timeout: 5000,
-      })
-      .toBe(launched.pid);
-    const rows = inspectFixtureProcesses();
-    const identity = rows.get(launched.pid!)!;
-    group = validateDetachedFixtureGroup(
-      launched.pid!,
-      new Set([process.pid]),
-      rows
-    );
-    const ownedGroup = group;
-    const completion = closed;
-    return {
-      child: launched,
-      messages,
-      identity,
-      output: () => output,
-      async message(type: string) {
-        await expect
-          .poll(() => messages.some((message) => message.type === type), {
-            timeout: 20_000,
-          })
-          .toBe(true);
-        return messages.find((message) => message.type === type)!;
-      },
-      async ready() {
-        const ready = await this.message('ready');
-        const database = await this.message('database-ready');
-        return {
-          databaseUrl: database.databaseUrl!,
-          database: Number(new URL(database.databaseUrl!).port),
-          http: ready.httpPort!,
-        };
-      },
-      async expectListenersClosed() {
-        for (const message of messages) {
-          const port = message.databaseUrl
-            ? Number(new URL(message.databaseUrl).port)
-            : message.httpPort;
-          if (port) expect(await canListen(port)).toBe(true);
-        }
-      },
-      async waitForExit() {
-        await expect
-          .poll(
-            () => launched.exitCode !== null || launched.signalCode !== null,
-            {
-              timeout: 12_000,
-            }
-          )
-          .toBe(true);
-        return completion;
-      },
-      async dispose() {
-        signalFixtureGroup(ownedGroup, 'SIGKILL');
-        await completion;
-        await rm(root, { recursive: true, force: true });
-      },
-    };
-  } catch (error) {
-    if (group) signalFixtureGroup(group, 'SIGKILL');
-    if (closed) await closed.catch(() => undefined);
-    await rm(root, { recursive: true, force: true });
-    throw error;
+async function expectListenersClosed(
+  fixture: Awaited<ReturnType<typeof launch>>
+) {
+  for (const message of fixture.messages) {
+    const port = message.databaseUrl
+      ? Number(new URL(message.databaseUrl).port)
+      : message.httpPort;
+    if (port) expect(await canListen(port)).toBe(true);
   }
 }
 
@@ -168,7 +65,7 @@ it.each(['SIGINT', 'SIGTERM'] as const)(
         signalFixtureProcess(fixture.identity, signal);
         expect(await fixture.waitForExit()).toEqual([0, null]);
         expect(fixture.output()).toContain('Fixture final close');
-        await fixture.expectListenersClosed();
+        await expectListenersClosed(fixture);
       } finally {
         await fixture.dispose();
       }
@@ -183,9 +80,81 @@ it('closes resources idempotently without exiting its caller', async () => {
     await fixture.ready();
     fixture.child.send('close');
     await fixture.message('closed');
+    fixture.child.send('ping');
+    await fixture.message('pong');
     expect(fixture.child.exitCode).toBeNull();
     expect(fixture.child.signalCode).toBeNull();
-    await fixture.expectListenersClosed();
+    await expectListenersClosed(fixture);
+  } finally {
+    await fixture.dispose();
+  }
+}, 30_000);
+
+it.each(['programmatic-failure', 'programmatic-hang'])(
+  'remains responsive with unchanged status after %s',
+  async (mode) => {
+    const fixture = await launch(mode);
+    try {
+      await fixture.ready();
+      fixture.child.send('close');
+      const failure = await fixture.message('close-failed');
+      expect(failure.exitCode).toBe(7);
+      fixture.child.send('ping-after-failure');
+      expect((await fixture.message('pong-after-failure')).exitCode).toBe(7);
+      fixture.child.send('release');
+      await expect
+        .poll(async () => {
+          const database = fixture.messages.find(
+            (message) => message.type === 'database-ready'
+          )!;
+          return canListen(Number(new URL(database.databaseUrl!).port));
+        })
+        .toBe(true);
+      fixture.child.send('ping-after-release');
+      expect((await fixture.message('pong-after-release')).exitCode).toBe(7);
+      expect(fixture.child.exitCode).toBeNull();
+    } finally {
+      fixture.child.send('release', () => {});
+      await fixture.dispose();
+    }
+  },
+  30_000
+);
+
+it('bounds inherited-pipe draining and recovers through a previously verified descendant', async () => {
+  const fixture = await launch();
+  try {
+    await fixture.ready();
+    fixture.child.send('start-pipe-holder');
+    const holder = await fixture.message('pipe-holder');
+    await expect
+      .poll(() => inspectFixtureProcesses().get(holder.pid!)?.group)
+      .toBe(fixture.identity.group);
+    const rows = inspectFixtureProcesses();
+    expect(fixtureGroupIsLive(fixture.group, rows)).toBe(true);
+    expect(fixture.group.members?.get(holder.pid!)).toBe(
+      rows.get(holder.pid!)!.started
+    );
+    fixture.child.send('exit-parent');
+    await expect(fixture.waitForExit()).rejects.toThrow(
+      'output drain remains unconfirmed'
+    );
+    expect(fixture.child.exitCode).toBe(0);
+    await fixture.dispose();
+    await expectListenersClosed(fixture);
+  } finally {
+    await fixture.dispose();
+  }
+}, 30_000);
+
+it('exits on CLI startup failure despite a lingering plugin handle', async () => {
+  const fixture = await launch('startup-lingering');
+  try {
+    expect(await fixture.waitForExit()).toEqual([1, null]);
+    expect(fixture.output()).toContain(
+      'E2E startup failed: Fixture primary startup failure'
+    );
+    await expectListenersClosed(fixture);
   } finally {
     await fixture.dispose();
   }
@@ -202,7 +171,7 @@ it.each(['SIGINT', 'SIGTERM'] as const)(
         .toContain('Fixture setup waiting');
       signalFixtureProcess(fixture.identity, signal);
       expect(await fixture.waitForExit()).toEqual([0, null]);
-      await fixture.expectListenersClosed();
+      await expectListenersClosed(fixture);
       expect(fixture.messages.map(({ type }) => type)).not.toContain('ready');
     } finally {
       await fixture.dispose();
@@ -222,7 +191,7 @@ it.each([0, 1, 2, 3, 4])(
       expect(
         fixture.output().match(/Fixture setup completed/g) ?? []
       ).toHaveLength(stage);
-      await fixture.expectListenersClosed();
+      await expectListenersClosed(fixture);
       expect(fixture.messages.map(({ type }) => type)).not.toContain('ready');
     } finally {
       await fixture.dispose();
@@ -250,7 +219,7 @@ it('preserves data through Vite restart, then releases both listeners', async ()
     client = undefined;
     signalFixtureProcess(fixture.identity, 'SIGTERM');
     expect(await fixture.waitForExit()).toEqual([0, null]);
-    await fixture.expectListenersClosed();
+    await expectListenersClosed(fixture);
   } finally {
     await client?.end();
     await fixture.dispose();
@@ -278,7 +247,7 @@ it.each(['database', 'http'] as const)(
         socket.once('end', () => resolve(data));
       });
       expect(response).toBe(marker);
-      await fixture.expectListenersClosed();
+      await expectListenersClosed(fixture);
     } finally {
       await fixture?.dispose();
       await closeListener(sentinel);
@@ -304,7 +273,7 @@ it.each(
       await expect.poll(fixture.output).toContain('Fixture signal received');
       fixture.child.send('release', () => {});
       expect(await fixture.waitForExit()).toEqual([0, null]);
-      await fixture.expectListenersClosed();
+      await expectListenersClosed(fixture);
       expect(fixture.messages.map(({ type }) => type)).not.toContain('ready');
     } finally {
       await fixture.dispose();
@@ -324,7 +293,7 @@ it.each(['SIGINT', 'SIGTERM'] as const)(
       expect(fixture.output()).toContain(
         'E2E cleanup failed: Fixture secondary cleanup failure'
       );
-      await fixture.expectListenersClosed();
+      await expectListenersClosed(fixture);
     } finally {
       await fixture.dispose();
     }
@@ -340,9 +309,9 @@ it('retains the startup failure when final cleanup also fails', async () => {
       'E2E cleanup failed: Fixture secondary cleanup failure'
     );
     expect(fixture.output()).toContain(
-      'Fixture startup failed: Fixture primary startup failure'
+      'E2E startup failed: Fixture primary startup failure'
     );
-    await fixture.expectListenersClosed();
+    await expectListenersClosed(fixture);
   } finally {
     await fixture.dispose();
   }
@@ -356,7 +325,7 @@ it.each(['SIGINT', 'SIGTERM'] as const)(
       await fixture.ready();
       signalFixtureProcess(fixture.identity, signal);
       expect(await fixture.waitForExit()).toEqual([7, null]);
-      await fixture.expectListenersClosed();
+      await expectListenersClosed(fixture);
     } finally {
       await fixture.dispose();
     }
@@ -377,7 +346,67 @@ it.each(['SIGINT', 'SIGTERM'] as const)(
       expect(fixture.output()).toContain(
         'E2E cleanup failed: Fixture secondary cleanup failure'
       );
-      await fixture.expectListenersClosed();
+      await expectListenersClosed(fixture);
+    } finally {
+      await fixture.dispose();
+    }
+  },
+  30_000
+);
+
+it.each(
+  (['SIGINT', 'SIGTERM'] as const).flatMap((signal) =>
+    ['creation', 'listening'].flatMap((stage) =>
+      ['signal-first', 'failure-first'].map((order) => ({
+        signal,
+        stage,
+        order,
+      }))
+    )
+  )
+)(
+  'retains genuine $stage failure with $order $signal',
+  async ({ signal, stage, order }) => {
+    const fixture = await launch(`race-${stage}`);
+    try {
+      await fixture.message('failure-gate');
+      if (order === 'signal-first') {
+        signalFixtureProcess(fixture.identity, signal);
+        await expect.poll(fixture.output).toContain('Fixture signal received');
+      }
+      fixture.child.send('release');
+      await fixture.message('cleanup-gate');
+      if (order === 'failure-first')
+        signalFixtureProcess(fixture.identity, signal);
+      fixture.child.send('finish-cleanup');
+      expect(await fixture.waitForExit()).toEqual([1, null]);
+      expect(fixture.output()).toContain(
+        `E2E startup failed: Fixture genuine ${stage} failure`
+      );
+      await expectListenersClosed(fixture);
+    } finally {
+      fixture.child.send('release', () => {});
+      fixture.child.send('finish-cleanup', () => {});
+      await fixture.dispose();
+    }
+  },
+  30_000
+);
+
+it.each(['SIGINT', 'SIGTERM'] as const)(
+  'reports a setup nonzero exit despite cancellation by %s',
+  async (signal) => {
+    const fixture = await launch('setup-nonzero-on-stop');
+    try {
+      await expect
+        .poll(fixture.output, { timeout: 20_000 })
+        .toContain('Fixture setup exits nonzero on stop');
+      signalFixtureProcess(fixture.identity, signal);
+      expect(await fixture.waitForExit()).toEqual([1, null]);
+      expect(fixture.output()).toContain(
+        'e2e-webserver-nonzero.fixture.ts (2)'
+      );
+      await expectListenersClosed(fixture);
     } finally {
       await fixture.dispose();
     }

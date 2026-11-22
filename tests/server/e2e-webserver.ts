@@ -4,7 +4,13 @@ import { spawn, type ChildProcess } from 'node:child_process';
 import path from 'node:path';
 import type { InlineConfig, ViteDevServer } from 'vite';
 
+import { beforeDeadline } from '../support/promise-deadline';
 import { configureE2EDatabase } from './e2e-database-config';
+import {
+  createE2ETerminal,
+  describeE2EFailure,
+  flushE2EOutput,
+} from './e2e-terminal';
 
 const setupScripts = [
   'src/platform/env/client.ts',
@@ -22,39 +28,65 @@ type E2EWebserverOptions = {
   onDatabaseReady?: (databaseUrl: string) => void;
 };
 
-/** Own the disposable database and HTTP listener for one Playwright invocation. */
-export async function startE2EWebserver(options: E2EWebserverOptions = {}) {
+class E2EStartupCancelled extends Error {
+  constructor() {
+    super('E2E startup cancelled');
+  }
+}
+
+export function startE2EWebserver(options: E2EWebserverOptions = {}) {
+  return startOwnedWebserver(options);
+}
+
+/** The executable boundary also exits on startup failure with lingering handles. */
+export async function runE2EWebserverCommand(
+  options: E2EWebserverOptions = {}
+) {
+  const terminal = createE2ETerminal();
+  try {
+    return await startOwnedWebserver(options, terminal);
+  } catch (error) {
+    terminal.fail(error, 'E2E startup failed');
+    return terminal.finish();
+  }
+}
+
+async function startOwnedWebserver(
+  options: E2EWebserverOptions,
+  commandTerminal?: ReturnType<typeof createE2ETerminal>
+) {
   const config = configureE2EDatabase();
+  const terminal = commandTerminal ?? createE2ETerminal();
   let database: PGlite | undefined;
   let socket: PGLiteSocketServer | undefined;
   let vite: ViteDevServer | undefined;
   let child: ChildProcess | undefined;
   let childResult: Promise<void> | undefined;
+  let requestedChildSignal: NodeJS.Signals | undefined;
   let acquiring: Promise<unknown> | undefined;
   let stopped = false;
   let databaseCleanup: Promise<void> | undefined;
   let shutdown: Promise<void> | undefined;
-  let signalShutdown: Promise<void> | undefined;
-  let deadline: NodeJS.Timeout | undefined;
+  let signalShutdown: Promise<never> | undefined;
+  let startupFailure: { error: unknown } | undefined;
   const reportedCleanupErrors = new Set<unknown>();
 
-  function reportCleanupError(error: unknown) {
-    process.exitCode = 1;
+  terminal.setForceStop(() => {
+    child?.kill('SIGKILL');
+  });
+
+  function recordStartupFailure(error: unknown) {
+    if (error instanceof E2EStartupCancelled) return;
+    startupFailure ??= { error };
+    if (commandTerminal || terminal.active)
+      terminal.fail(error, 'E2E startup failed');
+  }
+  function recordCleanupFailure(error: unknown) {
     if (reportedCleanupErrors.has(error)) return;
     reportedCleanupErrors.add(error);
-    console.error(
-      `E2E cleanup failed: ${error instanceof Error ? error.message : String(error)}`
-    );
+    if (terminal.active) terminal.fail(error, 'E2E cleanup failed');
+    else console.error(`E2E cleanup failed: ${describeE2EFailure(error)}`);
   }
-  async function flushOutput() {
-    await Promise.all(
-      [process.stdout, process.stderr].map(
-        (stream) =>
-          new Promise<void>((resolve) => stream.write('', () => resolve()))
-      )
-    );
-  }
-
   function closeDatabase() {
     databaseCleanup ??= (async () => {
       try {
@@ -65,50 +97,79 @@ export async function startE2EWebserver(options: E2EWebserverOptions = {}) {
     })();
     return databaseCleanup;
   }
+  async function settleStartupOperation() {
+    // Never await the outer startup promise: its error path joins close().
+    await Promise.allSettled([acquiring, childResult]);
+  }
   function close() {
     stopped = true;
-    shutdown ??= (async () => {
-      deadline = setTimeout(() => {
-        child?.kill('SIGKILL');
-        console.error('E2E webserver shutdown exceeded ten seconds');
-        process.exit(1);
-      }, 10_000);
+    if (shutdown) return shutdown;
+    const cleanup = (async () => {
       try {
-        child?.kill('SIGTERM');
-        await Promise.allSettled([acquiring, childResult]);
+        if (child?.kill('SIGTERM')) requestedChildSignal = 'SIGTERM';
+        await settleStartupOperation();
         try {
           await vite?.close();
         } finally {
           await closeDatabase();
         }
       } finally {
-        if (!signalShutdown) {
-          clearTimeout(deadline);
-          process.off('SIGINT', onSignal);
-          process.off('SIGTERM', onSignal);
-        }
+        process.off('SIGINT', onSignal);
+        process.off('SIGTERM', onSignal);
       }
     })();
+    // Retain and observe the original work even if the bounded caller times out.
+    void cleanup.catch(recordCleanupFailure);
+    shutdown = beforeDeadline(
+      cleanup,
+      performance.now() + 10_000,
+      'E2E resource cleanup exceeded ten seconds'
+    ).catch((error: unknown) => {
+      recordCleanupFailure(error);
+      throw error;
+    });
     return shutdown;
   }
   function onSignal() {
     stopped = true;
-    process.exitCode ??= 0;
+    terminal.begin();
+    if (startupFailure)
+      terminal.fail(startupFailure.error, 'E2E startup failed');
     signalShutdown ??= Promise.resolve().then(async () => {
       try {
         await close();
       } catch (error) {
-        reportCleanupError(error);
+        terminal.fail(error, 'E2E cleanup failed');
       }
-      await flushOutput();
-      process.exit(process.exitCode ?? 0);
+      return terminal.finish();
     });
   }
+  function requireRunning() {
+    if (stopped) throw new E2EStartupCancelled();
+  }
   async function acquire<T>(pending: Promise<T>, save: (value: T) => void) {
-    acquiring = pending.then(save);
-    await acquiring;
-    acquiring = undefined;
-    if (stopped) throw new Error('E2E startup cancelled');
+    const operation = pending.then(save, (error: unknown) => {
+      recordStartupFailure(error);
+      throw error;
+    });
+    acquiring = operation;
+    try {
+      await operation;
+    } finally {
+      if (acquiring === operation) acquiring = undefined;
+    }
+    requireRunning();
+  }
+  async function finalViteClose() {
+    await settleStartupOperation();
+    try {
+      await closeDatabase();
+    } catch (error) {
+      recordCleanupFailure(error);
+      throw error;
+    } finally {
+      if (terminal.active) await flushE2EOutput();
+    }
   }
   process.on('SIGINT', onSignal);
   process.on('SIGTERM', onSignal);
@@ -132,8 +193,9 @@ export async function startE2EWebserver(options: E2EWebserverOptions = {}) {
     });
     options.onDatabaseReady?.(databaseUrl.href);
     for (const script of options.setupScripts ?? setupScripts) {
-      if (stopped) throw new Error('E2E startup cancelled');
+      requireRunning();
       console.log(`E2E setup: ${script}`);
+      requestedChildSignal = undefined;
       child = spawn(
         process.execPath,
         [path.resolve('run-jiti.js'), path.resolve(script)],
@@ -143,62 +205,63 @@ export async function startE2EWebserver(options: E2EWebserverOptions = {}) {
         }
       );
       childResult = new Promise<void>((resolve, reject) => {
-        child!.once('error', reject);
+        child!.once('error', (error) => {
+          recordStartupFailure(error);
+          reject(error);
+        });
         child!.once('close', (status, signal) => {
-          if (status === 0) resolve();
-          else
-            reject(
-              new Error(`E2E setup failed: ${script} (${signal ?? status})`)
-            );
+          if (status === 0) {
+            resolve();
+            return;
+          }
+          const error =
+            signal && signal === requestedChildSignal
+              ? new E2EStartupCancelled()
+              : new Error(`E2E setup failed: ${script} (${signal ?? status})`);
+          recordStartupFailure(error);
+          reject(error);
         });
       });
       await childResult;
       child = undefined;
       childResult = undefined;
     }
-    if (stopped) throw new Error('E2E startup cancelled');
-    const { createServer } = await import('vite');
-    if (stopped) throw new Error('E2E startup cancelled');
+    requireRunning();
+    let createServer!: (typeof import('vite'))['createServer'];
+    await acquire(import('vite'), (module) => {
+      createServer = module.createServer;
+    });
     await acquire(
       createServer({
         ...options.viteConfig,
         plugins: [
-          ...(options.viteConfig?.plugins ?? []),
           {
             name: 'e2e-owned-database',
             configureServer(server) {
-              // Vite's SIGTERM handler also calls this public method and exits.
-              // Report failure before that handler can observe its rejection.
+              // Retain a public handle even when a later creation hook fails.
+              vite = server;
               const closeVite = server.close.bind(server);
               server.close = async () => {
                 try {
                   await closeVite();
                 } catch (error) {
-                  reportCleanupError(error);
-                  // Another final-close hook can reject before our hook settles.
+                  recordCleanupFailure(error);
                   try {
-                    await closeDatabase();
+                    await finalViteClose();
                   } catch (databaseError) {
-                    reportCleanupError(databaseError);
+                    recordCleanupFailure(databaseError);
                   }
                   throw error;
                 } finally {
-                  if (signalShutdown) await flushOutput();
+                  if (terminal.active) await flushE2EOutput();
                 }
               };
             },
             async closeServer({ reason }) {
-              if (reason !== 'close') return;
-              try {
-                await closeDatabase();
-              } catch (error) {
-                reportCleanupError(error);
-                throw error;
-              } finally {
-                if (signalShutdown) await flushOutput();
-              }
+              if (reason === 'close') await finalViteClose();
             },
           },
+          ...(options.viteConfig?.plugins ?? []),
         ],
       }),
       (server) => {
@@ -209,14 +272,14 @@ export async function startE2EWebserver(options: E2EWebserverOptions = {}) {
     console.log('E2E webserver ready');
     return { vite: vite!, close, databaseUrl: databaseUrl.href };
   } catch (error) {
-    const cancelled = stopped;
+    recordStartupFailure(error);
     try {
       await close();
     } catch (cleanupError) {
-      reportCleanupError(cleanupError);
-      if (cancelled) throw cleanupError;
+      recordCleanupFailure(cleanupError);
+      if (error instanceof E2EStartupCancelled) throw cleanupError;
     }
-    if (!cancelled) throw error;
+    if (!(error instanceof E2EStartupCancelled)) throw error;
     return undefined;
   }
 }
