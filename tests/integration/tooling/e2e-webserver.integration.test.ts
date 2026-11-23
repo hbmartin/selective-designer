@@ -1,3 +1,5 @@
+import { writeFile } from 'node:fs/promises';
+import path from 'node:path';
 import net, { type AddressInfo } from 'node:net';
 import { Client } from 'pg';
 import { expect, it } from 'vitest';
@@ -530,3 +532,115 @@ it('warns before forcing exit at the terminal deadline when final flushing stall
     await fixture.dispose();
   }
 }, 30_000);
+
+it('registers ownership before a config-file application plugin fails', async () => {
+  const fixture = await launch('config-plugin-failure');
+  try {
+    expect(await fixture.waitForExit()).toEqual([1, null]);
+    expect(await fixture.message('early-watcher-closed')).toEqual({
+      type: 'early-watcher-closed',
+    });
+    expect(fixture.output()).toContain('Fixture early config plugin failure');
+    await expectListenersClosed(fixture);
+  } finally {
+    await fixture.dispose();
+  }
+}, 30_000);
+it('retires failed restart watchers before an env change and keeps one live instance', async () => {
+  const fixture = await launch('restart-fail');
+  let client: Client | undefined;
+  async function observation() {
+    const count = fixture.messages.filter(
+      (message) => message.type === 'instances'
+    ).length;
+    fixture.child.send('inspect-instances');
+    await expect
+      .poll(
+        () =>
+          fixture.messages.filter((message) => message.type === 'instances')
+            .length
+      )
+      .toBe(count + 1);
+    return fixture.messages
+      .filter((message) => message.type === 'instances')
+      .at(-1)!;
+  }
+  try {
+    const ready = await fixture.ready();
+    client = new Client({ connectionString: ready.databaseUrl });
+    await client.connect();
+    await client.query(
+      'create table env_restart(value integer); insert into env_restart values(42)'
+    );
+    const initial = await observation();
+    fixture.child.send('restart');
+    await fixture.message('restarted');
+    expect(await observation()).toMatchObject({
+      instances: 2,
+      watchersOpen: 1,
+      sigtermHandlers: initial.sigtermHandlers,
+    });
+    fixture.child.send('abandoned-env-change');
+    await fixture.message('abandoned-change-delivered');
+    expect(await observation()).toMatchObject({
+      instances: 2,
+      watchersOpen: 1,
+    });
+    // A real env-file change must restart only the working instance. Its abandoned
+    // predecessor has already completed watcher closure before restart resolved.
+    await writeFile(
+      path.join(fixture.root, '.env'),
+      'FIXTURE_ENV_REVISION=2\n'
+    );
+    await expect
+      .poll(async () => (await observation()).instances, { timeout: 20_000 })
+      .toBeGreaterThan(2);
+    // Filesystem backends may deliver both add and change for one write. Each
+    // legitimate restart still leaves exactly one live watcher and handler.
+    await expect.poll(observation).toMatchObject({
+      watchersOpen: 1,
+      sigtermHandlers: initial.sigtermHandlers,
+    });
+    expect((await client.query('select value from env_restart')).rows).toEqual([
+      { value: 42 },
+    ]);
+    expect((await fetch(`http://127.0.0.1:${ready.http}/`)).status).toBe(200);
+    await client.end();
+    client = undefined;
+    fixture.child.send('close');
+    await fixture.message('closed');
+    expect(fixture.output()).not.toContain('E2E startup cancelled');
+    await expectListenersClosed(fixture);
+  } finally {
+    await client?.end();
+    await fixture.dispose();
+  }
+}, 40_000);
+it.each(['SIGINT', 'SIGTERM'] as const)(
+  'keeps startup-timeout cleanup responsive until PID-only %s joins and cleanup finishes',
+  async (signal) => {
+    const fixture = await launch('programmatic-startup-timeout');
+    try {
+      expect(await fixture.message('startup-failed')).toMatchObject({
+        exitCode: 7,
+      });
+      signalFixtureProcess(fixture.identity, signal);
+      fixture.child.send('ping-after-startup-timeout');
+      await fixture.message('pong-after-startup-timeout');
+      expect(fixture.child.exitCode).toBeNull();
+      fixture.child.send('release');
+      expect(await fixture.waitForExit()).toEqual([1, null]);
+      expect(
+        fixture
+          .output()
+          .match(
+            /E2E cleanup failed: E2E resource cleanup exceeded ten seconds/g
+          )
+      ).toHaveLength(1);
+      await expectListenersClosed(fixture);
+    } finally {
+      await fixture.dispose();
+    }
+  },
+  40_000
+);

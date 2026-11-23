@@ -30,6 +30,9 @@ class FakeChild extends EventEmitter {
   stderr = new EventEmitter();
   exitCode: number | null = null;
   signalCode: NodeJS.Signals | null = null;
+  send = vi.fn((_message: unknown, callback: (error?: Error) => void) =>
+    callback()
+  );
   kill = vi.fn((signal: NodeJS.Signals) => {
     this.signalCode = signal;
     this.emit('exit', null, signal);
@@ -42,7 +45,12 @@ beforeEach(() => {
   vi.resetAllMocks();
   vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'performance'] });
   child = new FakeChild();
-  mocks.spawn.mockReturnValue(child);
+  mocks.spawn.mockImplementation(() => {
+    queueMicrotask(() =>
+      child.emit('message', { type: 'authorization-ready' })
+    );
+    return child;
+  });
   mocks.inspect.mockImplementation(
     () =>
       new Map([
@@ -192,41 +200,126 @@ it.each(['ENOENT', 'EACCES'])(
   }
 );
 it.each(['inspect', 'signal'] as const)(
-  'falls back to the retained child after cleanup %s fails, retaining the group error',
+  'preserves the leader after cleanup %s fails and later joins a fresh attempt',
   async (stage) => {
     const fixture = await launchE2EFixture();
     const failure = new Error('Group cleanup unavailable');
     mocks[stage].mockImplementationOnce(() => {
       throw failure;
     });
-    await expect(fixture.dispose()).rejects.toMatchObject({ cause: failure });
-    expect(child.kill).toHaveBeenCalledWith('SIGKILL');
+    await Promise.all([
+      expect(fixture.dispose()).rejects.toMatchObject({ cause: failure }),
+      vi.advanceTimersByTimeAsync(3000),
+    ]);
+    expect(child.kill).not.toHaveBeenCalled();
+    expect(child.exitCode).toBeNull();
     expect(mocks.rm).not.toHaveBeenCalled();
     await fixture.dispose();
     expect(mocks.rm).toHaveBeenCalledOnce();
   }
 );
-it('bounds failed fallback draining without retiring unconfirmed descendants', async () => {
+it('retains authenticated continuity for descendants created after launch', async () => {
+  const actual = await vi.importActual<
+    typeof import('@tests/support/fixture-process-groups')
+  >('@tests/support/fixture-process-groups');
+  const leader = {
+    pid: child.pid,
+    parent: process.pid,
+    group: child.pid,
+    state: 'S',
+    started: 'root-birth',
+  };
+  const descendant = {
+    ...leader,
+    pid: child.pid + 1,
+    parent: child.pid,
+    started: 'child-birth',
+  };
+  const rows = new Map([[leader.pid, leader]]);
+  const group = actual.seedFixtureProcessGroup(leader, rows);
+  mocks.inspect.mockReturnValue(rows);
+  mocks.validate.mockReturnValue(group);
   const fixture = await launchE2EFixture();
-  const failure = new Error('Group inspection unavailable');
   mocks.inspect.mockImplementationOnce(() => {
-    throw failure;
+    throw new Error('ps timeout');
   });
-  child.kill.mockImplementationOnce(() => false);
   await Promise.all([
-    expect(fixture.dispose()).rejects.toMatchObject({
-      cause: failure,
-      errors: [
-        failure,
-        expect.objectContaining({
-          message: 'Fixture process exit remains unconfirmed',
-        }),
-      ],
-    }),
+    expect(fixture.dispose()).rejects.toThrow('cleanup remains unresolved'),
     vi.advanceTimersByTimeAsync(3000),
   ]);
-  expect(mocks.rm).not.toHaveBeenCalled();
+  expect(child.kill).not.toHaveBeenCalled();
+  rows.set(descendant.pid, descendant);
+  mocks.signal.mockImplementation((capability, _signal, snapshot) => {
+    expect(actual.fixtureGroupIsLive(capability, snapshot)).toBe(true);
+    expect(capability.members.get(descendant.pid)).toBe('child-birth');
+    child.kill('SIGKILL');
+  });
   await fixture.dispose();
+  expect(mocks.rm).toHaveBeenCalledOnce();
+});
+it('clears historical execution failures after a successful nonconfirming snapshot', async () => {
+  const old = new Error('Old timeout', { cause: { code: 'ETIMEDOUT' } });
+  mocks.inspect
+    .mockImplementationOnce(() => {
+      throw old;
+    })
+    .mockReturnValue(new Map());
+  await Promise.all([
+    expect(launchE2EFixture()).rejects.toMatchObject({
+      message: 'Fixture process-group confirmation timed out',
+      cause: undefined,
+    }),
+    vi.advanceTimersByTimeAsync(5000),
+  ]);
+  expect(child.send).not.toHaveBeenCalled();
+  expect(child.kill).toHaveBeenCalledWith('SIGKILL');
+});
+it('does not inspect or authorize before the bootstrap announces readiness', async () => {
+  mocks.spawn.mockReturnValue(child);
+  const launch = launchE2EFixture();
+  await vi.advanceTimersByTimeAsync(1000);
+  expect(mocks.inspect).not.toHaveBeenCalled();
+  expect(child.send).not.toHaveBeenCalled();
+  child.emit('message', { type: 'authorization-ready' });
+  await vi.advanceTimersByTimeAsync(20);
+  const fixture = await launch;
+  expect(mocks.validate).toHaveBeenCalledBefore(child.send);
+  expect(child.send).toHaveBeenCalledWith(
+    { type: 'authorize' },
+    expect.any(Function)
+  );
+  await fixture.dispose();
+});
+it('bounds a bootstrap that never announces readiness and kills only that retained child', async () => {
+  mocks.spawn.mockReturnValue(child);
+  await Promise.all([
+    expect(launchE2EFixture()).rejects.toThrow(
+      'process-group confirmation timed out'
+    ),
+    vi.advanceTimersByTimeAsync(5000),
+  ]);
+  expect(mocks.inspect).not.toHaveBeenCalled();
+  expect(mocks.signal).not.toHaveBeenCalled();
+  expect(child.kill).toHaveBeenCalledWith('SIGKILL');
+  expect(mocks.rm).toHaveBeenCalledOnce();
+});
+it('rejects authorization disconnection and recovers the unstarted bootstrap', async () => {
+  mocks.spawn.mockImplementation(() => {
+    queueMicrotask(() => child.emit('disconnect'));
+    return child;
+  });
+  await expect(launchE2EFixture()).rejects.toThrow(
+    'authorization IPC disconnected'
+  );
+  expect(mocks.signal).not.toHaveBeenCalled();
+  expect(child.kill).toHaveBeenCalledWith('SIGKILL');
+});
+it('preserves an authorization-delivery failure and cleans with its established capability', async () => {
+  const failure = new Error('IPC send failed');
+  child.send.mockImplementation((_message, callback) => callback(failure));
+  await expect(launchE2EFixture()).rejects.toBe(failure);
+  expect(mocks.signal).toHaveBeenCalledOnce();
+  expect(mocks.rm).toHaveBeenCalledOnce();
 });
 it('accepts buffered IPC delivered after process exit and before disconnect', async () => {
   const fixture = await launchE2EFixture();
