@@ -23,6 +23,7 @@ type OwnedViteInstance = {
   close: () => Promise<void>;
   restart: ViteDevServer['restart'];
   closing?: Promise<void>;
+  closed?: boolean;
   replaced: boolean;
 };
 
@@ -171,10 +172,22 @@ async function startOwnedWebserver(
       });
   }
   function closeInstance(instance: OwnedViteInstance) {
-    instance.closing ??= Promise.resolve().then(() =>
-      observer.run(instance.config, instance.close)
-    );
+    instance.closing ??= Promise.resolve()
+      .then(() => observer.run(instance.config, instance.close))
+      .then(() => {
+        instance.closed = true;
+      });
     return instance.closing;
+  }
+  /** Releases settled instances; failed or pending ones stay for final close. */
+  function pruneRetired() {
+    for (let index = instances.length - 1; index >= 0; index--) {
+      const candidate = instances[index]!;
+      if (candidate.config === vite?.config) continue;
+      if (!candidate.replaced && !candidate.closed) continue;
+      instances.splice(index, 1);
+      observer.release(candidate.config);
+    }
   }
   async function closeInstances(
     selected: OwnedViteInstance[],
@@ -218,11 +231,17 @@ async function startOwnedWebserver(
     const deadline =
       observer.deadline(instance.config) ?? performance.now() + 5_000;
     const pending = Promise.all([
-      observer.settleStarted(instance.config, deadline),
+      // A replaced instance is no longer live, so memoizing its settlement is safe.
+      instance.replaced
+        ? observer.settle(instance.config, deadline)
+        : observer.settleStarted(instance.config, deadline),
+      // Each candidate is retired once. Earlier failures stay for final close.
       closeInstances(
         instances.filter(
           (candidate) =>
-            !candidate.replaced && candidate.config !== vite?.config
+            !candidate.replaced &&
+            !candidate.closing &&
+            candidate.config !== vite?.config
         ),
         deadline
       ),
@@ -237,6 +256,7 @@ async function startOwnedWebserver(
           'E2E Vite retirement exceeded five seconds'
         )
       ).flat();
+      pruneRetired();
     } catch (error) {
       retirementFailures = [error];
     }

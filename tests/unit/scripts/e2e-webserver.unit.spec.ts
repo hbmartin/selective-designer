@@ -12,6 +12,7 @@ const mocks = vi.hoisted(() => ({
   socketStop: vi.fn(),
   create: vi.fn(),
   spawn: vi.fn(),
+  release: vi.fn(),
 }));
 vi.mock('@electric-sql/pglite', () => ({
   PGlite: class {
@@ -39,6 +40,26 @@ vi.mock('@tests/server/vite-owned-config', () => ({
   }),
 }));
 vi.mock('node:child_process', () => ({ spawn: mocks.spawn }));
+vi.mock('@tests/server/vite-resource-observer', async (importOriginal) => {
+  const actual =
+    await importOriginal<
+      typeof import('@tests/server/vite-resource-observer')
+    >();
+  return {
+    createViteResourceObserver: (
+      ...args: Parameters<typeof actual.createViteResourceObserver>
+    ) => {
+      const observer = actual.createViteResourceObserver(...args);
+      const release = observer.release;
+      observer.release = (config) => {
+        const released = release(config);
+        mocks.release(config, released);
+        return released;
+      };
+      return observer;
+    },
+  };
+});
 
 function deferred<T>() {
   let resolve!: (value: T) => void;
@@ -805,9 +826,95 @@ it('clears queued force options after a failed retirement batch', async () => {
     { status: 'rejected', reason: failure },
     { status: 'rejected', reason: failure },
   ]);
-  await expect(owner.vite.restart()).rejects.toBe(failure);
+  // The failed candidate is retired once; later batches report their own outcome.
+  await expect(owner.vite.restart()).resolves.toBeUndefined();
   expect(rawRestart).toHaveBeenLastCalledWith();
+  expect(partialClose).toHaveBeenCalledOnce();
   await expect(owner.close()).rejects.toBe(failure);
+});
+it('does not re-await a timed-out candidate retirement in later restarts', async () => {
+  const hung = deferred<void>();
+  const partialClose = vi.fn(() => hung.promise);
+  let register!: (server: unknown) => void;
+  const rawRestart = vi.fn(async () => {
+    if (rawRestart.mock.calls.length === 1)
+      register({ config: {}, close: partialClose, restart: vi.fn() });
+  });
+  mocks.create.mockImplementation(async (config) => {
+    register = config.plugins[0].configureServer.handler;
+    const server = {
+      config: {},
+      close: closeVite,
+      listen,
+      restart: rawRestart,
+    };
+    register(server);
+    return server;
+  });
+  const owner = (await startE2EWebserver({ setupScripts: [] }))!;
+  await Promise.all([
+    expect(owner.vite.restart()).rejects.toThrow(
+      'E2E Vite retirement exceeded five seconds'
+    ),
+    vi.advanceTimersByTimeAsync(5000),
+  ]);
+  // Resolves without advancing timers: the pending close is not joined again.
+  await expect(owner.vite.restart()).resolves.toBeUndefined();
+  expect(rawRestart).toHaveBeenCalledTimes(2);
+  expect(partialClose).toHaveBeenCalledOnce();
+  hung.resolve();
+  await owner.close();
+  expect(closeVite).toHaveBeenCalledOnce();
+});
+it('releases cleanly retired candidates and replaced instances', async () => {
+  let register!: (server: unknown) => void;
+  let server!: { config: object } & Record<string, unknown>;
+  const candidateConfig = { generation: 'abandoned' };
+  const replacementConfig = { generation: 'replacement' };
+  const replacementClose = vi.fn(async () => {});
+  const rawRestart = vi.fn(async () => {
+    if (rawRestart.mock.calls.length === 1) {
+      register({
+        config: candidateConfig,
+        close: vi.fn(async () => {}),
+        restart: vi.fn(),
+      });
+      return;
+    }
+    // Vite transfers the adopted replacement onto the original server object.
+    const replacement = {
+      config: replacementConfig,
+      close: replacementClose,
+      listen,
+      restart: vi.fn(async () => {}),
+    };
+    register(replacement);
+    Object.assign(server, {
+      config: replacement.config,
+      close: replacement.close,
+      restart: replacement.restart,
+    });
+  });
+  mocks.create.mockImplementation(async (config) => {
+    register = config.plugins[0].configureServer.handler;
+    server = { config: {}, close: closeVite, listen, restart: rawRestart };
+    register(server);
+    return server;
+  });
+  const owner = (await startE2EWebserver({ setupScripts: [] }))!;
+  const initialConfig = owner.vite.config;
+  await owner.vite.restart();
+  expect(mocks.release).toHaveBeenCalledWith(candidateConfig, true);
+  await owner.vite.restart();
+  expect(owner.vite.config).toBe(replacementConfig);
+  expect(mocks.release).toHaveBeenCalledWith(initialConfig, true);
+  expect(mocks.release).not.toHaveBeenCalledWith(
+    replacementConfig,
+    expect.anything()
+  );
+  await owner.close();
+  expect(replacementClose).toHaveBeenCalledOnce();
+  expect(closeVite).not.toHaveBeenCalled();
 });
 it('does not lose restart requests at the queue-drained microtask boundary', async () => {
   for (let turns = 0; turns < 20; turns++) {

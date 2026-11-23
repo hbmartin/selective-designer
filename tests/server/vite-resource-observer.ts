@@ -17,6 +17,7 @@ type Scope = {
   resources: NativeClose[];
   hasServer: boolean;
   finishing?: Promise<unknown[]>;
+  failures?: unknown[];
   deadline?: number;
   started: Promise<number>;
   start: (deadline: number) => void;
@@ -234,8 +235,16 @@ export function createViteResourceObserver(
     deadline = performance.now() + 5_000
   ) {
     const scope = scopeFor(config);
-    scope.finishing ??= finish(scope, deadline);
+    scope.finishing ??= finish(scope, deadline).then((failures) => {
+      scope.failures = failures;
+      return failures;
+    });
     return scope.finishing;
+  }
+  /** Drops a scope only after it settled cleanly; failed scopes stay for settleAll. */
+  function release(config: ResolvedConfig) {
+    if (scopes.get(config)?.failures?.length !== 0) return false;
+    return scopes.delete(config);
   }
   return {
     prepare,
@@ -264,15 +273,18 @@ export function createViteResourceObserver(
         ? []
         : settle(config, deadline);
     },
+    /** Settles orphans not yet attempted; settleAll still reports earlier ones. */
     async settleOrphans(deadline: number) {
-      return (
-        await Promise.all(
-          [...scopes.entries()]
-            .filter(([, scope]) => !scope.hasServer)
-            .map(([config]) => settle(config, deadline))
-        )
-      ).flat();
+      const selected = [...scopes.entries()]
+        .filter(([, scope]) => !scope.hasServer && !scope.finishing)
+        .map(([config]) => config);
+      const failures = await Promise.all(
+        selected.map((config) => settle(config, deadline))
+      );
+      for (const config of selected) release(config);
+      return failures.flat();
     },
+    release,
     async settleAll() {
       const results = await Promise.all(
         [...scopes.keys()].map((config) => settle(config))
