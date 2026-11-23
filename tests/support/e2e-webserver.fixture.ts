@@ -57,7 +57,7 @@ try {
   if (mode === 'config-plugin-failure')
     await writeFile(
       path.join(root, 'vite.config.mjs'),
-      `export default { plugins: [{ name: 'early-config-file-plugin', configureServer(server) { const close = server.watcher.close.bind(server.watcher); server.watcher.close = async () => { await close(); process.send?.({ type: 'early-watcher-closed' }); }; throw new Error('Fixture early config plugin failure'); } }] };`
+      `export default { plugins: [{ name: 'early-config-file-plugin', enforce: 'pre', configureServer: { order: 'pre', handler(server) { const close = server.watcher.close.bind(server.watcher); server.watcher.close = async () => { await close(); process.send?.({ type: 'early-watcher-closed' }); }; throw new Error('Fixture early config plugin failure'); } } }] };`
     );
   const start = mode.startsWith('programmatic')
     ? startE2EWebserver
