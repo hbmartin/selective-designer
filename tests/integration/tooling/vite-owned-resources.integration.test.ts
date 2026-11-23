@@ -16,15 +16,13 @@ async function harness(
   run: (h: {
     root: string;
     observer: ReturnType<typeof createViteResourceObserver>;
-    recovered: ReturnType<typeof vi.fn>;
     captured: ViteDevServer[];
     emergency: (() => Promise<unknown>)[];
     create: (config: InlineConfig) => Promise<ViteDevServer>;
   }) => Promise<void>
 ) {
   const root = await mkdtemp(path.join(os.tmpdir(), 'vite-owned-integration-'));
-  const recovered = vi.fn();
-  const observer = createViteResourceObserver(recovered);
+  const observer = createViteResourceObserver();
   const captured: ViteDevServer[] = [];
   const closers: { config: ResolvedConfig; close: () => Promise<void> }[] = [];
   const emergency: (() => Promise<unknown>)[] = [];
@@ -34,7 +32,6 @@ async function harness(
     await run({
       root,
       observer,
-      recovered,
       captured,
       emergency,
       async create(options) {
@@ -222,8 +219,8 @@ it('joins all sibling close hooks after native Vite rejects early', async () => 
     expect(await draining).toEqual([first, second]);
   });
 });
-it('recovers a transient outer watcher failure before declaring retirement complete', async () => {
-  await harness(async ({ create, observer, recovered }) => {
+it('retains a transient outer failure without replaying its wrapper', async () => {
+  await harness(async ({ create, observer, emergency }) => {
     const failure = Object.assign(new Error('Watcher temporarily busy'), {
       code: 'EBUSY',
     });
@@ -233,6 +230,7 @@ it('recovers a transient outer watcher failure before declaring retirement compl
           name: 'transient-watcher',
           configureServer(server) {
             const close = server.watcher.close.bind(server.watcher);
+            emergency.push(close);
             let attempts = 0;
             server.watcher.close = async () => {
               if (++attempts === 1) throw failure;
@@ -243,7 +241,107 @@ it('recovers a transient outer watcher failure before declaring retirement compl
       ],
     });
     await observer.run(server.config, () => server.close());
+    expect(await observer.settle(server.config)).toEqual([failure]);
+  });
+});
+
+it('observes a close hook installed during a later configResolved callback', async () => {
+  await harness(async ({ create, observer }) => {
+    const closed = vi.fn(async () => {});
+    const plugin: import('vite').Plugin = {
+      name: 'late-hook',
+      configResolved() {
+        plugin.closeServer = closed;
+      },
+    };
+    const server = await create({ plugins: [plugin] });
+    await observer.run(server.config, () => server.close());
     expect(await observer.settle(server.config)).toEqual([]);
-    expect(recovered).toHaveBeenCalledExactlyOnceWith(failure);
+    expect(closed).toHaveBeenCalledOnce();
+  });
+});
+it.each(['js', 'mjs', 'ts', 'cjs', 'mts', 'cts'])(
+  'discovers the native default %s config',
+  async (extension) => {
+    await harness(async ({ root, create }) => {
+      const source =
+        extension === 'cjs'
+          ? 'module.exports = {base:"/selected/"};'
+          : 'export default {base:"/selected/"};';
+      await writeFile(path.join(root, `vite.config.${extension}`), source);
+      const server = await create({ configFile: undefined });
+      expect(server.config.base).toBe('/selected/');
+    });
+  }
+);
+it('preserves native config precedence and the no-config case', async () => {
+  await harness(async ({ root, create }) => {
+    expect(
+      (await create({ configFile: undefined })).config.inlineConfig.configFile
+    ).toBe(false);
+    await writeFile(
+      path.join(root, 'vite.config.js'),
+      'export default {base:"/first/"};'
+    );
+    await writeFile(
+      path.join(root, 'vite.config.ts'),
+      'export default {base:"/second/"};'
+    );
+    expect((await create({ configFile: undefined })).config.base).toBe(
+      '/first/'
+    );
+  });
+});
+it('drains exposed parts after failed initialization without a false container error', async () => {
+  await harness(async ({ create, observer }) => {
+    const failure = new Error('Original init failure');
+    const hotClose = vi.fn(async () => {});
+    await expect(
+      create({
+        environments: {
+          client: {
+            dev: {
+              createEnvironment(name, config) {
+                const env = new DevEnvironment(name, config, { hot: false });
+                env.hot.close = hotClose;
+                env.init = async () => {
+                  throw failure;
+                };
+                return env;
+              },
+            },
+          },
+        },
+      })
+    ).rejects.toBe(failure);
+    expect(await observer.settleAll()).toEqual([]);
+    expect(hotClose).toHaveBeenCalledOnce();
+  });
+});
+it('retains genuine custom environment cleanup failures after failed init', async () => {
+  await harness(async ({ create, observer }) => {
+    const failure = new Error('Original init failure');
+    const cleanup = new Error('Custom cleanup failure');
+    await expect(
+      create({
+        environments: {
+          client: {
+            dev: {
+              createEnvironment(name, config) {
+                const env = new DevEnvironment(name, config, { hot: false });
+                env.init = async () => {
+                  throw failure;
+                };
+                env.close = async () => {
+                  throw cleanup;
+                };
+                return env;
+              },
+            },
+          },
+        },
+      })
+    ).rejects.toBe(failure);
+    expect(await observer.settleAll()).toEqual([cleanup]);
   });
 });

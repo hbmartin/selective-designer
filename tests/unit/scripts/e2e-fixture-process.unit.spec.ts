@@ -427,14 +427,43 @@ it('waits for a delayed setup checkpoint within its explicit budget', async () =
   await waiting;
   await fixture.dispose();
 });
-it('fails a checkpoint promptly on exit with output and status diagnostics', async () => {
+it('fails a checkpoint after stdio drains with output and status diagnostics', async () => {
   const fixture = await launchE2EFixture();
   child.stdout.emit('data', 'setup starting');
   child.exitCode = 13;
   child.emit('exit', 13, null);
+  child.emit('close', 13, null);
   await expect(fixture.waitForOutput('setup ready')).rejects.toThrow(
     'exit=13, signal=null, disconnected=false; output=setup starting'
   );
   child.emit('close', 13, null);
   await fixture.dispose();
+});
+
+it('accepts a checkpoint buffered after exit and IPC disconnect', async () => {
+  const fixture = await launchE2EFixture();
+  child.exitCode = 0;
+  child.emit('exit', 0, null);
+  child.emit('disconnect');
+  const waiting = fixture.waitForOutput('final checkpoint');
+  child.stdout.emit('data', 'final checkpoint');
+  child.emit('close', 0, null);
+  await vi.advanceTimersByTimeAsync(20);
+  await waiting;
+  await fixture.dispose();
+});
+it('reports transport diagnostics once without failing successful cleanup', async () => {
+  const warning = vi.spyOn(console, 'warn').mockImplementation(() => {});
+  const fixture = await launchE2EFixture();
+  const failure = Object.assign(new Error('IPC transport failed'), {
+    code: 'EPIPE',
+  });
+  child.emit('error', failure);
+  await fixture.dispose();
+  await fixture.dispose();
+  expect(warning).toHaveBeenCalledExactlyOnceWith(
+    'E2E fixture transport diagnostic:',
+    failure
+  );
+  warning.mockRestore();
 });

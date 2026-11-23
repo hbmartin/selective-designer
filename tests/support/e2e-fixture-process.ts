@@ -20,6 +20,7 @@ export type E2EFixtureMessage = {
   exitCode?: string | number;
   watchersClosed?: boolean;
   instances?: number;
+  instancesClosed?: number;
   watchersOpen?: number;
   sigtermHandlers?: number;
 };
@@ -54,7 +55,14 @@ export async function launchE2EFixture(
   let closed: Promise<void> | undefined;
   let spawnError: Error | undefined;
   let ipcDrained = false;
+  let outputDrained = false;
   const transportErrors: Error[] = [];
+  let reportedTransportErrors = 0;
+  function reportTransportErrors() {
+    for (const error of transportErrors.slice(reportedTransportErrors))
+      console.warn('E2E fixture transport diagnostic:', error);
+    reportedTransportErrors = transportErrors.length;
+  }
   const messages: E2EFixtureMessage[] = [];
   let output = '';
   let retrying: Promise<void> | undefined;
@@ -131,6 +139,7 @@ export async function launchE2EFixture(
         failures.push(error);
       }
     }
+    reportTransportErrors();
     if (failures.length)
       throw new AggregateError(
         failures,
@@ -198,7 +207,10 @@ export async function launchE2EFixture(
       });
     });
     closed = new Promise((resolve) => {
-      launched.once('close', () => resolve());
+      launched.once('close', () => {
+        outputDrained = true;
+        resolve();
+      });
     });
     const deadline = performance.now() + 5_000;
     await beforeDeadline(
@@ -271,12 +283,7 @@ export async function launchE2EFixture(
       async waitForOutput(checkpoint: string, timeoutMs = 10_000) {
         const deadline = performance.now() + timeoutMs;
         while (!output.includes(checkpoint)) {
-          if (
-            ipcDrained ||
-            launched.exitCode !== null ||
-            launched.signalCode !== null ||
-            performance.now() >= deadline
-          )
+          if (outputDrained || performance.now() >= deadline)
             throw new Error(
               `Fixture checkpoint missing: ${checkpoint}; exit=${launched.exitCode}, signal=${launched.signalCode}, disconnected=${ipcDrained}; output=${output}`
             );
@@ -323,6 +330,7 @@ export async function launchE2EFixture(
         retryCleanup
       );
     }
+    reportTransportErrors();
     throw error;
   }
 }

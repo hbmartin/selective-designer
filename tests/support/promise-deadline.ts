@@ -6,12 +6,10 @@ export async function beforeDeadline<T>(
   message: string | (() => string)
 ): Promise<T> {
   let timer: ReturnType<typeof setTimeout> | undefined;
-  const expired = new Promise<never>((_resolve, reject) => {
-    timer = setTimeout(
-      () =>
-        reject(new Error(typeof message === 'function' ? message() : message)),
-      Math.max(0, deadline - performance.now())
-    );
+  const expired = new Promise<void>((resolve) => {
+    timer = setTimeout(resolve, Math.max(0, deadline - performance.now()));
+  }).then(() => {
+    throw new Error(typeof message === 'function' ? message() : message);
   });
   try {
     // Promise.race observes pending even when the deadline wins.
