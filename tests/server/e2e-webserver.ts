@@ -8,6 +8,7 @@ import type { InlineConfig, ViteDevServer } from 'vite';
 import { beforeDeadline } from '../support/promise-deadline';
 import { configureE2EDatabase } from './e2e-database-config';
 import { createE2ETerminal, flushE2EOutput } from './e2e-terminal';
+import { createE2ERestartCancellation } from './e2e-restart-cancellation';
 import { createOwnedViteConfig } from './vite-owned-config';
 import {
   createViteResourceObserver,
@@ -44,11 +45,6 @@ type RestartOperation = {
   retired?: Promise<unknown[]>;
   deadline?: number;
 };
-class E2ERestartCancelled extends Error {
-  constructor() {
-    super('E2E restart cancelled before starting');
-  }
-}
 
 type E2EWebserverOptions = {
   setupScripts?: readonly string[];
@@ -115,9 +111,10 @@ async function startOwnedWebserver(
     onListen(server) {
       if (server === vite) confirmAdoption();
     },
-    onBegin(deadline) {
+    onBegin(deadline, config) {
       const operation = restartContext.getStore()?.operation;
-      if (operation) operation.deadline ??= deadline;
+      if (operation && instances.get(operation.source)?.data?.config === config)
+        operation.deadline ??= deadline;
     },
   });
   const listenWrappers = new WeakSet<Function>();
@@ -135,6 +132,7 @@ async function startOwnedWebserver(
   let cleanupSettled = false;
   let acquiring: Promise<unknown> | undefined;
   let stopped = false;
+  const cancellation = createE2ERestartCancellation(() => stopped);
   let databaseCleanup: Promise<void> | undefined;
   let shutdown: Promise<void> | undefined;
   let signalShutdown: Promise<never> | undefined;
@@ -219,11 +217,9 @@ async function startOwnedWebserver(
     instance.closing ??= closeContext.run(
       { operation: {}, target: token, purpose },
       async () => {
-        const operation = restartContext.getStore()?.operation;
-        if (operation) operation.deadline ??= performance.now() + 5_000;
         const native = await Promise.resolve()
           .then(() =>
-            observer.run(liveData(token).config, liveData(token).close)
+            observer.dispose(liveData(token).config, liveData(token).close)
           )
           .then(
             () => [],
@@ -314,6 +310,7 @@ async function startOwnedWebserver(
     const operationContext = { active: true, operation };
     try {
       await configuration?.refresh();
+      if (stopped) throw cancellation.error();
       const native = restartContext.run(operationContext, () =>
         Promise.resolve().then(() => invokeNativeRestart(token, args))
       );
@@ -338,24 +335,33 @@ async function startOwnedWebserver(
             candidate.data?.config !== vite?.config
         )
         .map((candidate) => candidate.token);
-      const pending = restartContext.run(operationContext, async () => {
+      const source =
+        operation.retired ?? observer.settleStarted(liveData(token).config);
+      const disposalDeadline = performance.now() + 5_000;
+      const disposal = restartContext.run(operationContext, async () => {
         const results = await Promise.all([
-          operation.retired ?? observer.settleStarted(liveData(token).config),
           closeInstances(candidates, 'retirement'),
           observer.settleOrphans(),
         ]);
         return results.flat();
       });
       try {
-        await beforeDeadline(
-          pending,
-          operation.deadline ?? performance.now() + 5_000,
-          'E2E Vite retirement exceeded five seconds'
-        );
+        await Promise.all([
+          beforeDeadline(
+            source,
+            operation.deadline ?? performance.now() + 5_000,
+            'E2E Vite retirement exceeded five seconds'
+          ),
+          beforeDeadline(
+            disposal,
+            disposalDeadline,
+            'E2E Vite retirement exceeded five seconds'
+          ),
+        ]);
       } catch (error) {
         timeout(error);
       }
-      const retirementFailures = await pending;
+      const retirementFailures = (await Promise.all([source, disposal])).flat();
       for (const error of retirementFailures) {
         historicalCleanup.add(error);
         recordCleanupFailure(error);
@@ -472,7 +478,7 @@ async function startOwnedWebserver(
   }
   function close() {
     stopped = true;
-    cancelQueued(new E2ERestartCancelled());
+    cancelQueued(cancellation.error());
     if (shutdown) return shutdown;
     cleanup = (async () => {
       try {
@@ -646,27 +652,31 @@ async function startOwnedWebserver(
       createServer = module.createServer;
     });
     await acquire(
-      createOwnedViteConfig(options.viteConfig ?? {}, {
-        name: 'e2e-owned-database',
-        api: {
-          prepare: observer.prepare,
-          register: registerServer,
-          isFinalClose: () => {
-            const intent = closeContext.getStore();
-            return (
-              intent?.purpose === 'shutdown' &&
-              intent.target === currentInstance()?.token
-            );
+      createOwnedViteConfig(
+        options.viteConfig ?? {},
+        {
+          name: 'e2e-owned-database',
+          api: {
+            prepare: observer.prepare,
+            register: registerServer,
+            isFinalClose: () => {
+              const intent = closeContext.getStore();
+              return (
+                intent?.purpose === 'shutdown' &&
+                intent.target === currentInstance()?.token
+              );
+            },
+          },
+          enforce: 'pre',
+          configResolved: { order: 'pre', handler: observer.prepare },
+          configureServer: { order: 'pre', handler: registerServer },
+          async closeServer({ reason }) {
+            observer.markTeardown();
+            if (reason === 'close' && terminal.active) await flushE2EOutput();
           },
         },
-        enforce: 'pre',
-        configResolved: { order: 'pre', handler: observer.prepare },
-        configureServer: { order: 'pre', handler: registerServer },
-        async closeServer({ reason }) {
-          observer.markTeardown();
-          if (reason === 'close' && terminal.active) await flushE2EOutput();
-        },
-      }),
+        cancellation.decorate
+      ),
       (prepared) => {
         configuration = prepared;
       }

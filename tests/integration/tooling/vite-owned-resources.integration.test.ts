@@ -5,6 +5,8 @@ import { expect, it, vi } from 'vitest';
 import {
   createServer,
   DevEnvironment,
+  createLogger,
+  type Logger,
   type InlineConfig,
   type ResolvedConfig,
   type ViteDevServer,
@@ -12,13 +14,42 @@ import {
 import { createOwnedViteConfig } from '@tests/server/vite-owned-config';
 import { createViteResourceObserver } from '@tests/server/vite-resource-observer';
 
+async function withVerificationCleanup(
+  run: () => Promise<void>,
+  actions: (() => unknown)[]
+) {
+  const failures: unknown[] = [];
+  try {
+    await run();
+  } catch (error) {
+    failures.push(error);
+  }
+  for (const action of actions) {
+    try {
+      await action();
+    } catch (error) {
+      failures.push(error);
+    }
+  }
+  if (failures.length === 1) throw failures[0];
+  if (failures.length > 1)
+    throw new AggregateError(
+      failures,
+      failures[0] instanceof Error ? failures[0].message : String(failures[0]),
+      { cause: failures[0] }
+    );
+}
+
 async function harness(
   run: (h: {
     root: string;
     observer: ReturnType<typeof createViteResourceObserver>;
     captured: ViteDevServer[];
     emergency: (() => Promise<unknown>)[];
-    create: (config: InlineConfig) => Promise<ViteDevServer>;
+    create: (
+      config: InlineConfig,
+      decorateLogger?: (logger: Logger) => Logger
+    ) => Promise<ViteDevServer>;
   }) => Promise<void>
 ) {
   const root = await realpath(
@@ -36,7 +67,7 @@ async function harness(
       observer,
       captured,
       emergency,
-      async create(options) {
+      async create(options, decorateLogger) {
         let prepared!: Awaited<ReturnType<typeof createOwnedViteConfig>>;
         function register(server: ViteDevServer) {
           prepared.ignoreBridge(server);
@@ -69,7 +100,8 @@ async function harness(
             },
             configResolved: observer.prepare,
             configureServer: register,
-          }
+          },
+          decorateLogger
         );
         bridges.push(prepared);
         return createServer(prepared.config);
@@ -294,7 +326,7 @@ it('preserves native config precedence and the no-config case', async () => {
     );
   });
 });
-it('drains exposed parts after failed initialization without a false container error', async () => {
+it('drains exposed parts after failed initialization and retains the secondary native close error', async () => {
   await harness(async ({ create, observer }) => {
     const failure = new Error('Original init failure');
     const hotClose = vi.fn(async () => {});
@@ -316,7 +348,11 @@ it('drains exposed parts after failed initialization without a false container e
         },
       })
     ).rejects.toBe(failure);
-    expect(await observer.settleAll()).toEqual([]);
+    expect(await observer.settleAll()).toEqual([
+      expect.objectContaining({
+        message: 'client environment.pluginContainer called before initialized',
+      }),
+    ]);
     expect(hotClose).toHaveBeenCalledOnce();
   });
 });
@@ -450,11 +486,11 @@ it('preserves native config dependency watching without bridge-induced duplicate
       path.join(root, 'vite.config.js'),
       'export default {base:"/higher/"};'
     );
+    const generations = captured.length;
     await server.restart();
     expect(server.config.base).toBe('/higher/');
-    const generations = captured.length;
     await new Promise((resolve) => setTimeout(resolve, 100));
-    expect(captured).toHaveLength(generations);
+    expect(captured).toHaveLength(generations + 1);
   });
 });
 it('preserves source-disabled watchers and explicit false configuration', async () => {
@@ -479,7 +515,7 @@ it('does not replay actual failed candidate lifecycle requests and preserves lat
   const previous = { ...process.env };
   let owner: Awaited<ReturnType<typeof startE2EWebserver>>;
   let generations = 0;
-  try {
+  await withVerificationCleanup(async () => {
     process.env.E2E_DATABASE_URL = '';
     owner = await startE2EWebserver({
       setupScripts: [],
@@ -508,13 +544,15 @@ it('does not replay actual failed candidate lifecycle requests and preserves lat
     expect(generations).toBe(2);
     await owner!.vite.restart();
     expect(generations).toBe(3);
-  } finally {
-    await owner?.close();
-    for (const key of Object.keys(process.env))
-      if (!(key in previous)) delete process.env[key];
-    Object.assign(process.env, previous);
-    await rm(root, { recursive: true, force: true });
-  }
+  }, [
+    () => owner?.close(),
+    () => {
+      for (const key of Object.keys(process.env))
+        if (!(key in previous)) delete process.env[key];
+      Object.assign(process.env, previous);
+    },
+    () => rm(root, { recursive: true, force: true }),
+  ]);
 });
 it('preserves inline watcher ignore functions and late hooks on writable facades', async () => {
   await harness(async ({ create, observer }) => {
@@ -543,5 +581,205 @@ it('preserves inline watcher ignore functions and late hooks on writable facades
     await observer.run(server.config, () => server.close());
     expect(await observer.settle(server.config)).toEqual([]);
     expect(closed).toHaveBeenCalledOnce();
+  });
+});
+
+it.each([false, true])(
+  'drains failed Runnable SSR initialization while retaining secondary close errors; custom=%s',
+  async (custom) => {
+    const { createRunnableDevEnvironment } = await import('vite');
+    await harness(async ({ create, observer }) => {
+      const original = new Error('SSR initialization rejected');
+      const secondary = new Error('Custom subclass cleanup rejected');
+      const hot = vi.fn(async () => {});
+      const optimizer = vi.fn(async () => {});
+      const closed = vi.fn();
+      await expect(
+        create({
+          environments: {
+            ssr: {
+              dev: {
+                createEnvironment(name, config) {
+                  const environment = createRunnableDevEnvironment(
+                    name,
+                    config
+                  );
+                  const close = environment.close.bind(environment);
+                  environment.hot.close = hot;
+                  environment.depsOptimizer = { close: optimizer } as never;
+                  environment.init = async () => {
+                    throw original;
+                  };
+                  environment.close = async () => {
+                    try {
+                      if (custom) throw secondary;
+                      await close();
+                    } finally {
+                      closed();
+                    }
+                  };
+                  return environment;
+                },
+              },
+            },
+          },
+        })
+      ).rejects.toBe(original);
+      const errors = await observer.settleAll();
+      expect(errors).toEqual([
+        custom
+          ? secondary
+          : expect.objectContaining({
+              message:
+                'ssr environment.pluginContainer called before initialized',
+            }),
+      ]);
+      expect(closed).toHaveBeenCalledOnce();
+      expect(hot).toHaveBeenCalledOnce();
+      expect(optimizer).toHaveBeenCalledOnce();
+    });
+  }
+);
+
+it('keeps a retained live SSR environment and websocket open after watcher closure and failed restart', async () => {
+  await harness(async ({ create, observer, root }) => {
+    await writeFile(path.join(root, 'probe.js'), 'export const value = 42;');
+    let generation = 0;
+    const server = await create({
+      plugins: [
+        {
+          name: 'failed-replacement',
+          configureServer() {
+            if (++generation === 2)
+              throw new Error('Expected failed incoming generation');
+          },
+        },
+      ],
+    });
+    await server.listen();
+    const environment = server.environments.ssr!;
+    const envClose = environment.close.bind(environment);
+    const envClosed = vi.fn(async () => envClose());
+    environment.close = envClosed;
+    const wsClose = server.ws.close.bind(server.ws);
+    const wsClosed = vi.fn(async () => wsClose());
+    server.ws.close = wsClosed;
+    await server.watcher.close();
+    await server.restart();
+    expect(await observer.settleStarted(server.config)).toEqual([]);
+    expect(envClosed).not.toHaveBeenCalled();
+    expect(wsClosed).not.toHaveBeenCalled();
+    expect((await environment.transformRequest('/probe.js'))?.code).toContain(
+      '42'
+    );
+  });
+});
+
+it('runs non-lifecycle hooks installed later on a read-only plugin facade', async () => {
+  await harness(async ({ create, root }) => {
+    await writeFile(
+      path.join(root, 'late.js'),
+      'export const value = "before";'
+    );
+    const api = {};
+    const transform = vi.fn((code: string, id: string) =>
+      id.endsWith('/late.js') ? code.replace('before', 'after') : undefined
+    );
+    const plugin: import('vite').Plugin = {
+      name: 'late-transform',
+      configResolved() {
+        plugin.transform = transform;
+      },
+    };
+    Object.defineProperty(plugin, 'configureServer', {
+      value: () => {},
+      writable: false,
+    });
+    Object.defineProperty(plugin, 'api', {
+      enumerable: true,
+      get() {
+        expect(this).toBe(plugin);
+        return api;
+      },
+    });
+    const server = await create({ plugins: [plugin] });
+    expect(
+      server.config.plugins.find((candidate) => candidate.name === plugin.name)
+        ?.api
+    ).toBe(api);
+    expect((await server.transformRequest('/late.js'))?.code).toContain(
+      'after'
+    );
+    expect(transform).toHaveBeenCalled();
+  });
+});
+
+it('restores environment and removes the verification root after close and assertion failures', async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'verification-cleanup-'));
+  const previous = process.env.TEST_E2E_VERIFICATION_CLEANUP;
+  const assertion = new Error('Primary verification assertion');
+  const cleanup = new Error('Owner close rejected');
+  await expect(
+    withVerificationCleanup(async () => {
+      process.env.TEST_E2E_VERIFICATION_CLEANUP = 'changed';
+      throw assertion;
+    }, [
+      () => {
+        throw cleanup;
+      },
+      () => {
+        if (previous === undefined)
+          delete process.env.TEST_E2E_VERIFICATION_CLEANUP;
+        else process.env.TEST_E2E_VERIFICATION_CLEANUP = previous;
+      },
+      () => rm(root, { recursive: true, force: true }),
+    ])
+  ).rejects.toMatchObject({ cause: assertion, errors: [assertion, cleanup] });
+  expect(process.env.TEST_E2E_VERIFICATION_CLEANUP).toBe(previous);
+  const { access } = await import('node:fs/promises');
+  await expect(access(root)).rejects.toMatchObject({ code: 'ENOENT' });
+});
+
+it('decorates the final application-selected logger while forwarding its live state', async () => {
+  const { createE2ERestartCancellation } =
+    await import('@tests/server/e2e-restart-cancellation');
+  await harness(async ({ create, root }) => {
+    const logger = createLogger('silent');
+    const error = vi.spyOn(logger, 'error');
+    const cancellation = createE2ERestartCancellation(() => true);
+    const decorate = vi.fn(cancellation.decorate);
+    await writeFile(
+      path.join(root, 'vite.config.mjs'),
+      `export default {customLogger:{hasWarned:true,info(){},warn(){},warnOnce(){},error(){},clearScreen(){},hasErrorLogged(){return false;}}};`
+    );
+    const server = await create(
+      {
+        configFile: undefined,
+        plugins: [
+          {
+            name: 'application-selected-logger',
+            enforce: 'post',
+            config: {
+              order: 'post',
+              handler(raw) {
+                raw.customLogger = logger;
+              },
+            },
+          },
+        ],
+      },
+      decorate
+    );
+    expect(decorate).toHaveBeenCalledExactlyOnceWith(logger);
+    expect(server.config.logger.hasWarned).toBe(false);
+    logger.hasWarned = true;
+    expect(server.config.logger.hasWarned).toBe(true);
+    server.config.logger.error(String(cancellation.error()));
+    expect(error).not.toHaveBeenCalled();
+    server.config.logger.error('Genuine application error');
+    expect(error).toHaveBeenCalledExactlyOnceWith(
+      'Genuine application error',
+      undefined
+    );
   });
 });

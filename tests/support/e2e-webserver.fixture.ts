@@ -4,6 +4,7 @@ import path from 'node:path';
 import { writeFile } from 'node:fs/promises';
 import type { ViteDevServer } from 'vite';
 import { waitForE2EFixtureAuthorization } from './e2e-fixture-authorization';
+import { replyToE2EFixtureAction } from './e2e-fixture-action';
 
 await waitForE2EFixtureAuthorization();
 const { runE2EWebserverCommand, startE2EWebserver } =
@@ -202,17 +203,24 @@ try {
         });
       if (message === 'abandoned-env-change') {
         // Exercise retained generation callbacks, rather than a closed watcher.
-        void Promise.all(
-          servers
-            .filter((candidate) => candidate.config !== owner.vite.config)
-            .map((server) => server.restart())
-        ).then(() => process.send?.({ type: 'abandoned-change-delivered' }));
+        void replyToE2EFixtureAction(
+          () =>
+            Promise.all(
+              servers
+                .filter((candidate) => candidate.config !== owner.vite.config)
+                .map((server) => server.restart())
+            ),
+          'abandoned-change-delivered',
+          'abandoned-change-failed'
+        );
       }
       if (message === 'exit-parent') process.exit(0);
       if (message === 'restart')
-        void owner.vite
-          .restart()
-          .then(() => process.send?.({ type: 'restarted' }));
+        void replyToE2EFixtureAction(
+          () => owner.vite.restart(),
+          'restarted',
+          'restart-failed'
+        );
       if (message === 'close')
         void Promise.all([owner.close(), owner.close()]).then(
           () =>

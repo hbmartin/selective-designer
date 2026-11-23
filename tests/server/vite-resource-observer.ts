@@ -10,8 +10,10 @@ type NativeClose = {
   attempted: boolean;
   nativeAttempted: boolean;
   native: () => Promise<unknown>;
+  parent?: NativeClose;
 };
 type Scope = {
+  token: object;
   acquisitions: Promise<unknown>[];
   hooks: Promise<unknown>[];
   resources: NativeClose[];
@@ -20,11 +22,15 @@ type Scope = {
   settled: boolean;
   registered: boolean;
   result?: unknown[];
+  attempt?: CleanupAttempt;
+};
+type CleanupAttempt = {
   deadline?: number;
   started: Promise<number>;
   start: (deadline: number) => void;
   teardown: Promise<void>;
   markTeardown: () => void;
+  teardownMarked: boolean;
 };
 
 export class ViteRetirementTimeout extends Error {
@@ -37,7 +43,7 @@ export class ViteRetirementTimeout extends Error {
 export function createViteResourceObserver(
   callbacks: {
     onListen?: (server: ViteDevServer) => void;
-    onBegin?: (deadline: number) => void;
+    onBegin?: (deadline: number, config: ResolvedConfig) => void;
   } = {}
 ) {
   const scopes = new Map<object, { config: ResolvedConfig; scope: Scope }>();
@@ -57,29 +63,31 @@ export function createViteResourceObserver(
   }>();
   const factories = new WeakSet<Function>();
   const hooks = new WeakSet<Function>();
+  const instrumentationFailures = new WeakMap<
+    object,
+    Map<
+      string,
+      {
+        descriptor?: PropertyDescriptor;
+        extensible: boolean;
+        value: unknown;
+        error: unknown;
+      }
+    >
+  >();
   function scopeFor(config: ResolvedConfig) {
+    if (released.has(config)) return undefined;
     const token = tokenFor(config);
     let scope = scopes.get(token)?.scope;
     if (!scope) {
-      let start!: (deadline: number) => void;
-      let markTeardown!: () => void;
-      const started = new Promise<number>((resolve) => {
-        start = resolve;
-      });
-      const teardown = new Promise<void>((resolve) => {
-        markTeardown = resolve;
-      });
       scope = {
+        token,
         acquisitions: [],
         hooks: [],
         resources: [],
         failures: [],
         settled: false,
         registered: false,
-        started,
-        start,
-        teardown,
-        markTeardown,
       };
       scopes.set(token, { config, scope });
     }
@@ -89,10 +97,25 @@ export function createViteResourceObserver(
     void promise.catch(() => {});
     return promise;
   }
-  function begin(scope: Scope) {
-    scope.deadline ??= performance.now() + 5_000;
-    scope.start(scope.deadline);
-    callbacks.onBegin?.(scope.deadline);
+  function attemptFor(scope: Scope) {
+    if (!scope.attempt) {
+      const started = Promise.withResolvers<number>();
+      const teardown = Promise.withResolvers<void>();
+      scope.attempt = {
+        started: started.promise,
+        start: started.resolve,
+        teardown: teardown.promise,
+        markTeardown: teardown.resolve,
+        teardownMarked: false,
+      };
+    }
+    return scope.attempt;
+  }
+  function begin(token: object, attempt: CleanupAttempt) {
+    attempt.deadline ??= performance.now() + 5_000;
+    attempt.start(attempt.deadline);
+    const entry = scopes.get(token);
+    if (entry) callbacks.onBegin?.(attempt.deadline, entry.config);
   }
   function capture(scope: Scope, token: object, target: Closeable) {
     const existing = scope.resources.find(
@@ -109,7 +132,7 @@ export function createViteResourceObserver(
     };
     scope.resources.push(resource);
     function invoke(callback: Closeable['close']) {
-      begin(scope);
+      if (scopes.get(token)?.scope.attempt) begin(token, scope.attempt!);
       const promise = observed(
         context.run({ token }, () =>
           Promise.resolve().then(() => callback.call(target))
@@ -180,17 +203,60 @@ export function createViteResourceObserver(
         { cause: failures[0] }
       );
   }
+  function instrument(
+    scope: Scope,
+    target: object,
+    key: string,
+    install: (value: unknown) => void
+  ) {
+    let descriptor: PropertyDescriptor | undefined;
+    for (
+      let owner: object | null = target;
+      owner;
+      owner = Object.getPrototypeOf(owner)
+    ) {
+      descriptor = Object.getOwnPropertyDescriptor(owner, key);
+      if (descriptor) break;
+    }
+    const extensible = Object.isExtensible(target);
+    const previous = instrumentationFailures.get(target)?.get(key);
+    let value: unknown;
+    try {
+      value = Reflect.get(target, key);
+      if (
+        previous &&
+        previous.extensible === extensible &&
+        previous.value === value &&
+        ['value', 'get', 'set', 'writable', 'configurable', 'enumerable'].every(
+          (part) =>
+            Reflect.get(previous.descriptor ?? {}, part) ===
+            Reflect.get(descriptor ?? {}, part)
+        )
+      ) {
+        if (!scope.failures.includes(previous.error))
+          scope.failures.push(previous.error);
+        return;
+      }
+      install(value);
+      instrumentationFailures.get(target)?.delete(key);
+    } catch (error) {
+      const failures = instrumentationFailures.get(target) ?? new Map();
+      failures.set(key, { descriptor, extensible, value, error });
+      instrumentationFailures.set(target, failures);
+      scope.failures.push(error);
+    }
+  }
   function prepare(config: ResolvedConfig) {
     if (released.has(config)) return;
     const token = tokenFor(config);
-    const scope = scopeFor(config);
+    const scope = scopeFor(config)!;
     // These reads must not populate Vite's cached sorted-hook membership/order.
     for (const plugin of config.plugins ?? []) {
-      try {
-        const hook = plugin.closeServer;
-        if (!hook) continue;
+      instrument(scope, plugin, 'closeServer', (value) => {
+        const hook = value as typeof plugin.closeServer;
+        if (!hook) return;
         const original = typeof hook === 'function' ? hook : hook.handler;
-        if (hooks.has(original)) continue;
+        if (hooks.has(original)) return;
         const wrapper: typeof original = function (
           this: ThisParameterType<typeof original>,
           ...args: Parameters<typeof original>
@@ -206,15 +272,15 @@ export function createViteResourceObserver(
         hooks.add(wrapper);
         plugin.closeServer =
           typeof hook === 'function' ? wrapper : { ...hook, handler: wrapper };
-      } catch (error) {
-        scope.failures.push(error);
-      }
+      });
     }
     for (const options of Object.values(config.environments ?? {})) {
-      try {
-        const original = options.dev.createEnvironment;
-        if (factories.has(original)) continue;
+      instrument(scope, options.dev, 'createEnvironment', (value) => {
+        const original = value as typeof options.dev.createEnvironment;
+        if (factories.has(original)) return;
         const wrapper: typeof original = async (...args) => {
+          const scope = scopes.get(token)?.scope;
+          if (!scope) return original(...args);
           const [, , factoryContext] = args;
           capture(scope, token, factoryContext.ws);
           const operation = observed(
@@ -232,23 +298,39 @@ export function createViteResourceObserver(
               override async close() {}
             })(args[0], args[1], { hot: false });
           }
+          const parts = [
+            environment.hot,
+            environment.depsOptimizer,
+            environment.bundledDev,
+          ]
+            .filter((target): target is NonNullable<typeof target> => !!target)
+            .map((target) => capture(scope, token, target));
           const close = environment.close;
           let initializationFailed = false;
-          if (close === DevEnvironment.prototype.close) {
-            environment.close = function () {
-              if (initializationFailed) {
-                try {
-                  void environment.pluginContainer;
-                } catch {
-                  // Default close requires a container that failed init never exposed.
-                  // Drain public parts, without claiming disposal of hidden internals.
-                  return closePublicParts(scope, token, environment);
-                }
+          environment.close = async function () {
+            const failures: unknown[] = [];
+            try {
+              await close.call(environment);
+            } catch (error) {
+              failures.push(error);
+            }
+            if (initializationFailed) {
+              try {
+                await closePublicParts(scope, token, environment);
+              } catch (error) {
+                failures.push(error);
               }
-              return close.call(environment);
-            };
-          }
-          capture(scope, token, environment);
+            }
+            if (failures.length === 1) throw failures[0];
+            if (failures.length > 1)
+              throw new AggregateError(
+                failures,
+                'E2E environment cleanup failed after initialization',
+                { cause: failures[0] }
+              );
+          };
+          const owner = capture(scope, token, environment);
+          for (const part of parts) if (part !== owner) part.parent ??= owner;
           const listen = environment.listen;
           if (listen)
             environment.listen = function (server) {
@@ -273,14 +355,12 @@ export function createViteResourceObserver(
         };
         factories.add(wrapper);
         options.dev.createEnvironment = wrapper;
-      } catch (error) {
-        scope.failures.push(error);
-      }
+      });
     }
   }
   function run<T>(config: ResolvedConfig, action: () => T): T {
     prepare(config);
-    scopeFor(config);
+    if (!scopeFor(config)) return action();
     return context.run({ token: tokenFor(config) }, action);
   }
   async function finish(scope: Scope) {
@@ -293,6 +373,14 @@ export function createViteResourceObserver(
       count = scope.resources.length;
       const outcomes = await Promise.allSettled(
         scope.resources.map(async (resource) => {
+          if (resource.parent) {
+            if (!resource.parent.attempted)
+              await Promise.resolve()
+                .then(() => resource.parent!.target.close())
+                .catch((error: unknown) => scope.failures.push(error));
+            while (resource.parent.pending.size)
+              await Promise.allSettled(resource.parent.pending);
+          }
           if (!resource.attempted)
             await Promise.resolve()
               .then(() => resource.target.close())
@@ -310,13 +398,22 @@ export function createViteResourceObserver(
       for (const outcome of outcomes)
         if (outcome.status === 'rejected') scope.failures.push(outcome.reason);
     }
+    const failures = await observeScope(scope);
+    scope.result = failures;
+    scope.settled = true;
+    return failures;
+  }
+  async function observeScope(scope: Scope) {
     while (true) {
+      const acquisitions = scope.acquisitions.length;
       const count = scope.hooks.length;
       await Promise.allSettled([
+        ...scope.acquisitions,
         ...scope.hooks,
         ...scope.resources.flatMap((resource) => [...resource.pending]),
       ]);
       if (
+        acquisitions === scope.acquisitions.length &&
         count === scope.hooks.length &&
         scope.resources.every((resource) => resource.pending.size === 0)
       )
@@ -332,17 +429,19 @@ export function createViteResourceObserver(
         ...scope.resources.flatMap((resource) => resource.failures),
       ]),
     ];
-    scope.result = failures;
-    scope.settled = true;
     return failures;
   }
   function settleScope(scope: Scope) {
+    begin(scope.token, attemptFor(scope));
     scope.finishing ??= finish(scope);
     return scope.finishing;
   }
   function settle(config: ResolvedConfig, _deadline?: number) {
     const previous = released.get(config);
-    return previous ? Promise.resolve(previous) : settleScope(scopeFor(config));
+    if (previous) return Promise.resolve(previous);
+    const scope = scopeFor(config)!;
+    begin(tokenFor(config), attemptFor(scope));
+    return settleScope(scope);
   }
   function release(config: ResolvedConfig) {
     return releaseToken(tokenFor(config));
@@ -370,14 +469,23 @@ export function createViteResourceObserver(
     return result;
   }
   function boundScope(scope: Scope, operation: Promise<void>) {
-    const retirement = scope.started.then(async (deadline) => {
-      const ready = Promise.race([
-        scope.teardown,
+    const attempt = attemptFor(scope);
+    const ready = observed(
+      Promise.race([
+        attempt.teardown,
         operation.then(
           () => {},
           () => {}
         ),
-      ]).then(() => settleScope(scope));
+      ]).then(() =>
+        attempt.teardownMarked ? settleScope(scope) : observeScope(scope)
+      )
+    );
+    void ready.finally(() => {
+      if (scope.attempt === attempt && !scope.finishing)
+        scope.attempt = undefined;
+    });
+    const retirement = attempt.started.then(async (deadline) => {
       try {
         await beforeDeadline(
           ready,
@@ -393,30 +501,40 @@ export function createViteResourceObserver(
   return {
     prepare,
     run,
+    dispose<T>(config: ResolvedConfig, action: () => T): T {
+      const scope = scopeFor(config);
+      if (scope) begin(tokenFor(config), attemptFor(scope));
+      return run(config, action);
+    },
     settle,
     release,
     register(config: ResolvedConfig) {
       prepare(config);
-      scopeFor(config).registered = true;
+      const scope = scopeFor(config);
+      if (scope) scope.registered = true;
     },
     markTeardown() {
       const scope = scopes.get(context.getStore()?.token ?? {})?.scope;
       if (scope) {
-        begin(scope);
-        scope.markTeardown();
+        const attempt = attemptFor(scope);
+        begin(context.getStore()!.token, attempt);
+        attempt.teardownMarked = true;
+        attempt.markTeardown();
       }
     },
     deadline(config: ResolvedConfig) {
-      return scopes.get(tokenFor(config))?.scope.deadline;
+      return scopes.get(tokenFor(config))?.scope.attempt?.deadline;
     },
     boundRestart(config: ResolvedConfig, operation: Promise<void>) {
-      return boundScope(scopeFor(config), operation);
+      const scope = scopeFor(config);
+      return scope ? boundScope(scope, operation) : operation;
     },
     settleStarted(config: ResolvedConfig, _deadline?: number) {
       const scope = scopes.get(tokenFor(config))?.scope;
-      return !scope || (scope.deadline === undefined && !scope.hooks.length)
-        ? Promise.resolve([])
-        : settleScope(scope);
+      if (!scope) return Promise.resolve(released.get(config) ?? []);
+      return scope.attempt?.teardownMarked
+        ? settleScope(scope)
+        : observeScope(scope);
     },
     async settleOrphans(_deadline?: number) {
       const selected = [...scopes.keys()].filter((token) => {

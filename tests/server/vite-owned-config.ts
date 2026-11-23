@@ -1,5 +1,5 @@
 import { existsSync } from 'node:fs';
-import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, realpath, rm, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import type {
@@ -9,7 +9,9 @@ import type {
   ResolvedConfig,
   UserConfig,
   ViteDevServer,
+  Logger,
 } from 'vite';
+import { createLogger } from 'vite';
 
 const ownerName = 'e2e-owned-database';
 export type ViteOwnerApi = {
@@ -51,19 +53,36 @@ function writablePlugin(source: Plugin): Plugin {
       return false;
     });
   if (!immutable) return source;
-  const descriptors = Object.getOwnPropertyDescriptors(source);
-  for (const key of lifecycleKeys) delete descriptors[key];
-  const facade = Object.create(
-    Object.getPrototypeOf(source),
-    descriptors
-  ) as Plugin;
+  const target = Object.create(Object.getPrototypeOf(source)) as Plugin;
+  const facade = new Proxy(target, {
+    get(object, key, receiver) {
+      return Object.hasOwn(object, key)
+        ? Reflect.get(object, key, receiver)
+        : Reflect.get(source, key, source);
+    },
+    set(object, key, value: unknown, receiver) {
+      return Object.hasOwn(object, key)
+        ? Reflect.set(object, key, value, receiver)
+        : Reflect.set(source, key, value, source);
+    },
+    has: (object, key) => key in object || key in source,
+    ownKeys: (object) => [
+      ...new Set([...Reflect.ownKeys(source), ...Reflect.ownKeys(object)]),
+    ],
+    getOwnPropertyDescriptor(object, key) {
+      const own = Object.getOwnPropertyDescriptor(object, key);
+      if (own) return own;
+      const descriptor = Object.getOwnPropertyDescriptor(source, key);
+      return descriptor && { ...descriptor, configurable: true };
+    },
+  });
   for (const key of lifecycleKeys) {
     let installed: { source: unknown; value: unknown } | undefined;
     Object.defineProperty(facade, key, {
       configurable: true,
       enumerable: true,
       get() {
-        const current = source[key];
+        const current = Reflect.get(source, key, source) as unknown;
         if (installed && installed.source === current) return installed.value;
         return current;
       },
@@ -151,11 +170,34 @@ export function withE2EViteOwnership(config: UserConfig): UserConfig {
 }
 export async function createOwnedViteConfig(
   inline: InlineConfig,
-  ownerPlugin: Plugin
+  ownerPlugin: Plugin,
+  decorateLogger?: (logger: Logger) => Logger
 ) {
   const config = {
     ...inline,
-    plugins: [ownerPlugin, ...(inline.plugins ?? []).map(wrapPlugin)],
+    plugins: [
+      ownerPlugin,
+      ...(inline.plugins ?? []).map(wrapPlugin),
+      ...(decorateLogger
+        ? [
+            {
+              name: 'e2e-restart-diagnostics',
+              enforce: 'post' as const,
+              config: {
+                order: 'post' as const,
+                handler(raw: UserConfig) {
+                  raw.customLogger = decorateLogger(
+                    raw.customLogger ??
+                      createLogger(raw.logLevel, {
+                        allowClearScreen: raw.clearScreen,
+                      })
+                  );
+                },
+              },
+            },
+          ]
+        : []),
+    ],
   };
   if (inline.configFile === false)
     return {
@@ -164,7 +206,9 @@ export async function createOwnedViteConfig(
       ignoreBridge: (_server: ViteDevServer) => {},
       remove: async () => {},
     };
-  const directory = await mkdtemp(path.join(os.tmpdir(), 'e2e-vite-config-'));
+  const directory = await realpath(
+    await mkdtemp(path.join(os.tmpdir(), 'e2e-vite-config-'))
+  );
   const bridge = path.join(directory, 'vite.config.mjs');
   let previous: string | undefined;
   async function refresh() {
