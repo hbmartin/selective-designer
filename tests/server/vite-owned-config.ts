@@ -15,7 +15,7 @@ const ownerName = 'e2e-owned-database';
 export type ViteOwnerApi = {
   prepare(config: ResolvedConfig): void;
   register(server: ViteDevServer): void;
-  isClosing?: () => boolean;
+  isFinalClose?: () => boolean;
 };
 function owner(config: ResolvedConfig): ViteOwnerApi {
   const api = config.plugins.find((plugin) => plugin.name === ownerName)
@@ -24,11 +24,62 @@ function owner(config: ResolvedConfig): ViteOwnerApi {
   return api;
 }
 const decorated = new WeakSet<Plugin>();
+const facades = new WeakMap<Plugin, Plugin>();
+const lifecycleKeys = [
+  'configResolved',
+  'configureServer',
+  'closeServer',
+] as const;
+/** Keep immutable source plugins intact while allowing ownership instrumentation. */
+function writablePlugin(source: Plugin): Plugin {
+  const previous = facades.get(source);
+  if (previous) return previous;
+  const immutable =
+    !Object.isExtensible(source) ||
+    lifecycleKeys.some((key) => {
+      for (
+        let prototype: object | null = source;
+        prototype;
+        prototype = Object.getPrototypeOf(prototype)
+      ) {
+        const descriptor = Object.getOwnPropertyDescriptor(prototype, key);
+        if (descriptor)
+          return 'writable' in descriptor
+            ? !descriptor.writable
+            : !descriptor.set;
+      }
+      return false;
+    });
+  if (!immutable) return source;
+  const descriptors = Object.getOwnPropertyDescriptors(source);
+  for (const key of lifecycleKeys) delete descriptors[key];
+  const facade = Object.create(
+    Object.getPrototypeOf(source),
+    descriptors
+  ) as Plugin;
+  for (const key of lifecycleKeys) {
+    let installed: { source: unknown; value: unknown } | undefined;
+    Object.defineProperty(facade, key, {
+      configurable: true,
+      enumerable: true,
+      get() {
+        const current = source[key];
+        if (installed && installed.source === current) return installed.value;
+        return current;
+      },
+      set(value: unknown) {
+        installed = { source: source[key], value };
+      },
+    });
+  }
+  facades.set(source, facade);
+  return facade;
+}
 function wrapPlugin(input: PluginOption): PluginOption {
   if (!input) return input;
   if (Array.isArray(input)) return input.map(wrapPlugin);
   if ('then' in input) return input.then(wrapPlugin);
-  const plugin: Plugin = input;
+  const plugin = writablePlugin(input);
   if (decorated.has(plugin)) return plugin;
   decorated.add(plugin);
   const resolved = plugin.configResolved;
@@ -60,16 +111,18 @@ function wrapPlugin(input: PluginOption): PluginOption {
               post();
             } finally {
               api.prepare(server.config);
+              api.register(server);
             }
           };
       } finally {
         api.prepare(server.config);
+        api.register(server);
       }
     };
     plugin.configureServer =
       typeof configure === 'function' ? handler : { ...configure, handler };
   }
-  return input;
+  return plugin;
 }
 function registrar(): Plugin {
   return {
@@ -104,26 +157,34 @@ export async function createOwnedViteConfig(
     ...inline,
     plugins: [ownerPlugin, ...(inline.plugins ?? []).map(wrapPlugin)],
   };
-  if (inline.configFile === false) return { config, remove: async () => {} };
-  const selected = inline.configFile
-    ? path.resolve(inline.configFile)
-    : ['js', 'mjs', 'ts', 'cjs', 'mts', 'cts']
-        .map((extension) =>
-          path.resolve(inline.root ?? process.cwd(), `vite.config.${extension}`)
-        )
-        .find(existsSync);
-  if (!selected)
+  if (inline.configFile === false)
     return {
-      config: { ...config, configFile: false as const },
+      config,
+      refresh: async () => {},
+      ignoreBridge: (_server: ViteDevServer) => {},
       remove: async () => {},
     };
   const directory = await mkdtemp(path.join(os.tmpdir(), 'e2e-vite-config-'));
   const bridge = path.join(directory, 'vite.config.mjs');
+  let previous: string | undefined;
+  async function refresh() {
+    const selected = inline.configFile
+      ? path.resolve(inline.configFile)
+      : ['js', 'mjs', 'ts', 'cjs', 'mts', 'cts']
+          .map((extension) =>
+            path.resolve(
+              inline.root ?? process.cwd(),
+              `vite.config.${extension}`
+            )
+          )
+          .find(existsSync);
+    const content = `${selected ? `import source from ${JSON.stringify(selected)};` : 'const source = {};'}\nimport { withE2EViteOwnership } from ${JSON.stringify(path.resolve('tests/server/vite-owned-config.ts'))};\nexport default async env => withE2EViteOwnership(await (typeof source === 'function' ? source(env) : source));\n`;
+    if (content === previous) return;
+    await writeFile(bridge, content);
+    previous = content;
+  }
   try {
-    await writeFile(
-      bridge,
-      `import source from ${JSON.stringify(selected)};\nimport { withE2EViteOwnership } from ${JSON.stringify(path.resolve('tests/server/vite-owned-config.ts'))};\nexport default async env => withE2EViteOwnership(await (typeof source === 'function' ? source(env) : source));\n`
-    );
+    await refresh();
   } catch (error) {
     try {
       await rm(directory, { recursive: true, force: true });
@@ -138,6 +199,11 @@ export async function createOwnedViteConfig(
   }
   return {
     config: { ...config, configFile: bridge },
+    refresh,
+    // Native config dependencies remain watched; only our generated file is inert.
+    ignoreBridge: (server: ViteDevServer) => {
+      server.watcher.unwatch(bridge);
+    },
     remove: () => rm(directory, { recursive: true, force: true }),
   };
 }

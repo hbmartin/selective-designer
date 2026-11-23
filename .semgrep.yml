@@ -1603,3 +1603,18 @@ rules:
       - pattern: $SERVER._closeServer(...)
       - pattern: $SERVER._setInternalServer(...)
       - pattern: $CONFIG.getSortedPluginHooks = $CALLBACK
+
+  - id: e2e-vite-lifecycle-replacement-owned
+    message: Keep lifecycle method replacements in the owned coordinator or observer, or an explicit fault fixture.
+    severity: ERROR
+    languages: [typescript]
+    paths:
+      include: [tests/server/**, tests/support/**]
+      exclude:
+        - tests/server/e2e-webserver.ts
+        - tests/server/vite-resource-observer.ts
+        - tests/support/**/*.fixture.ts
+    pattern-either:
+      - pattern: $SERVER.restart = $CALLBACK
+      - pattern: $SERVER.listen = $CALLBACK
+      - pattern: $SERVER.close = $CALLBACK
