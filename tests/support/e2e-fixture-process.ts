@@ -20,6 +20,8 @@ export type E2EFixtureMessage = {
   exitCode?: string | number;
   watchersClosed?: boolean;
   instances?: number;
+  watchersOpen?: number;
+  sigtermHandlers?: number;
 };
 type Exit = {
   status: number | null;
@@ -77,11 +79,8 @@ export async function launchE2EFixture(
       }
     } catch (error) {
       failures.push(error);
-      try {
-        stopDirectChild();
-      } catch (fallbackError) {
-        failures.push(fallbackError);
-      }
+      // Once authorized, the leader may be the only retained witness for
+      // descendants created since launch. Preserve it for a fresh attempt.
     }
     if (exited && closed) {
       try {
@@ -139,31 +138,51 @@ export async function launchE2EFixture(
     launched.stderr!.on('data', (chunk) => {
       output += String(chunk);
     });
-    launched.on('message', (message: E2EFixtureMessage) =>
-      messages.push(message)
-    );
+    let announce!: () => void;
+    let rejectAnnouncement!: (error: Error) => void;
+    const announced = new Promise<void>((resolve, reject) => {
+      announce = resolve;
+      rejectAnnouncement = reject;
+    });
+    launched.on('message', (message: E2EFixtureMessage) => {
+      messages.push(message);
+      if (message.type === 'authorization-ready') announce();
+    });
     launched.once('disconnect', () => {
       ipcDrained = true;
+      rejectAnnouncement(new Error('Fixture authorization IPC disconnected'));
     });
     exited = new Promise((resolve) => {
       launched.on('error', (error) => {
         if (launched.pid === undefined) {
           spawnError = error;
+          rejectAnnouncement(error);
           resolve({ status: null, signal: null, spawnError: error });
         } else transportErrors.push(error);
       });
-      launched.once('exit', (status, signal) => resolve({ status, signal }));
+      launched.once('exit', (status, signal) => {
+        rejectAnnouncement(
+          new Error('Fixture exited before process-group confirmation')
+        );
+        resolve({ status, signal });
+      });
     });
     closed = new Promise((resolve) => {
       launched.once('close', () => resolve());
     });
     const deadline = performance.now() + 5_000;
+    await beforeDeadline(
+      announced,
+      deadline,
+      'Fixture process-group confirmation timed out'
+    );
     let lastInspectionError: unknown;
     let rows: ReturnType<typeof inspectFixtureProcesses>;
     while (true) {
       if (spawnError) throw spawnError;
       if (launched.exitCode !== null || launched.signalCode !== null)
         throw new Error('Fixture exited before process-group confirmation');
+      if (ipcDrained) throw new Error('Fixture authorization IPC disconnected');
       const remaining = deadline - performance.now();
       if (remaining <= 0)
         throw new Error('Fixture process-group confirmation timed out', {
@@ -171,6 +190,7 @@ export async function launchE2EFixture(
         });
       try {
         rows = inspectFixtureProcesses(Math.max(1, Math.ceil(remaining)));
+        lastInspectionError = undefined;
         if (
           performance.now() < deadline &&
           launched.pid &&
@@ -197,6 +217,16 @@ export async function launchE2EFixture(
       launched.pid!,
       new Set([process.pid]),
       rows
+    );
+    await beforeDeadline(
+      new Promise<void>((resolve, reject) => {
+        launched.send({ type: 'authorize' }, (error) => {
+          if (error) reject(error);
+          else resolve();
+        });
+      }),
+      deadline,
+      'Fixture authorization delivery timed out'
     );
     return {
       root,

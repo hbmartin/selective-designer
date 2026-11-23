@@ -1,10 +1,13 @@
 import type { AddressInfo } from 'node:net';
 import { spawn } from 'node:child_process';
+import path from 'node:path';
+import { writeFile } from 'node:fs/promises';
 import type { ViteDevServer } from 'vite';
-import {
-  runE2EWebserverCommand,
-  startE2EWebserver,
-} from '../server/e2e-webserver';
+import { waitForE2EFixtureAuthorization } from './e2e-fixture-authorization';
+
+await waitForE2EFixtureAuthorization();
+const { runE2EWebserverCommand, startE2EWebserver } =
+  await import('../server/e2e-webserver');
 
 const [root, mode = 'ready', requestedPorts = '{}'] = process.argv.slice(3);
 if (!root) throw new Error('Fixture root required');
@@ -12,7 +15,10 @@ const ports = JSON.parse(requestedPorts) as {
   database?: number;
   http?: number;
 };
-if (!mode.startsWith('final-flush')) {
+if (
+  !mode.startsWith('final-flush') &&
+  mode !== 'programmatic-startup-timeout'
+) {
   process.on('SIGINT', () => console.log('Fixture signal received'));
   process.on('SIGTERM', () => console.log('Fixture signal received'));
 }
@@ -48,6 +54,11 @@ const cleanupReleased = new Promise<void>((resolve) => {
 });
 
 try {
+  if (mode === 'config-plugin-failure')
+    await writeFile(
+      path.join(root, 'vite.config.mjs'),
+      `export default { plugins: [{ name: 'early-config-file-plugin', configureServer(server) { const close = server.watcher.close.bind(server.watcher); server.watcher.close = async () => { await close(); process.send?.({ type: 'early-watcher-closed' }); }; throw new Error('Fixture early config plugin failure'); } }] };`
+    );
   const start = mode.startsWith('programmatic')
     ? startE2EWebserver
     : runE2EWebserverCommand;
@@ -68,8 +79,11 @@ try {
           : [],
     viteConfig: {
       root,
-      configFile: false,
-      envDir: false,
+      configFile:
+        mode === 'config-plugin-failure'
+          ? path.join(root, 'vite.config.mjs')
+          : false,
+      envDir: mode.startsWith('restart-') ? undefined : false,
       clearScreen: false,
       server: { host: '127.0.0.1', port: ports.http ?? 0, strictPort: true },
       plugins: [
@@ -110,7 +124,8 @@ try {
             }
             if (
               mode === 'startup-cleanup-failure' ||
-              mode === 'startup-lingering'
+              mode === 'startup-lingering' ||
+              mode === 'programmatic-startup-timeout'
             )
               server.listen = async () => {
                 throw new Error('Fixture primary startup failure');
@@ -137,7 +152,11 @@ try {
               mode === 'programmatic-failure'
             )
               throw new Error('Fixture secondary cleanup failure');
-            if (mode === 'programmatic-hang') await released;
+            if (
+              mode === 'programmatic-hang' ||
+              mode === 'programmatic-startup-timeout'
+            )
+              await released;
             if (mode.startsWith('race-')) {
               process.send?.({ type: 'cleanup-gate' });
               await cleanupReleased;
@@ -165,6 +184,25 @@ try {
           throw error;
         });
         process.send?.({ type: 'pipe-holder', pid: holder.pid });
+      }
+      if (message === 'inspect-instances')
+        process.send?.({
+          type: 'instances',
+          instances: servers.length,
+          watchersOpen: watchers.filter((watcher) => !watcher.closed).length,
+          sigtermHandlers: process.listenerCount('SIGTERM'),
+        });
+      if (message === 'abandoned-env-change') {
+        for (const server of servers.filter(
+          (candidate) => candidate.config !== owner.vite.config
+        ))
+          server.watcher.emit(
+            'change',
+            path.join(server.config.envDir || root, '.env')
+          );
+        setImmediate(() =>
+          process.send?.({ type: 'abandoned-change-delivered' })
+        );
       }
       if (message === 'exit-parent') process.exit(0);
       if (message === 'restart')
@@ -200,6 +238,20 @@ try {
   console.error(
     `Fixture startup failed: ${error instanceof Error ? error.message : String(error)}`
   );
-  process.exitCode = 1;
-  if (process.connected) process.disconnect();
+  if (mode === 'programmatic-startup-timeout') {
+    process.send?.({
+      type: 'startup-failed',
+      exitCode: process.exitCode ?? 'unset',
+    });
+    process.on('message', (message: unknown) => {
+      if (message === 'ping-after-startup-timeout')
+        process.send?.({
+          type: 'pong-after-startup-timeout',
+          exitCode: process.exitCode ?? 'unset',
+        });
+    });
+  } else {
+    process.exitCode = 1;
+    if (process.connected) process.disconnect();
+  }
 }

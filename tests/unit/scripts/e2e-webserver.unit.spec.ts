@@ -92,8 +92,16 @@ beforeEach(() => {
   closeVite = vi.fn(async () => {});
   listen = vi.fn(async () => {});
   mocks.create.mockImplementation(async (config) => {
-    const server = { close: closeVite, listen, restart: vi.fn(async () => {}) };
-    for (const plugin of config.plugins) await plugin.configureServer?.(server);
+    const server = {
+      config: {},
+      close: closeVite,
+      listen,
+      restart: vi.fn(async () => {}),
+    };
+    for (const plugin of config.plugins)
+      await (typeof plugin.configureServer === 'function'
+        ? plugin.configureServer(server)
+        : plugin.configureServer?.handler(server));
     return server;
   });
 });
@@ -360,9 +368,10 @@ it('marks failure without reprinting a previously reported programmatic timeout'
   expect(console.error).toHaveBeenCalledExactlyOnceWith(
     'E2E cleanup failed: E2E resource cleanup exceeded ten seconds'
   );
-  expect(exit).toHaveBeenCalledWith(1);
+  expect(exit).not.toHaveBeenCalled();
   release.resolve();
   await vi.advanceTimersByTimeAsync(0);
+  expect(exit).toHaveBeenCalledWith(1);
 });
 it('retains signal handlers through final flushing and joins repeated interrupts', async () => {
   const owner = (await startE2EWebserver({ setupScripts: [] }))!;
@@ -394,8 +403,14 @@ it('attempts every partial server closure and database cleanup after failures', 
   const partialClose = vi.fn(async () => {
     throw second;
   });
-  const partial = { close: partialClose, restart: vi.fn(async () => {}) };
-  await mocks.create.mock.calls[0]![0].plugins[0].configureServer(partial);
+  const partial = {
+    config: {},
+    close: partialClose,
+    restart: vi.fn(async () => {}),
+  };
+  await mocks.create.mock.calls[0]![0].plugins[0].configureServer.handler(
+    partial
+  );
   await expect(owner.close()).rejects.toMatchObject({
     errors: [first, second],
     cause: first,
@@ -408,17 +423,27 @@ it('settles an in-flight restart before closing every acquired server', async ()
   const release = deferred<void>();
   const rawRestart = vi.fn(() => release.promise);
   mocks.create.mockImplementation(async (config) => {
-    const server = { close: closeVite, listen, restart: rawRestart };
-    for (const plugin of config.plugins) await plugin.configureServer?.(server);
+    const server = {
+      config: {},
+      close: closeVite,
+      listen,
+      restart: rawRestart,
+    };
+    for (const plugin of config.plugins)
+      await (typeof plugin.configureServer === 'function'
+        ? plugin.configureServer(server)
+        : plugin.configureServer?.handler(server));
     return server;
   });
   const owner = (await startE2EWebserver({ setupScripts: [] }))!;
   const restart = owner.vite.restart();
+  await vi.advanceTimersByTimeAsync(0);
   const closing = owner.close();
   await vi.advanceTimersByTimeAsync(0);
   expect(closeVite).not.toHaveBeenCalled();
   const partialClose = vi.fn(async () => {});
-  await mocks.create.mock.calls[0]![0].plugins[0].configureServer({
+  await mocks.create.mock.calls[0]![0].plugins[0].configureServer.handler({
+    config: {},
     close: partialClose,
     restart: rawRestart,
   });
@@ -426,7 +451,7 @@ it('settles an in-flight restart before closing every acquired server', async ()
   await Promise.all([restart, closing]);
   expect(closeVite).toHaveBeenCalledOnce();
   expect(partialClose).toHaveBeenCalledOnce();
-  await expect(owner.vite.restart()).rejects.toThrow('startup cancelled');
+  await expect(owner.vite.restart()).resolves.toBeUndefined();
   expect(rawRestart).toHaveBeenCalledOnce();
 });
 it('retains one database failure shared by several final-close hooks', async () => {
@@ -436,16 +461,21 @@ it('retains one database failure shared by several final-close hooks', async () 
   mocks.create.mockImplementation(async (config) => {
     closeHook = config.plugins[0].closeServer;
     const server = {
+      config: {},
       close: vi.fn(() => closeHook({ reason: 'close' })),
       listen,
       restart: vi.fn(async () => {}),
     };
-    for (const plugin of config.plugins) await plugin.configureServer?.(server);
+    for (const plugin of config.plugins)
+      await (typeof plugin.configureServer === 'function'
+        ? plugin.configureServer(server)
+        : plugin.configureServer?.handler(server));
     return server;
   });
   const owner = (await startE2EWebserver({ setupScripts: [] }))!;
   const partialClose = vi.fn(() => closeHook({ reason: 'close' }));
-  await mocks.create.mock.calls[0]![0].plugins[0].configureServer({
+  await mocks.create.mock.calls[0]![0].plugins[0].configureServer.handler({
+    config: {},
     close: partialClose,
     restart: vi.fn(async () => {}),
   });
@@ -463,7 +493,8 @@ it('keeps one original failure when restart close callbacks join the same reject
   const joinedClose = vi.fn(async () => {
     throw failure;
   });
-  await mocks.create.mock.calls[0]![0].plugins[0].configureServer({
+  await mocks.create.mock.calls[0]![0].plugins[0].configureServer.handler({
+    config: {},
     close: joinedClose,
     restart: vi.fn(async () => {}),
   });
@@ -496,4 +527,241 @@ it('starts the CLI terminal budget for a provisional child interrupt before laun
   expect(exit).toHaveBeenCalledWith(1);
   cleanup.resolve();
   await vi.advanceTimersByTimeAsync(0);
+});
+
+it('retains programmatic startup handlers past timeout until underlying cleanup settles', async () => {
+  const startupFailure = new Error('Startup failed');
+  const release = deferred<void>();
+  listen.mockRejectedValue(startupFailure);
+  closeVite.mockReturnValue(release.promise);
+  const starting = startE2EWebserver({ setupScripts: [] });
+  await Promise.all([
+    expect(starting).rejects.toBe(startupFailure),
+    vi.advanceTimersByTimeAsync(10_000),
+  ]);
+  expect(handlers.has('SIGINT')).toBe(true);
+  expect(handlers.has('SIGTERM')).toBe(true);
+  expect(exit).not.toHaveBeenCalled();
+  release.resolve();
+  await vi.advanceTimersByTimeAsync(0);
+  expect(handlers.has('SIGINT')).toBe(false);
+  expect(handlers.has('SIGTERM')).toBe(false);
+});
+it.each(['SIGINT', 'SIGTERM'] as const)(
+  'joins delayed startup cleanup after a programmatic timeout on %s',
+  async (signal) => {
+    const failure = new Error('Startup failed');
+    const release = deferred<void>();
+    listen.mockRejectedValue(failure);
+    closeVite.mockReturnValue(release.promise);
+    const starting = startE2EWebserver({ setupScripts: [] });
+    await Promise.all([
+      expect(starting).rejects.toBe(failure),
+      vi.advanceTimersByTimeAsync(10_000),
+    ]);
+    handlers.get(signal)!();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(exit).not.toHaveBeenCalled();
+    expect(closeVite).toHaveBeenCalledOnce();
+    release.resolve();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(exit).toHaveBeenCalledWith(1);
+    expect(console.error).toHaveBeenCalledWith(
+      'E2E startup failed: Startup failed'
+    );
+    expect(handlers.has(signal)).toBe(true);
+  }
+);
+it('forces the original retained child if timed-out programmatic startup never finishes after a signal', async () => {
+  const entered = deferred<void>();
+  const child = Object.assign(new EventEmitter(), { kill: vi.fn(() => true) });
+  mocks.spawn.mockImplementation(() => {
+    entered.resolve();
+    return child;
+  });
+  const starting = startE2EWebserver({ setupScripts: ['synthetic-setup.ts'] });
+  await entered.promise;
+  const setupFailure = new Error('Setup transport failed');
+  child.emit('error', setupFailure);
+  // Keep another acquisition pending through database cleanup.
+  const release = deferred<void>();
+  mocks.dbClose.mockReturnValue(release.promise);
+  await Promise.all([
+    expect(starting).rejects.toBe(setupFailure),
+    vi.advanceTimersByTimeAsync(10_000),
+  ]);
+  handlers.get('SIGINT')!();
+  await vi.advanceTimersByTimeAsync(9_000);
+  expect(exit).not.toHaveBeenCalled();
+  expect(console.error).toHaveBeenCalledWith(
+    expect.stringContaining('pending after nine seconds')
+  );
+  await vi.advanceTimersByTimeAsync(1_000);
+  expect(child.kill).toHaveBeenCalledWith('SIGKILL');
+  expect(exit).toHaveBeenCalledWith(1);
+  release.resolve();
+  await vi.advanceTimersByTimeAsync(0);
+});
+it('waits for every server teardown before closing the shared database', async () => {
+  const release = deferred<void>();
+  closeVite.mockReturnValue(release.promise);
+  const owner = (await startE2EWebserver({ setupScripts: [] }))!;
+  const hooks = mocks.create.mock.calls[0]![0].plugins[0];
+  const partialClose = vi.fn(() => hooks.closeServer({ reason: 'close' }));
+  await hooks.configureServer.handler({
+    config: {},
+    close: partialClose,
+    restart: vi.fn(),
+  });
+  const closing = owner.close();
+  await vi.advanceTimersByTimeAsync(0);
+  expect(partialClose).toHaveBeenCalledOnce();
+  expect(mocks.dbClose).not.toHaveBeenCalled();
+  expect(mocks.socketStop).not.toHaveBeenCalled();
+  release.resolve();
+  await closing;
+  expect(mocks.dbClose).toHaveBeenCalledOnce();
+});
+it('retires an abandoned restart instance before restart resolves while preserving the active database', async () => {
+  const retire = deferred<void>();
+  const partialClose = vi.fn(() => retire.promise);
+  const partialRestart = vi.fn(async () => {});
+  let register!: (server: unknown) => void;
+  const partial = { config: {}, close: partialClose, restart: partialRestart };
+  const rawRestart = vi.fn(async () => {
+    register(partial);
+  });
+  mocks.create.mockImplementation(async (config) => {
+    register = config.plugins[0].configureServer.handler;
+    const server = {
+      config: {},
+      close: closeVite,
+      listen,
+      restart: rawRestart,
+    };
+    register(server);
+    return server;
+  });
+  const owner = (await startE2EWebserver({ setupScripts: [] }))!;
+  let settled = false;
+  const restart = owner.vite.restart().then(() => {
+    settled = true;
+  });
+  await vi.advanceTimersByTimeAsync(0);
+  expect(partialClose).toHaveBeenCalledOnce();
+  expect(settled).toBe(false);
+  await partial.restart();
+  expect(partialRestart).not.toHaveBeenCalled();
+  expect(mocks.dbClose).not.toHaveBeenCalled();
+  retire.resolve();
+  await restart;
+  expect(closeVite).not.toHaveBeenCalled();
+  await owner.close();
+  expect(partialClose).toHaveBeenCalledOnce();
+});
+it('surfaces retirement failures and retains them for final cleanup without closing active resources early', async () => {
+  const failure = new Error('Partial retirement failed');
+  const partialClose = vi.fn(async () => {
+    throw failure;
+  });
+  let register!: (server: unknown) => void;
+  const rawRestart = vi.fn(async () => {
+    register({ config: {}, close: partialClose, restart: vi.fn() });
+  });
+  mocks.create.mockImplementation(async (config) => {
+    register = config.plugins[0].configureServer.handler;
+    const server = {
+      config: {},
+      close: closeVite,
+      listen,
+      restart: rawRestart,
+    };
+    register(server);
+    return server;
+  });
+  const owner = (await startE2EWebserver({ setupScripts: [] }))!;
+  await expect(owner.vite.restart()).rejects.toBe(failure);
+  expect(closeVite).not.toHaveBeenCalled();
+  expect(mocks.dbClose).not.toHaveBeenCalled();
+  await expect(owner.close()).rejects.toBe(failure);
+  expect(closeVite).toHaveBeenCalledOnce();
+  expect(partialClose).toHaveBeenCalledOnce();
+});
+it('registers ownership as a pre plugin with a pre configure hook', async () => {
+  const owner = (await startE2EWebserver({ setupScripts: [] }))!;
+  const hooks = mocks.create.mock.calls[0]![0].plugins[0];
+  expect(hooks.enforce).toBe('pre');
+  expect(hooks.configureServer.order).toBe('pre');
+  await owner.close();
+  await expect(owner.vite.restart()).resolves.toBeUndefined();
+  expect(console.error).not.toHaveBeenCalled();
+});
+
+it('serializes queued restart requests behind abandoned-instance retirement', async () => {
+  const retire = deferred<void>();
+  const partialClose = vi.fn(() => retire.promise);
+  let register!: (server: unknown) => void;
+  const rawRestart = vi.fn(async () => {
+    register({ config: {}, close: partialClose, restart: vi.fn() });
+  });
+  mocks.create.mockImplementation(async (config) => {
+    register = config.plugins[0].configureServer.handler;
+    const server = {
+      config: {},
+      close: closeVite,
+      listen,
+      restart: rawRestart,
+    };
+    register(server);
+    return server;
+  });
+  const owner = (await startE2EWebserver({ setupScripts: [] }))!;
+  const first = owner.vite.restart();
+  await vi.advanceTimersByTimeAsync(0);
+  const queued = owner.vite.restart(true);
+  await vi.advanceTimersByTimeAsync(0);
+  expect(rawRestart).toHaveBeenCalledOnce();
+  retire.resolve();
+  await Promise.all([first, queued]);
+  expect(rawRestart).toHaveBeenCalledTimes(2);
+  expect(rawRestart).toHaveBeenLastCalledWith(true);
+  await owner.close();
+});
+
+it('retains force optimization when restart requests coalesce before creation starts', async () => {
+  const rawRestart = vi.fn(async () => {});
+  mocks.create.mockImplementation(async (config) => {
+    const server = {
+      config: {},
+      close: closeVite,
+      listen,
+      restart: rawRestart,
+    };
+    await config.plugins[0].configureServer.handler(server);
+    return server;
+  });
+  const owner = (await startE2EWebserver({ setupScripts: [] }))!;
+  await Promise.all([owner.vite.restart(), owner.vite.restart(true)]);
+  expect(rawRestart).toHaveBeenCalledExactlyOnceWith(true);
+  await owner.close();
+});
+
+it('does not restart the initial instance while it is still being constructed', async () => {
+  const rawRestart = vi.fn(async () => {});
+  mocks.create.mockImplementation(async (config) => {
+    const server = {
+      config: {},
+      close: closeVite,
+      listen,
+      restart: rawRestart,
+    };
+    await config.plugins[0].configureServer.handler(server);
+    await server.restart();
+    expect(rawRestart).not.toHaveBeenCalled();
+    return server;
+  });
+  const owner = (await startE2EWebserver({ setupScripts: [] }))!;
+  await owner.vite.restart();
+  expect(rawRestart).toHaveBeenCalledOnce();
+  await owner.close();
 });
