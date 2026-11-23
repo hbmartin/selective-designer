@@ -1565,3 +1565,41 @@ rules:
     paths:
       include:
         - tests/security/**
+
+  - id: e2e-vite-creation-owned
+    message: Create E2E Vite servers through the owned launcher.
+    severity: ERROR
+    languages: [typescript]
+    paths:
+      include: [tests/server/**, tests/support/**]
+      exclude: [tests/server/e2e-webserver.ts, tests/support/**/*.fixture.ts]
+    pattern-either:
+      - patterns:
+          - pattern-inside: |
+              import { ..., createServer, ... } from 'vite';
+              ...
+          - pattern: createServer(...)
+      - patterns:
+          - pattern-inside: |
+              import * as $VITE from 'vite';
+              ...
+          - pattern: $VITE.createServer(...)
+  - id: e2e-vite-watcher-owned
+    message: Observe watcher close replacements inside the resource owner or an explicit fault fixture.
+    severity: ERROR
+    languages: [typescript]
+    paths:
+      include: [tests/server/**, tests/support/**]
+      exclude:
+        [tests/server/vite-resource-observer.ts, tests/support/**/*.fixture.ts]
+    pattern: $SERVER.watcher.close = $CALLBACK
+  - id: e2e-vite-private-lifecycle-forbidden
+    message: Use Vite public lifecycle APIs without patching private methods.
+    severity: ERROR
+    languages: [typescript]
+    paths:
+      include: [tests/server/**, tests/support/**]
+    pattern-either:
+      - pattern: $SERVER._closeServer(...)
+      - pattern: $SERVER._setInternalServer(...)
+      - pattern: $CONFIG.getSortedPluginHooks = $CALLBACK

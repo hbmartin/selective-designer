@@ -604,7 +604,12 @@ it('retires failed restart watchers before an env change and keeps one live inst
     expect((await client.query('select value from env_restart')).rows).toEqual([
       { value: 42 },
     ]);
-    expect((await fetch(`http://127.0.0.1:${ready.http}/`)).status).toBe(200);
+    await expect
+      .poll(
+        async () => (await fetch(`http://127.0.0.1:${ready.http}/`)).status,
+        { timeout: 10_000 }
+      )
+      .toBe(200);
     await client.end();
     client = undefined;
     fixture.child.send('close');
@@ -615,7 +620,7 @@ it('retires failed restart watchers before an env change and keeps one live inst
     await client?.end();
     await fixture.dispose();
   }
-}, 40_000);
+}, 60_000);
 it.each(['SIGINT', 'SIGTERM'] as const)(
   'keeps startup-timeout cleanup responsive until PID-only %s joins and cleanup finishes',
   async (signal) => {

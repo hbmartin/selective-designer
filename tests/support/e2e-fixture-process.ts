@@ -29,6 +29,20 @@ type Exit = {
   spawnError?: Error;
 };
 
+export class E2EFixtureLaunchError extends AggregateError {
+  constructor(
+    original: unknown,
+    cleanupError: unknown,
+    readonly retryCleanup: () => Promise<void>
+  ) {
+    super(
+      [original, cleanupError],
+      original instanceof Error ? original.message : String(original),
+      { cause: original }
+    );
+  }
+}
+
 export async function launchE2EFixture(
   mode = 'ready',
   requestedPorts: E2EFixturePorts = {}
@@ -43,6 +57,20 @@ export async function launchE2EFixture(
   const transportErrors: Error[] = [];
   const messages: E2EFixtureMessage[] = [];
   let output = '';
+  let retrying: Promise<void> | undefined;
+  let cleaned = false;
+
+  function retryCleanup() {
+    if (cleaned) return Promise.resolve();
+    retrying ??= dispose()
+      .then(() => {
+        cleaned = true;
+      })
+      .finally(() => {
+        retrying = undefined;
+      });
+    return retrying;
+  }
 
   function stopDirectChild() {
     if (child && child.exitCode === null && child.signalCode === null)
@@ -100,7 +128,6 @@ export async function launchE2EFixture(
         failures.push(error);
       }
     }
-    failures.push(...transportErrors);
     if (failures.length)
       throw new AggregateError(
         failures,
@@ -218,6 +245,8 @@ export async function launchE2EFixture(
       new Set([process.pid]),
       rows
     );
+    if (performance.now() >= deadline)
+      throw new Error('Fixture authorization delivery timed out');
     await beforeDeadline(
       new Promise<void>((resolve, reject) => {
         launched.send({ type: 'authorize' }, (error) => {
@@ -235,6 +264,21 @@ export async function launchE2EFixture(
       identity,
       group,
       output: () => output,
+      async waitForOutput(checkpoint: string, timeoutMs = 10_000) {
+        const deadline = performance.now() + timeoutMs;
+        while (!output.includes(checkpoint)) {
+          if (
+            ipcDrained ||
+            launched.exitCode !== null ||
+            launched.signalCode !== null ||
+            performance.now() >= deadline
+          )
+            throw new Error(
+              `Fixture checkpoint missing: ${checkpoint}; exit=${launched.exitCode}, signal=${launched.signalCode}, disconnected=${ipcDrained}; output=${output}`
+            );
+          await delay(Math.min(20, Math.max(0, deadline - performance.now())));
+        }
+      },
       async message(type: string) {
         const deadline = performance.now() + 20_000;
         while (!messages.some((message) => message.type === type)) {
@@ -263,10 +307,16 @@ export async function launchE2EFixture(
     try {
       await dispose();
     } catch (cleanupError) {
-      throw new AggregateError(
-        [error, cleanupError],
-        error instanceof Error ? error.message : String(error),
-        { cause: error }
+      throw new E2EFixtureLaunchError(
+        error,
+        transportErrors.length
+          ? new AggregateError(
+              [cleanupError, ...transportErrors],
+              'Fixture cleanup and transport diagnostics',
+              { cause: cleanupError }
+            )
+          : cleanupError,
+        retryCleanup
       );
     }
     throw error;

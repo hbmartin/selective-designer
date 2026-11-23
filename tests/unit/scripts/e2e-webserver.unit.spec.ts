@@ -29,6 +29,15 @@ vi.mock('@electric-sql/pglite-socket', () => ({
   },
 }));
 vi.mock('vite', () => ({ createServer: mocks.create }));
+vi.mock('@tests/server/vite-owned-config', () => ({
+  createOwnedViteConfig: async (
+    inline: { plugins?: unknown[] },
+    plugin: unknown
+  ) => ({
+    config: { ...inline, plugins: [plugin, ...(inline.plugins ?? [])] },
+    remove: async () => {},
+  }),
+}));
 vi.mock('node:child_process', () => ({ spawn: mocks.spawn }));
 
 function deferred<T>() {
@@ -763,5 +772,167 @@ it('does not restart the initial instance while it is still being constructed', 
   const owner = (await startE2EWebserver({ setupScripts: [] }))!;
   await owner.vite.restart();
   expect(rawRestart).toHaveBeenCalledOnce();
+  await owner.close();
+});
+
+it('clears queued force options after a failed retirement batch', async () => {
+  const retiring = deferred<void>();
+  const partialClose = vi.fn(() => retiring.promise);
+  let register!: (server: unknown) => void;
+  const rawRestart = vi.fn(async () => {
+    if (rawRestart.mock.calls.length === 1)
+      register({ config: {}, close: partialClose, restart: vi.fn() });
+  });
+  mocks.create.mockImplementation(async (config) => {
+    register = config.plugins[0].configureServer.handler;
+    const server = {
+      config: {},
+      close: closeVite,
+      listen,
+      restart: rawRestart,
+    };
+    register(server);
+    return server;
+  });
+  const owner = (await startE2EWebserver({ setupScripts: [] }))!;
+  const first = owner.vite.restart();
+  await vi.advanceTimersByTimeAsync(0);
+  const queued = owner.vite.restart(true);
+  const failure = new Error('Retirement failure');
+  const settled = Promise.allSettled([first, queued]);
+  retiring.reject(failure);
+  expect(await settled).toEqual([
+    { status: 'rejected', reason: failure },
+    { status: 'rejected', reason: failure },
+  ]);
+  await expect(owner.vite.restart()).rejects.toBe(failure);
+  expect(rawRestart).toHaveBeenLastCalledWith();
+  await expect(owner.close()).rejects.toBe(failure);
+});
+it('does not lose restart requests at the queue-drained microtask boundary', async () => {
+  for (let turns = 0; turns < 20; turns++) {
+    vi.stubEnv('E2E_DATABASE_URL', '');
+    let owner!: NonNullable<Awaited<ReturnType<typeof startE2EWebserver>>>;
+    let late: Promise<void> | undefined;
+    const rawRestart = vi.fn(async () => {
+      if (rawRestart.mock.calls.length !== 1) return;
+      let pending = Promise.resolve();
+      for (let n = 0; n < turns; n++) pending = pending.then(() => {});
+      void pending.then(() => {
+        late = owner.vite.restart(true);
+      });
+    });
+    mocks.create.mockImplementation(async (config) => {
+      const server = {
+        config: {},
+        close: vi.fn(async () => {}),
+        listen,
+        restart: rawRestart,
+      };
+      config.plugins[0].configureServer.handler(server);
+      return server;
+    });
+    owner = (await startE2EWebserver({ setupScripts: [] }))!;
+    await owner.vite.restart();
+    for (let n = 0; n < 30; n++) await Promise.resolve();
+    await late;
+    expect(rawRestart).toHaveBeenCalledTimes(2);
+    await owner.close();
+  }
+});
+it('waits for a delayed sibling hook after Vite close rejects before releasing the database', async () => {
+  const delayed = deferred<void>();
+  const first = new Error('First hook failed');
+  const second = new Error('Sibling hook failed');
+  mocks.create.mockImplementation(async (inline) => {
+    const plugins = [
+      {
+        name: 'first',
+        closeServer: () => {
+          throw first;
+        },
+      },
+      { name: 'second', closeServer: () => delayed.promise },
+    ];
+    const config = { environments: {}, getSortedPlugins: () => plugins };
+    const server = {
+      config,
+      close: () => Promise.all(plugins.map((plugin) => plugin.closeServer())),
+      listen,
+      restart: vi.fn(),
+    };
+    inline.plugins[0].configureServer.handler(server);
+    return server;
+  });
+  const owner = (await startE2EWebserver({ setupScripts: [] }))!;
+  const closing = owner.close();
+  await vi.advanceTimersByTimeAsync(0);
+  expect(mocks.dbClose).not.toHaveBeenCalled();
+  await Promise.all([
+    expect(closing).rejects.toMatchObject({
+      errors: [first, second],
+      cause: first,
+    }),
+    Promise.resolve().then(() => delayed.reject(second)),
+  ]);
+  expect(mocks.dbClose).toHaveBeenCalledOnce();
+});
+
+it('runs queued forced work after confirmed transient candidate recovery', async () => {
+  const recovered = vi.spyOn(console, 'warn').mockImplementation(() => {});
+  const failure = Object.assign(new Error('Watcher busy'), { code: 'EBUSY' });
+  const nativeClose = vi
+    .fn()
+    .mockRejectedValueOnce(failure)
+    .mockResolvedValue(undefined);
+  let register!: (server: unknown) => void;
+  const rawRestart = vi.fn(async () => {
+    if (rawRestart.mock.calls.length !== 1) return;
+    const watcher = { close: nativeClose };
+    const environment = { init: async () => {}, close: async () => {} };
+    const config = {
+      getSortedPlugins: () => [],
+      environments: {
+        client: { dev: { createEnvironment: async () => environment } },
+      },
+    };
+    register({
+      config,
+      close: async () => {
+        await Promise.allSettled([watcher.close()]);
+      },
+      restart: vi.fn(),
+    });
+    const resolved = config as unknown as import('vite').ResolvedConfig;
+    const env = await resolved.environments.client!.dev.createEnvironment(
+      'client',
+      resolved,
+      { ws: { close: async () => {} } } as never
+    );
+    await env.init({ watcher } as never);
+  });
+  mocks.create.mockImplementation(async (config) => {
+    register = config.plugins[0].configureServer.handler;
+    const server = {
+      config: {},
+      close: closeVite,
+      listen,
+      restart: rawRestart,
+    };
+    register(server);
+    return server;
+  });
+  const owner = (await startE2EWebserver({ setupScripts: [] }))!;
+  const first = owner.vite.restart();
+  await vi.advanceTimersByTimeAsync(0);
+  const queued = owner.vite.restart(true);
+  await vi.advanceTimersByTimeAsync(50);
+  await Promise.all([first, queued]);
+  expect(nativeClose).toHaveBeenCalledTimes(2);
+  expect(rawRestart).toHaveBeenLastCalledWith(true);
+  expect(recovered).toHaveBeenCalledExactlyOnceWith(
+    'E2E native cleanup recovered:',
+    failure
+  );
   await owner.close();
 });

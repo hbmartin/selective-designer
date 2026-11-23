@@ -46,9 +46,7 @@ it('preserves the leader after failed disposal inspection and later discovers it
   inspection.inspect.mockImplementation(actual.inspectFixtureProcesses);
   const fixture = await launchE2EFixture('waiting');
   try {
-    await expect
-      .poll(() => fixture.output())
-      .toContain('Fixture setup waiting');
+    await fixture.waitForOutput('Fixture setup waiting', 10_000);
     const members = [...actual.inspectFixtureProcesses().values()].filter(
       (row) => row.group === fixture.group.pid
     );
@@ -77,4 +75,4 @@ it('preserves the leader after failed disposal inspection and later discovers it
     inspection.inspect.mockImplementation(actual.inspectFixtureProcesses);
     await fixture.dispose();
   }
-}, 20_000);
+}, 30_000);

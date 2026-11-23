@@ -356,3 +356,63 @@ it('retains the twenty-second message deadline when IPC remains open', async () 
   ]);
   await fixture.dispose();
 });
+
+it('checks the deadline after validation without authorizing a late child', async () => {
+  mocks.validate.mockImplementation(() => {
+    vi.advanceTimersByTime(5001);
+    return { pid: child.pid };
+  });
+  await expect(launchE2EFixture()).rejects.toThrow(
+    'authorization delivery timed out'
+  );
+  expect(child.send).not.toHaveBeenCalled();
+  expect(mocks.signal).toHaveBeenCalledOnce();
+});
+it('exposes the original capability for concurrent retries after launch and cleanup fail', async () => {
+  const launchError = new Error('Authorization delivery failed');
+  const inspectionError = new Error('Cleanup ps unavailable');
+  const inspect = mocks.inspect.getMockImplementation()!;
+  mocks.inspect.mockImplementationOnce(inspect).mockImplementationOnce(() => {
+    throw inspectionError;
+  });
+  child.send.mockImplementation((_message, callback) => callback(launchError));
+  let failure!: import('@tests/support/e2e-fixture-process').E2EFixtureLaunchError;
+  const attempt = launchE2EFixture().catch((error) => {
+    failure = error;
+  });
+  await vi.advanceTimersByTimeAsync(3000);
+  await attempt;
+  expect(failure.cause).toBe(launchError);
+  expect(failure.errors[1].cause).toBe(inspectionError);
+  expect(child.kill).not.toHaveBeenCalled();
+  const first = failure.retryCleanup();
+  const joined = failure.retryCleanup();
+  expect(joined).toBe(first);
+  await Promise.all([first, joined]);
+  expect(mocks.signal).toHaveBeenCalledOnce();
+  expect(mocks.rm).toHaveBeenCalledOnce();
+  await failure.retryCleanup();
+  expect(mocks.signal).toHaveBeenCalledOnce();
+  expect(failure.cause).toBe(launchError);
+});
+
+it('waits for a delayed setup checkpoint within its explicit budget', async () => {
+  const fixture = await launchE2EFixture();
+  const waiting = fixture.waitForOutput('setup ready', 1000);
+  await vi.advanceTimersByTimeAsync(200);
+  child.stdout.emit('data', 'setup ready');
+  await vi.advanceTimersByTimeAsync(20);
+  await waiting;
+  await fixture.dispose();
+});
+it('fails a checkpoint promptly on exit with output and status diagnostics', async () => {
+  const fixture = await launchE2EFixture();
+  child.stdout.emit('data', 'setup starting');
+  child.exitCode = 13;
+  child.emit('exit', 13, null);
+  await expect(fixture.waitForOutput('setup ready')).rejects.toThrow(
+    'exit=13, signal=null, disconnected=false; output=setup starting'
+  );
+  child.emit('close', 13, null);
+  await fixture.dispose();
+});
