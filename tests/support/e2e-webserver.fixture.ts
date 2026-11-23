@@ -95,7 +95,7 @@ try {
             const api = server.config.plugins.find(
               (plugin) => plugin.name === 'e2e-owned-database'
             )?.api;
-            isFinalClose = () => !!api?.isClosing();
+            isFinalClose = () => !!api?.isFinalClose();
             servers.push(server);
             const watcher = { closed: false };
             watchers.push(watcher);

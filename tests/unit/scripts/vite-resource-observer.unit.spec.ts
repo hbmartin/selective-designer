@@ -273,3 +273,75 @@ it('releases each orphan as it settles independently of stuck siblings', async (
   expect(observer.release(pending)).toBe(false);
   expect(await observer.settleAll()).toEqual([]);
 });
+
+it('waits for an in-flight outer close before considering the native fallback', async () => {
+  const gate = Promise.withResolvers<void>();
+  const native = vi.fn(async () => {});
+  const f = fixture(native);
+  await f.initialize();
+  const previous = f.watcher.close;
+  f.watcher.close = async () => {
+    await gate.promise;
+    await previous();
+  };
+  const outer = f.observer.run(f.config, () => f.watcher.close());
+  const settlement = f.observer.settle(f.config);
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  expect(native).not.toHaveBeenCalled();
+  gate.resolve();
+  await outer;
+  expect(await settlement).toEqual([]);
+  expect(native).toHaveBeenCalledOnce();
+});
+it('waits for a rejecting outer close then invokes its uncalled native closer once', async () => {
+  const gate = Promise.withResolvers<void>();
+  const failure = new Error('Flush failed');
+  const native = vi.fn(async () => {});
+  const f = fixture(native);
+  await f.initialize();
+  f.watcher.close = () => gate.promise;
+  const outer = f.observer
+    .run(f.config, () => f.watcher.close())
+    .catch((error) => error);
+  const settlement = f.observer.settle(f.config);
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  expect(native).not.toHaveBeenCalled();
+  gate.reject(failure);
+  expect(await outer).toBe(failure);
+  expect(await settlement).toEqual([failure]);
+  expect(native).toHaveBeenCalledOnce();
+});
+it('releases each final-settlement scope before a stuck sibling settles', async () => {
+  const observer = createViteResourceObserver();
+  const gate = Promise.withResolvers<void>();
+  async function orphan(close: () => Promise<void>) {
+    const watcher = { close };
+    const environment = {
+      init: async () => {},
+      close: async () => {},
+    } as unknown as DevEnvironment;
+    const config = {
+      plugins: [],
+      environments: {
+        client: { dev: { createEnvironment: async () => environment } },
+      },
+    } as unknown as ResolvedConfig;
+    observer.prepare(config);
+    const env = await config.environments.client!.dev.createEnvironment(
+      'client',
+      config,
+      { ws: { close: async () => {} } } as never
+    );
+    await env.init({ watcher } as never);
+    return config;
+  }
+  const clean = await orphan(async () => {});
+  const pending = await orphan(() => gate.promise);
+  const batch = observer.settleAll();
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  expect(observer.release(clean)).toBe(false);
+  expect(await observer.settle(clean)).toEqual([]);
+  gate.resolve();
+  expect(await batch).toEqual([]);
+  expect(observer.release(pending)).toBe(false);
+});

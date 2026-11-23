@@ -61,6 +61,8 @@ function inspect(source: string) {
         target.expression.name.text === 'watcher'
       )
         findings.add('watcher');
+      else if (['close', 'restart', 'listen'].includes(target.name.text))
+        findings.add('lifecycle');
     }
     ts.forEachChild(node, visit);
   }
@@ -76,6 +78,9 @@ it.each([
     [],
   ],
   ['server.watcher.close = replacement;', ['watcher']],
+  ['server.restart = replacement;', ['lifecycle']],
+  ['server.listen = replacement;', ['lifecycle']],
+  ['server.close = replacement;', ['lifecycle']],
   ['server._closeServer("close");', ['private']],
   ['config.getSortedPluginHooks = replacement;', ['private']],
   ['const inert = "server._closeServer()";', []],
@@ -102,6 +107,11 @@ it('keeps literal Vite lifecycle effects inside the owner and explicit fault fix
       const faults = inspect(await readFile(file, 'utf8')).filter((finding) => {
         if (finding === 'private') return true;
         if (relative.endsWith('.fixture.ts')) return false;
+        if (finding === 'lifecycle')
+          return ![
+            'tests/server/e2e-webserver.ts',
+            'tests/server/vite-resource-observer.ts',
+          ].includes(relative);
         return (
           relative !==
           (finding === 'creation'

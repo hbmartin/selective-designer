@@ -1,4 +1,4 @@
-import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, realpath, rm, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { expect, it, vi } from 'vitest';
@@ -21,7 +21,9 @@ async function harness(
     create: (config: InlineConfig) => Promise<ViteDevServer>;
   }) => Promise<void>
 ) {
-  const root = await mkdtemp(path.join(os.tmpdir(), 'vite-owned-integration-'));
+  const root = await realpath(
+    await mkdtemp(path.join(os.tmpdir(), 'vite-owned-integration-'))
+  );
   const observer = createViteResourceObserver();
   const captured: ViteDevServer[] = [];
   const closers: { config: ResolvedConfig; close: () => Promise<void> }[] = [];
@@ -35,7 +37,23 @@ async function harness(
       captured,
       emergency,
       async create(options) {
-        const prepared = await createOwnedViteConfig(
+        let prepared!: Awaited<ReturnType<typeof createOwnedViteConfig>>;
+        function register(server: ViteDevServer) {
+          prepared.ignoreBridge(server);
+          if (captured.includes(server)) return;
+          observer.register(server.config);
+          captured.push(server);
+          closers.push({
+            config: server.config,
+            close: server.close.bind(server),
+          });
+          const restart = server.restart.bind(server);
+          server.restart = async (...args) => {
+            await prepared.refresh();
+            return observer.run(server.config, () => restart(...args));
+          };
+        }
+        prepared = await createOwnedViteConfig(
           {
             root,
             envDir: false,
@@ -47,26 +65,10 @@ async function harness(
             name: 'e2e-owned-database',
             api: {
               prepare: observer.prepare,
-              register(server: ViteDevServer) {
-                if (captured.includes(server)) return;
-                observer.register(server.config);
-                captured.push(server);
-                closers.push({
-                  config: server.config,
-                  close: server.close.bind(server),
-                });
-              },
+              register,
             },
             configResolved: observer.prepare,
-            configureServer(server) {
-              if (captured.includes(server)) return;
-              observer.register(server.config);
-              captured.push(server);
-              closers.push({
-                config: server.config,
-                close: server.close.bind(server),
-              });
-            },
+            configureServer: register,
           }
         );
         bridges.push(prepared);
@@ -278,7 +280,7 @@ it('preserves native config precedence and the no-config case', async () => {
   await harness(async ({ root, create }) => {
     expect(
       (await create({ configFile: undefined })).config.inlineConfig.configFile
-    ).toBe(false);
+    ).toMatch(/e2e-vite-config-/);
     await writeFile(
       path.join(root, 'vite.config.js'),
       'export default {base:"/first/"};'
@@ -343,5 +345,203 @@ it('retains genuine custom environment cleanup failures after failed init', asyn
       })
     ).rejects.toBe(failure);
     expect(await observer.settleAll()).toEqual([cleanup]);
+  });
+});
+
+it.each(['own', 'inherited'] as const)(
+  'keeps %s readonly synchronous close hooks from suppressing independent cleanup',
+  async (placement) => {
+    await harness(async ({ create, observer }) => {
+      const failure = new Error('Readonly synchronous failure');
+      const gate = Promise.withResolvers<void>();
+      const entered = Promise.withResolvers<void>();
+      const receivers: unknown[] = [];
+      const hook = {
+        order: 'pre' as const,
+        handler: function () {
+          receivers.push(this);
+          throw failure;
+        },
+      };
+      const frozen: import('vite').Plugin =
+        placement === 'own'
+          ? Object.freeze({ name: 'readonly-hook', closeServer: hook })
+          : Object.assign(
+              Object.create(
+                Object.defineProperty({}, 'closeServer', {
+                  value: hook,
+                  writable: false,
+                })
+              ),
+              { name: 'readonly-inherited-hook' }
+            );
+
+      const server = await create({
+        plugins: [
+          frozen,
+          {
+            name: 'independent-hook',
+            closeServer() {
+              receivers.push(this);
+              entered.resolve();
+              return gate.promise;
+            },
+          },
+        ],
+      });
+      await expect(
+        observer.run(server.config, () => server.close())
+      ).rejects.toBe(failure);
+      await entered.promise;
+      let settled = false;
+      const draining = observer.settle(server.config).then((errors) => {
+        settled = true;
+        return errors;
+      });
+      await Promise.resolve();
+      expect(settled).toBe(false);
+      expect(receivers).toHaveLength(2);
+      expect(receivers[0]).toBe(receivers[1]);
+      gate.resolve();
+      expect(await draining).toEqual([failure]);
+      expect(hook.order).toBe('pre');
+    });
+  }
+);
+it('rediscovers defaults across addition, precedence changes, deletion and no-config restart', async () => {
+  await harness(async ({ root, create }) => {
+    const server = await create({
+      configFile: undefined,
+      server: { host: '127.0.0.1', port: 0, strictPort: true, watch: null },
+    });
+    const first = path.join(root, 'vite.config.mjs');
+    const higher = path.join(root, 'vite.config.js');
+    await writeFile(first, 'export default {base:"/mjs/"};');
+    await server.restart();
+    expect(server.config.base).toBe('/mjs/');
+    await writeFile(higher, 'export default {base:"/js/"};');
+    await server.restart();
+    expect(server.config.base).toBe('/js/');
+    await rm(higher);
+    await server.restart();
+    expect(server.config.base).toBe('/mjs/');
+    await rm(first);
+    await server.restart();
+    expect(server.config.base).toBe('/');
+    expect(server.config.server.watch).toBeNull();
+  });
+});
+it('preserves native config dependency watching without bridge-induced duplicate restarts', async () => {
+  await harness(async ({ root, create, captured }) => {
+    const dependency = path.join(root, 'settings.mjs');
+    await writeFile(dependency, 'export const base="/before/";');
+    await writeFile(
+      path.join(root, 'vite.config.mjs'),
+      `import {base} from './settings.mjs';export default {base};`
+    );
+    const server = await create({ configFile: undefined });
+    expect(server.config.configFileDependencies).toContain(dependency);
+    await vi.waitFor(() =>
+      expect(server.watcher.getWatched()[root]).toContain('settings.mjs')
+    );
+    await writeFile(dependency, 'export const base="/after/";');
+    await vi.waitFor(() => expect(server.config.base).toBe('/after/'));
+    await writeFile(
+      path.join(root, 'vite.config.js'),
+      'export default {base:"/higher/"};'
+    );
+    await server.restart();
+    expect(server.config.base).toBe('/higher/');
+    const generations = captured.length;
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    expect(captured).toHaveLength(generations);
+  });
+});
+it('preserves source-disabled watchers and explicit false configuration', async () => {
+  await harness(async ({ root, create }) => {
+    await writeFile(
+      path.join(root, 'vite.config.mjs'),
+      'export default {base:"/source/",server:{watch:null}};'
+    );
+    const server = await create({ configFile: undefined });
+    expect(server.config.server.watch).toBeNull();
+    const disabled = await create({ configFile: false });
+    expect(disabled.config.base).toBe('/');
+    expect(disabled.config.configFile).toBeUndefined();
+  });
+});
+
+it('does not replay actual failed candidate lifecycle requests and preserves later recovery', async () => {
+  const { startE2EWebserver } = await import('@tests/server/e2e-webserver');
+  const root = await realpath(
+    await mkdtemp(path.join(os.tmpdir(), 'vite-candidate-request-'))
+  );
+  const previous = { ...process.env };
+  let owner: Awaited<ReturnType<typeof startE2EWebserver>>;
+  let generations = 0;
+  try {
+    process.env.E2E_DATABASE_URL = '';
+    owner = await startE2EWebserver({
+      setupScripts: [],
+      databasePort: 0,
+      viteConfig: {
+        root,
+        configFile: false,
+        envDir: false,
+        server: { host: '127.0.0.1', port: 0, strictPort: true },
+        optimizeDeps: { noDiscovery: true },
+        plugins: [
+          {
+            name: 'failed-incoming',
+            async configureServer(server) {
+              generations++;
+              if (generations === 2) {
+                await server.restart(true);
+                throw new Error('Incoming candidate rejected');
+              }
+            },
+          },
+        ],
+      },
+    });
+    await owner!.vite.restart();
+    expect(generations).toBe(2);
+    await owner!.vite.restart();
+    expect(generations).toBe(3);
+  } finally {
+    await owner?.close();
+    for (const key of Object.keys(process.env))
+      if (!(key in previous)) delete process.env[key];
+    Object.assign(process.env, previous);
+    await rm(root, { recursive: true, force: true });
+  }
+});
+it('preserves inline watcher ignore functions and late hooks on writable facades', async () => {
+  await harness(async ({ create, observer }) => {
+    const ignored = () => false;
+    const closed = vi.fn(async () => {});
+    const plugin: import('vite').Plugin = {
+      name: 'late-facade-hook',
+      configResolved() {
+        plugin.closeServer = closed;
+      },
+    };
+    Object.defineProperty(plugin, 'configureServer', {
+      value: () => {},
+      writable: false,
+    });
+    const server = await create({
+      server: {
+        host: '127.0.0.1',
+        port: 0,
+        strictPort: true,
+        watch: { ignored },
+      },
+      plugins: [plugin],
+    });
+    expect(server.config.server.watch?.ignored).toBe(ignored);
+    await observer.run(server.config, () => server.close());
+    expect(await observer.settle(server.config)).toEqual([]);
+    expect(closed).toHaveBeenCalledOnce();
   });
 });
