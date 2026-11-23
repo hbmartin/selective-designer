@@ -121,3 +121,50 @@ it('does not retry outside the original retirement deadline', async () => {
   ]);
   expect(close).toHaveBeenCalledOnce();
 });
+it('releases only scopes that settled without failures', async () => {
+  const clean = fixture(vi.fn().mockResolvedValue(undefined));
+  await clean.initialize();
+  await clean.observer.run(clean.config, () => clean.watcher.close());
+  expect(clean.observer.release(clean.config)).toBe(false);
+  expect(await clean.observer.settle(clean.config)).toEqual([]);
+  expect(clean.observer.release(clean.config)).toBe(true);
+
+  const failure = new Error('Retained native failure');
+  const failing = fixture(vi.fn().mockRejectedValue(failure));
+  await failing.initialize();
+  await Promise.allSettled([
+    failing.observer.run(failing.config, () => failing.watcher.close()),
+  ]);
+  expect(await failing.observer.settle(failing.config)).toEqual([failure]);
+  expect(failing.observer.release(failing.config)).toBe(false);
+  expect(await failing.observer.settleAll()).toEqual([failure]);
+});
+it('settles each orphan scope once while final settlement still reports it', async () => {
+  const failure = new Error('Orphan watcher failed');
+  const nativeClose = vi.fn().mockRejectedValue(failure);
+  const watcher = { close: nativeClose };
+  const environment = {
+    init: async () => {},
+    close: async () => {},
+  } as unknown as DevEnvironment;
+  const config = {
+    environments: {
+      client: { dev: { createEnvironment: async () => environment } },
+    },
+    getSortedPlugins: () => [],
+  } as unknown as ResolvedConfig;
+  const observer = createViteResourceObserver(vi.fn());
+  observer.prepare(config);
+  const env = await config.environments.client!.dev.createEnvironment(
+    'client',
+    config,
+    { ws: { close: async () => {} } } as never
+  );
+  await env.init({ watcher } as never);
+  expect(await observer.settleOrphans(performance.now() + 5_000)).toEqual([
+    failure,
+  ]);
+  expect(await observer.settleOrphans(performance.now() + 5_000)).toEqual([]);
+  expect(nativeClose).toHaveBeenCalledOnce();
+  expect(await observer.settleAll()).toEqual([failure]);
+});

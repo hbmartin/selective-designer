@@ -2,12 +2,14 @@
 export async function beforeDeadline<T>(
   pending: Promise<T>,
   deadline: number,
-  message: string
+  /** A callback builds the message at expiry, e.g. to include captured output. */
+  message: string | (() => string)
 ): Promise<T> {
   let timer: ReturnType<typeof setTimeout> | undefined;
   const expired = new Promise<never>((_resolve, reject) => {
     timer = setTimeout(
-      () => reject(new Error(message)),
+      () =>
+        reject(new Error(typeof message === 'function' ? message() : message)),
       Math.max(0, deadline - performance.now())
     );
   });

@@ -95,6 +95,8 @@ export async function launchE2EFixture(
   async function dispose() {
     const deadline = performance.now() + 3_000;
     const failures: unknown[] = [];
+    // A failed group pass sends no signal: one group kill either runs or throws.
+    let awaitExit = true;
     try {
       if (group) {
         const rows = inspectFixtureProcesses(
@@ -107,10 +109,11 @@ export async function launchE2EFixture(
       }
     } catch (error) {
       failures.push(error);
+      if (group) awaitExit = false;
       // Once authorized, the leader may be the only retained witness for
       // descendants created since launch. Preserve it for a fresh attempt.
     }
-    if (exited && closed) {
+    if (awaitExit && exited && closed) {
       try {
         const outcome = await beforeDeadline(
           exited,
@@ -201,7 +204,8 @@ export async function launchE2EFixture(
     await beforeDeadline(
       announced,
       deadline,
-      'Fixture process-group confirmation timed out'
+      () =>
+        `Fixture bootstrap authorization readiness timed out; output=${output}`
     );
     let lastInspectionError: unknown;
     let rows: ReturnType<typeof inspectFixtureProcesses>;

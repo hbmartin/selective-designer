@@ -32,10 +32,19 @@ it('keeps retrying bootstrap resource-free until exhaustion, then removes its re
     ).toHaveLength(1);
     throw failure;
   });
-  await expect(launchE2EFixture('waiting')).rejects.toMatchObject({
-    message: 'Fixture process-group confirmation timed out',
-    cause: failure,
-  });
+  let unexpected: Awaited<ReturnType<typeof launchE2EFixture>> | undefined;
+  try {
+    await expect(
+      launchE2EFixture('waiting').then((fixture) => (unexpected = fixture))
+    ).rejects.toMatchObject({
+      message: 'Fixture process-group confirmation timed out',
+      cause: failure,
+    });
+  } finally {
+    // A regression that lets launch succeed must not leak a detached fixture.
+    inspection.inspect.mockImplementation(actual.inspectFixtureProcesses);
+    await unexpected?.dispose();
+  }
   expect(inspection.inspect.mock.calls.length).toBeGreaterThan(1);
   expect(observedGroups.size).toBe(1);
   for (const pid of observedGroups)

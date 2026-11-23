@@ -218,6 +218,25 @@ it.each(['inspect', 'signal'] as const)(
     expect(mocks.rm).toHaveBeenCalledOnce();
   }
 );
+it.each(['inspect', 'signal'] as const)(
+  'rejects promptly without awaiting an unrequested exit after cleanup %s fails',
+  async (stage) => {
+    const fixture = await launchE2EFixture();
+    const failure = new Error('Group cleanup unavailable');
+    mocks[stage].mockImplementationOnce(() => {
+      throw failure;
+    });
+    const outcome = await fixture.dispose().then(
+      () => undefined,
+      (error: unknown) => error
+    );
+    expect(outcome).toMatchObject({ errors: [failure], cause: failure });
+    expect(child.kill).not.toHaveBeenCalled();
+    expect(mocks.rm).not.toHaveBeenCalled();
+    await fixture.dispose();
+    expect(mocks.rm).toHaveBeenCalledOnce();
+  }
+);
 it('retains authenticated continuity for descendants created after launch', async () => {
   const actual = await vi.importActual<
     typeof import('@tests/support/fixture-process-groups')
@@ -291,10 +310,13 @@ it('does not inspect or authorize before the bootstrap announces readiness', asy
   await fixture.dispose();
 });
 it('bounds a bootstrap that never announces readiness and kills only that retained child', async () => {
-  mocks.spawn.mockReturnValue(child);
+  mocks.spawn.mockImplementation(() => {
+    queueMicrotask(() => child.stderr.emit('data', 'bootstrap stalled'));
+    return child;
+  });
   await Promise.all([
     expect(launchE2EFixture()).rejects.toThrow(
-      'process-group confirmation timed out'
+      'Fixture bootstrap authorization readiness timed out; output=bootstrap stalled'
     ),
     vi.advanceTimersByTimeAsync(5000),
   ]);
