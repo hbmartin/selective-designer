@@ -9,13 +9,13 @@ function fixture(close: () => Promise<void>) {
     close: async () => {},
   } as unknown as DevEnvironment;
   const config = {
+    plugins: [],
     environments: {
       client: { dev: { createEnvironment: async () => environment } },
     },
     getSortedPlugins: () => [],
   } as unknown as ResolvedConfig;
-  const recovered = vi.fn();
-  const observer = createViteResourceObserver(recovered);
+  const observer = createViteResourceObserver();
   observer.register(config);
   async function initialize() {
     const env = await config.environments.client!.dev.createEnvironment(
@@ -25,7 +25,7 @@ function fixture(close: () => Promise<void>) {
     );
     await env.init({ watcher } as never);
   }
-  return { watcher, config, observer, recovered, initialize };
+  return { watcher, config, observer, initialize };
 }
 afterEach(() => vi.useRealTimers());
 it('retains a native watcher rejection even when Vite discards it', async () => {
@@ -36,7 +36,7 @@ it('retains a native watcher rejection even when Vite discards it', async () => 
   expect(await f.observer.settle(f.config)).toEqual([failure]);
   expect(await f.observer.settleAll()).toEqual([failure]);
 });
-it('retries a completed transient native failure once and records successful recovery', async () => {
+it('retains a transient native failure without retrying or claiming recovery', async () => {
   vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'performance'] });
   const failure = Object.assign(new Error('Busy watcher'), { code: 'EBUSY' });
   const close = vi
@@ -48,9 +48,8 @@ it('retries a completed transient native failure once and records successful rec
   await Promise.allSettled([f.observer.run(f.config, () => f.watcher.close())]);
   const completion = f.observer.settle(f.config);
   await vi.advanceTimersByTimeAsync(50);
-  expect(await completion).toEqual([]);
-  expect(close).toHaveBeenCalledTimes(2);
-  expect(f.recovered).toHaveBeenCalledExactlyOnceWith(failure);
+  expect(await completion).toEqual([failure]);
+  expect(close).toHaveBeenCalledOnce();
 });
 it('does not classify a cached rejected native promise as recovered', async () => {
   vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'performance'] });
@@ -65,8 +64,7 @@ it('does not classify a cached rejected native promise as recovered', async () =
   const completion = f.observer.settle(f.config);
   await vi.advanceTimersByTimeAsync(50);
   expect(await completion).toEqual([failure]);
-  expect(close).toHaveBeenCalledTimes(2);
-  expect(f.recovered).not.toHaveBeenCalled();
+  expect(close).toHaveBeenCalledOnce();
 });
 it('observes later plugin wrappers without recursive delegation', async () => {
   const failure = new Error('Outer plugin close failed');
@@ -121,7 +119,7 @@ it('does not retry outside the original retirement deadline', async () => {
   ]);
   expect(close).toHaveBeenCalledOnce();
 });
-it('releases only scopes that settled without failures', async () => {
+it('releases settled scopes while preserving failure values for final reporting', async () => {
   const clean = fixture(vi.fn().mockResolvedValue(undefined));
   await clean.initialize();
   await clean.observer.run(clean.config, () => clean.watcher.close());
@@ -136,7 +134,7 @@ it('releases only scopes that settled without failures', async () => {
     failing.observer.run(failing.config, () => failing.watcher.close()),
   ]);
   expect(await failing.observer.settle(failing.config)).toEqual([failure]);
-  expect(failing.observer.release(failing.config)).toBe(false);
+  expect(failing.observer.release(failing.config)).toBe(true);
   expect(await failing.observer.settleAll()).toEqual([failure]);
 });
 it('settles each orphan scope once while final settlement still reports it', async () => {
@@ -148,12 +146,13 @@ it('settles each orphan scope once while final settlement still reports it', asy
     close: async () => {},
   } as unknown as DevEnvironment;
   const config = {
+    plugins: [],
     environments: {
       client: { dev: { createEnvironment: async () => environment } },
     },
     getSortedPlugins: () => [],
   } as unknown as ResolvedConfig;
-  const observer = createViteResourceObserver(vi.fn());
+  const observer = createViteResourceObserver();
   observer.prepare(config);
   const env = await config.environments.client!.dev.createEnvironment(
     'client',
@@ -167,4 +166,110 @@ it('settles each orphan scope once while final settlement still reports it', asy
   expect(await observer.settleOrphans(performance.now() + 5_000)).toEqual([]);
   expect(nativeClose).toHaveBeenCalledOnce();
   expect(await observer.settleAll()).toEqual([failure]);
+});
+
+it('runs cleanup despite a frozen plugin and keeps independent hooks observable', async () => {
+  const other = vi.fn(async () => {});
+  const frozen = Object.freeze({ name: 'frozen', closeServer: async () => {} });
+  const plugin = { name: 'other', closeServer: other };
+  const config = {
+    plugins: [frozen, plugin],
+    environments: {},
+  } as unknown as ResolvedConfig;
+  const observer = createViteResourceObserver();
+  const action = vi.fn(async () => {
+    await plugin.closeServer();
+  });
+  await observer.run(config, action);
+  expect(action).toHaveBeenCalledOnce();
+  expect(other).toHaveBeenCalledOnce();
+  expect(await observer.settle(config)).toEqual([expect.any(TypeError)]);
+  expect(observer.release(config)).toBe(true);
+  expect(await observer.settleAll()).toEqual([expect.any(TypeError)]);
+});
+it('does not query Vite sorted-hook caches while preparing hooks', async () => {
+  const sorted = vi.fn(() => {
+    throw new Error('cache accessed early');
+  });
+  const plugin = {
+    name: 'late',
+    closeServer: undefined as (() => Promise<void>) | undefined,
+  };
+  const config = {
+    plugins: [plugin],
+    getSortedPlugins: sorted,
+    getSortedPluginHooks: sorted,
+  } as unknown as ResolvedConfig;
+  const observer = createViteResourceObserver();
+  observer.prepare(config);
+  const close = vi.fn(async () => {});
+  plugin.closeServer = close;
+  observer.prepare(config);
+  await observer.run(config, () => plugin.closeServer!());
+  expect(await observer.settle(config)).toEqual([]);
+  expect(close).toHaveBeenCalledOnce();
+  expect(sorted).not.toHaveBeenCalled();
+});
+it('never retries a transient failure through an installed application wrapper', async () => {
+  const failure = Object.assign(new Error('Busy'), { code: 'EBUSY' });
+  const f = fixture(vi.fn().mockRejectedValue(failure));
+  await f.initialize();
+  const previous = f.watcher.close;
+  const application = vi.fn(async () => {
+    await previous();
+  });
+  f.watcher.close = application;
+  await Promise.allSettled([f.observer.run(f.config, () => f.watcher.close())]);
+  expect(await f.observer.settle(f.config)).toEqual([failure]);
+  expect(application).toHaveBeenCalledOnce();
+});
+it('attempts an uncalled native closer once after an outer wrapper fails before delegation', async () => {
+  const failure = new Error('Wrapper failed before delegation');
+  const native = vi.fn().mockResolvedValue(undefined);
+  const f = fixture(native);
+  await f.initialize();
+  const outer = vi.fn(async () => {
+    throw failure;
+  });
+  f.watcher.close = outer;
+  await Promise.allSettled([f.observer.run(f.config, () => f.watcher.close())]);
+  expect(await f.observer.settle(f.config)).toEqual([failure]);
+  expect(native).toHaveBeenCalledOnce();
+  expect(outer).toHaveBeenCalledOnce();
+});
+it('releases each orphan as it settles independently of stuck siblings', async () => {
+  const observer = createViteResourceObserver();
+  const delayed = Promise.withResolvers<void>();
+  async function orphan(close: () => Promise<void>) {
+    const watcher = { close };
+    const environment = {
+      init: async () => {},
+      close: async () => {},
+    } as unknown as DevEnvironment;
+    const config = {
+      plugins: [],
+      environments: {
+        client: { dev: { createEnvironment: async () => environment } },
+      },
+    } as unknown as ResolvedConfig;
+    observer.prepare(config);
+    const env = await config.environments.client!.dev.createEnvironment(
+      'client',
+      config,
+      { ws: { close: async () => {} } } as never
+    );
+    await env.init({ watcher } as never);
+    return config;
+  }
+  const clean = await orphan(async () => {});
+  const pending = await orphan(() => delayed.promise);
+  const batch = observer.settleOrphans();
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  expect(observer.release(clean)).toBe(false);
+  expect(await observer.settle(clean)).toEqual([]);
+  expect(observer.release(clean)).toBe(false);
+  delayed.resolve();
+  expect(await batch).toEqual([]);
+  expect(observer.release(pending)).toBe(false);
+  expect(await observer.settleAll()).toEqual([]);
 });

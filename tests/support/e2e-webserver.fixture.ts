@@ -24,6 +24,8 @@ if (
 }
 const servers: ViteDevServer[] = [];
 const watchers: { closed: boolean }[] = [];
+let isFinalClose = () => false;
+let instancesClosed = 0;
 let restartFailures =
   mode === 'restart-fail' ? 1 : mode === 'restart-recover' ? 2 : 0;
 const heldOutput: (() => void)[] = [];
@@ -90,6 +92,10 @@ try {
         {
           name: 'fixture-lifecycle',
           async configureServer(server) {
+            const api = server.config.plugins.find(
+              (plugin) => plugin.name === 'e2e-owned-database'
+            )?.api;
+            isFinalClose = () => !!api?.isClosing();
             servers.push(server);
             const watcher = { closed: false };
             watchers.push(watcher);
@@ -145,7 +151,8 @@ try {
             }
           },
           async closeServer({ reason }) {
-            if (reason !== 'close') return;
+            instancesClosed++;
+            if (reason !== 'close' || !isFinalClose()) return;
             console.log('Fixture final close');
             if (
               mode.endsWith('cleanup-failure') ||
@@ -189,20 +196,17 @@ try {
         process.send?.({
           type: 'instances',
           instances: servers.length,
+          instancesClosed,
           watchersOpen: watchers.filter((watcher) => !watcher.closed).length,
           sigtermHandlers: process.listenerCount('SIGTERM'),
         });
       if (message === 'abandoned-env-change') {
-        for (const server of servers.filter(
-          (candidate) => candidate.config !== owner.vite.config
-        ))
-          server.watcher.emit(
-            'change',
-            path.join(server.config.envDir || root, '.env')
-          );
-        setImmediate(() =>
-          process.send?.({ type: 'abandoned-change-delivered' })
-        );
+        // Exercise retained generation callbacks, rather than a closed watcher.
+        void Promise.all(
+          servers
+            .filter((candidate) => candidate.config !== owner.vite.config)
+            .map((server) => server.restart())
+        ).then(() => process.send?.({ type: 'abandoned-change-delivered' }));
       }
       if (message === 'exit-parent') process.exit(0);
       if (message === 'restart')

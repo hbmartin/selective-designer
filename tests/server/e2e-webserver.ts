@@ -1,5 +1,6 @@
 import { PGlite } from '@electric-sql/pglite';
 import { PGLiteSocketServer } from '@electric-sql/pglite-socket';
+import { AsyncLocalStorage } from 'node:async_hooks';
 import { spawn, type ChildProcess } from 'node:child_process';
 import path from 'node:path';
 import type { InlineConfig, ViteDevServer } from 'vite';
@@ -8,7 +9,10 @@ import { beforeDeadline } from '../support/promise-deadline';
 import { configureE2EDatabase } from './e2e-database-config';
 import { createE2ETerminal, flushE2EOutput } from './e2e-terminal';
 import { createOwnedViteConfig } from './vite-owned-config';
-import { createViteResourceObserver } from './vite-resource-observer';
+import {
+  createViteResourceObserver,
+  ViteRetirementTimeout,
+} from './vite-resource-observer';
 
 const setupScripts = [
   'src/platform/env/client.ts',
@@ -19,11 +23,12 @@ const setupScripts = [
 ] as const;
 
 type OwnedViteInstance = {
+  token: object;
+  settled?: boolean;
   config: ViteDevServer['config'];
   close: () => Promise<void>;
   restart: ViteDevServer['restart'];
-  closing?: Promise<void>;
-  closed?: boolean;
+  closing?: Promise<{ native: unknown[]; observed: unknown[] }>;
   replaced: boolean;
 };
 
@@ -79,16 +84,17 @@ async function startOwnedWebserver(
   let configuration:
     | Awaited<ReturnType<typeof createOwnedViteConfig>>
     | undefined;
-  const observer = createViteResourceObserver((error) =>
-    console.warn('E2E native cleanup recovered:', error)
-  );
+  const observer = createViteResourceObserver();
+  const restartContext = new AsyncLocalStorage<{ active: boolean }>();
+  const startupContext = { active: true };
+  const historicalCleanup = new Set<unknown>();
   let child: ChildProcess | undefined;
   let childResult: Promise<void> | undefined;
   const requestedChildSignals = new Set<NodeJS.Signals>();
   const receivedSignals = new Set<NodeJS.Signals>();
   const instances: OwnedViteInstance[] = [];
   let restarting: Promise<void> | undefined;
-  const underlyingRestarts = new Set<Promise<void>>();
+  let restartResult: Promise<void> | undefined;
   let queuedRestart: Parameters<ViteDevServer['restart']> | undefined;
   let serverCleanup: Promise<void> | undefined;
   let cleanup: Promise<void> | undefined;
@@ -151,162 +157,180 @@ async function startOwnedWebserver(
   }
   async function settleStartupOperation() {
     // Never await the outer startup promise: its error path joins close().
-    await Promise.allSettled([
-      acquiring,
-      childResult,
-      restarting,
-      ...underlyingRestarts,
-    ]);
+    await Promise.allSettled([acquiring, childResult, restarting]);
   }
   function removeReusableHandlers() {
     if (terminal.active || !startupSettled || !cleanupSettled) return;
     process.off('SIGINT', onSigint);
     process.off('SIGTERM', onSigterm);
   }
-  function throwCleanupFailures(failures: unknown[]) {
+  function throwFailures(failures: unknown[], message: string) {
     const unique = [...new Set(failures)];
     if (unique.length === 1) throw unique[0];
     if (unique.length > 1)
-      throw new AggregateError(unique, 'E2E owned resource cleanup failed', {
-        cause: unique[0],
-      });
+      throw new AggregateError(unique, message, { cause: unique[0] });
   }
   function closeInstance(instance: OwnedViteInstance) {
-    instance.closing ??= Promise.resolve()
-      .then(() => observer.run(instance.config, instance.close))
-      .then(() => {
-        instance.closed = true;
-      });
+    instance.closing ??= (async () => {
+      const native = await Promise.resolve()
+        .then(() => observer.run(instance.config, instance.close))
+        .then(
+          () => [],
+          (error: unknown) => [error]
+        );
+      const observed = await observer.settle(instance.config);
+      const failures = [...native, ...observed];
+      for (const error of failures) {
+        historicalCleanup.add(error);
+        recordCleanupFailure(error);
+      }
+      instance.settled = true;
+      pruneRetired();
+      return { native, observed };
+    })();
     return instance.closing;
   }
-  /** Releases settled instances; failed or pending ones stay for final close. */
   function pruneRetired() {
     for (let index = instances.length - 1; index >= 0; index--) {
       const candidate = instances[index]!;
-      if (candidate.config === vite?.config) continue;
-      if (!candidate.replaced && !candidate.closed) continue;
+      if (candidate.config === vite?.config || !candidate.settled) continue;
       instances.splice(index, 1);
       observer.release(candidate.config);
     }
   }
-  async function closeInstances(
-    selected: OwnedViteInstance[],
-    deadline = performance.now() + 5_000
-  ) {
+  async function closeInstances(selected: OwnedViteInstance[]) {
     const outcomes = await Promise.allSettled(selected.map(closeInstance));
-    const observed = await Promise.all(
-      selected.map((instance) => observer.settle(instance.config, deadline))
-    );
     return [
       ...outcomes.flatMap((outcome) =>
-        outcome.status === 'rejected' ? [outcome.reason as unknown] : []
+        outcome.status === 'fulfilled'
+          ? outcome.value.native
+          : [outcome.reason as unknown]
       ),
-      ...observed.flat(),
+      ...outcomes.flatMap((outcome) =>
+        outcome.status === 'fulfilled' ? outcome.value.observed : []
+      ),
     ];
   }
   async function restartInstance(
     instance: OwnedViteInstance,
-    args: Parameters<ViteDevServer['restart']>
+    args: Parameters<ViteDevServer['restart']>,
+    timeout: (error: unknown) => void
   ) {
     const failures: unknown[] = [];
-    const native = Promise.resolve().then(() =>
-      observer.run(instance.config, () => instance.restart(...args))
+    const operationContext = { active: true };
+    const native = restartContext.run(operationContext, () =>
+      Promise.resolve().then(() =>
+        observer.run(instance.config, () => instance.restart(...args))
+      )
     );
-    underlyingRestarts.add(native);
-    void native.then(
-      () => underlyingRestarts.delete(native),
-      () => underlyingRestarts.delete(native)
-    );
+    // This continuation owns adoption/retirement even after the caller times out.
     try {
-      await observer.boundRestart(instance.config, native);
-    } catch (error) {
-      if (underlyingRestarts.has(native)) throw error;
-      failures.push(error);
-    }
-    if (vite?.config !== instance.config) {
-      // Vite adopted a replacement and already tore down the old resources.
-      // Its proxy now targets the replacement: never close that stale alias.
-      instance.replaced = true;
-    }
-    const deadline =
-      observer.deadline(instance.config) ?? performance.now() + 5_000;
-    const pending = Promise.all([
-      // A replaced instance is no longer live, so memoizing its settlement is safe.
-      instance.replaced
-        ? observer.settle(instance.config, deadline)
-        : observer.settleStarted(instance.config, deadline),
-      // Each candidate is retired once. Earlier failures stay for final close.
-      closeInstances(
-        instances.filter(
-          (candidate) =>
-            !candidate.replaced &&
-            !candidate.closing &&
-            candidate.config !== vite?.config
-        ),
-        deadline
-      ),
-      observer.settleOrphans(deadline),
-    ]);
-    let retirementFailures: unknown[];
-    try {
-      retirementFailures = (
+      try {
+        await observer.boundRestart(instance.config, native);
+      } catch (error) {
+        if (error instanceof ViteRetirementTimeout) timeout(error);
+      }
+      try {
+        await native;
+      } catch (error) {
+        failures.push(error);
+      }
+      if (vite?.config !== instance.config) instance.replaced = true;
+      const candidates = instances.filter(
+        (candidate) =>
+          !candidate.replaced &&
+          !candidate.closing &&
+          candidate.config !== vite?.config
+      );
+      const pending = restartContext.run(operationContext, async () => {
+        const results = await Promise.all([
+          instance.replaced
+            ? observer.settle(instance.config).then((errors) => {
+                instance.settled = true;
+                pruneRetired();
+                return errors;
+              })
+            : observer.settleStarted(instance.config),
+          closeInstances(candidates),
+          observer.settleOrphans(),
+        ]);
+        return results.flat();
+      });
+      try {
         await beforeDeadline(
           pending,
-          deadline,
+          observer.deadline(instance.config) ?? performance.now() + 5_000,
           'E2E Vite retirement exceeded five seconds'
-        )
-      ).flat();
+        );
+      } catch (error) {
+        timeout(error);
+      }
+      const retirementFailures = await pending;
+      for (const error of retirementFailures) {
+        historicalCleanup.add(error);
+        recordCleanupFailure(error);
+      }
+      failures.push(...retirementFailures);
       pruneRetired();
-    } catch (error) {
-      retirementFailures = [error];
+      throwFailures(failures, 'E2E Vite restart failed');
+    } finally {
+      operationContext.active = false;
     }
-    for (const error of retirementFailures) recordCleanupFailure(error);
-    failures.push(...retirementFailures);
-    throwCleanupFailures(failures);
   }
-  function requestRestart(
-    instance: OwnedViteInstance,
-    args: Parameters<ViteDevServer['restart']>
-  ): Promise<void> {
-    if (stopped || !startupSettled || instance.config !== vite?.config)
-      return Promise.resolve();
-    if (!restarting && underlyingRestarts.size) {
-      return beforeDeadline(
-        Promise.allSettled(underlyingRestarts),
-        performance.now() + 5_000,
-        'E2E Vite retirement remains pending'
-      ).then(() => {
-        const active = instances.find(
-          (candidate) => candidate.config === vite?.config
-        )!;
-        return requestRestart(active, args);
+  function startRestartQueue() {
+    if (restarting || stopped || !startupSettled || !queuedRestart) return;
+    let rejectTimeout!: (error: unknown) => void;
+    let expired = false;
+    function resetResult() {
+      expired = false;
+      const timedOut = new Promise<never>((_resolve, reject) => {
+        rejectTimeout = reject;
       });
+      restartResult = Promise.race([operation, timedOut]);
+      void restartResult.catch(() => {});
     }
-    if (restarting) {
-      queuedRestart = [!!queuedRestart?.[0] || !!args[0]];
-      return restarting;
+    function reportTimeout(error: unknown) {
+      if (!expired) terminal.report(error, 'E2E cleanup failed');
+      expired = true;
+      rejectTimeout(error);
     }
     const operation = Promise.resolve().then(async () => {
-      let next: Parameters<ViteDevServer['restart']> | undefined = args;
-      while (next && !stopped) {
-        if (queuedRestart) next = [!!next[0] || !!queuedRestart[0]];
+      try {
+        while (queuedRestart && !stopped) {
+          if (expired) resetResult();
+          const args = queuedRestart;
+          queuedRestart = undefined;
+          const active = instances.find(
+            (candidate) => candidate.config === vite?.config
+          )!;
+          await restartInstance(active, args, reportTimeout);
+        }
+      } catch (error) {
         queuedRestart = undefined;
-        const active = instances.find(
-          (candidate) => candidate.config === vite?.config
-        )!;
-        await restartInstance(active, next);
-        next = queuedRestart;
-        if (!next) restarting = undefined;
-      }
-    });
-    const tracked = operation.finally(() => {
-      if (restarting === tracked) {
+        throw error;
+      } finally {
+        // No await between the queue's final observation and releasing its owner.
         restarting = undefined;
-        queuedRestart = undefined;
+        restartResult = undefined;
       }
     });
-    restarting = tracked;
-    return tracked;
+    restarting = operation;
+    resetResult();
+    void operation.catch(() => {});
+  }
+  function requestRestart(
+    token: object,
+    args: Parameters<ViteDevServer['restart']>
+  ): Promise<void> {
+    const instance = instances.find((candidate) => candidate.token === token);
+    if (stopped || !instance || instance.replaced || instance.closing)
+      return Promise.resolve();
+    queuedRestart = queuedRestart ? [!!queuedRestart[0] || !!args[0]] : args;
+    startRestartQueue();
+    // A lifecycle callback must not wait for the operation containing itself.
+    if (!startupSettled || restartContext.getStore()?.active)
+      return Promise.resolve();
+    return restartResult ?? Promise.resolve();
   }
   function closeOwnedServers() {
     serverCleanup ??= (async () => {
@@ -314,16 +338,19 @@ async function startOwnedWebserver(
       const failures = await closeInstances(
         instances.filter((instance) => !instance.replaced)
       );
-      failures.push(...(await observer.settleAll()));
-      // Join every exposed sibling hook, including after Vite's fail-fast close,
-      // before releasing the database they may still use.
+      failures.push(...historicalCleanup, ...(await observer.settleAll()));
       try {
         await closeDatabase();
       } catch (error) {
         failures.push(error);
       }
-      if (!failures.length) await configuration?.remove();
-      throwCleanupFailures(failures);
+      // Settled historical failures do not require the configuration bridge.
+      try {
+        await configuration?.remove();
+      } catch (error) {
+        failures.push(error);
+      }
+      throwFailures(failures, 'E2E owned resource cleanup failed');
     })();
     return serverCleanup;
   }
@@ -395,18 +422,19 @@ async function startOwnedWebserver(
   function registerServer(server: ViteDevServer) {
     if (instances.some((candidate) => candidate.config === server.config))
       return;
-    observer.register(server.config);
     vite ??= server;
+    const token = {};
     const instance: OwnedViteInstance = {
+      token,
       config: server.config,
       close: server.close.bind(server),
       restart: server.restart.bind(server),
       replaced: false,
     };
     instances.push(instance);
-    // Incomplete/abandoned instances cannot drive shared restart
-    // state. The active owner serializes creation and retirement.
-    server.restart = (...args) => requestRestart(instance, args);
+    observer.register(server.config);
+    // Capture only the token: stale callbacks must not retain retired graphs.
+    server.restart = (...args) => requestRestart(token, args);
     server.close = async () => {
       try {
         await close();
@@ -485,11 +513,16 @@ async function startOwnedWebserver(
     await acquire(
       createOwnedViteConfig(options.viteConfig ?? {}, {
         name: 'e2e-owned-database',
-        api: { prepare: observer.prepare, register: registerServer },
+        api: {
+          prepare: observer.prepare,
+          register: registerServer,
+          isClosing: () => stopped,
+        },
         enforce: 'pre',
         configResolved: { order: 'pre', handler: observer.prepare },
         configureServer: { order: 'pre', handler: registerServer },
         async closeServer({ reason }) {
+          observer.markTeardown();
           if (reason === 'close' && terminal.active) await flushE2EOutput();
         },
       }),
@@ -497,12 +530,22 @@ async function startOwnedWebserver(
         configuration = prepared;
       }
     );
-    await acquire(createServer(configuration!.config), (server) => {
-      vite = server;
-    });
-    await acquire(vite!.listen(), () => {});
+    await acquire(
+      restartContext.run(startupContext, () =>
+        createServer(configuration!.config)
+      ),
+      (server) => {
+        vite = server;
+      }
+    );
+    await acquire(
+      restartContext.run(startupContext, () => vite!.listen()),
+      () => {}
+    );
     console.log('E2E webserver ready');
     startupSettled = true;
+    startupContext.active = false;
+    startRestartQueue();
     return { vite: vite!, close, databaseUrl: databaseUrl.href };
   } catch (error) {
     recordStartupFailure(error);
@@ -514,6 +557,7 @@ async function startOwnedWebserver(
       cleanupFailure = { error: cleanupError };
     }
     reconcileChildSignal();
+    startupContext.active = false;
     startupSettled = true;
     removeReusableHandlers();
     if (

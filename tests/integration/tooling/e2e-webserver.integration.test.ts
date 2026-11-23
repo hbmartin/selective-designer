@@ -572,13 +572,13 @@ it('retires failed restart watchers before an env change and keeps one live inst
     await client.query(
       'create table env_restart(value integer); insert into env_restart values(42)'
     );
-    const initial = await observation();
+    await observation();
     fixture.child.send('restart');
     await fixture.message('restarted');
     expect(await observation()).toMatchObject({
       instances: 2,
       watchersOpen: 1,
-      sigtermHandlers: initial.sigtermHandlers,
+      instancesClosed: 1,
     });
     fixture.child.send('abandoned-env-change');
     await fixture.message('abandoned-change-delivered');
@@ -596,11 +596,16 @@ it('retires failed restart watchers before an env change and keeps one live inst
       .poll(async () => (await observation()).instances, { timeout: 20_000 })
       .toBeGreaterThan(2);
     // Filesystem backends may deliver both add and change for one write. Each
-    // legitimate restart still leaves exactly one live watcher and handler.
-    await expect.poll(observation).toMatchObject({
-      watchersOpen: 1,
-      sigtermHandlers: initial.sigtermHandlers,
-    });
+    // legitimate restart still leaves one live watcher and retires its predecessor.
+    await expect
+      .poll(async () => {
+        const state = await observation();
+        return {
+          watchersOpen: state.watchersOpen,
+          retired: state.instancesClosed === state.instances! - 1,
+        };
+      })
+      .toEqual({ watchersOpen: 1, retired: true });
     expect((await client.query('select value from env_restart')).rows).toEqual([
       { value: 42 },
     ]);

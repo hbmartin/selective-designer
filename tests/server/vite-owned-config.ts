@@ -1,3 +1,4 @@
+import { existsSync } from 'node:fs';
 import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
@@ -14,6 +15,7 @@ const ownerName = 'e2e-owned-database';
 export type ViteOwnerApi = {
   prepare(config: ResolvedConfig): void;
   register(server: ViteDevServer): void;
+  isClosing?: () => boolean;
 };
 function owner(config: ResolvedConfig): ViteOwnerApi {
   const api = config.plugins.find((plugin) => plugin.name === ownerName)
@@ -103,11 +105,19 @@ export async function createOwnedViteConfig(
     plugins: [ownerPlugin, ...(inline.plugins ?? []).map(wrapPlugin)],
   };
   if (inline.configFile === false) return { config, remove: async () => {} };
+  const selected = inline.configFile
+    ? path.resolve(inline.configFile)
+    : ['js', 'mjs', 'ts', 'cjs', 'mts', 'cts']
+        .map((extension) =>
+          path.resolve(inline.root ?? process.cwd(), `vite.config.${extension}`)
+        )
+        .find(existsSync);
+  if (!selected)
+    return {
+      config: { ...config, configFile: false as const },
+      remove: async () => {},
+    };
   const directory = await mkdtemp(path.join(os.tmpdir(), 'e2e-vite-config-'));
-  const selected = path.resolve(
-    inline.configFile ??
-      path.join(inline.root ?? process.cwd(), 'vite.config.ts')
-  );
   const bridge = path.join(directory, 'vite.config.mjs');
   try {
     await writeFile(

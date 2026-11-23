@@ -1,6 +1,8 @@
 import { spawn } from 'node:child_process';
 import { createWriteStream } from 'node:fs';
-import { mkdir, writeFile } from 'node:fs/promises';
+import { cp, mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { finished } from 'node:stream/promises';
+import os from 'node:os';
 import path from 'node:path';
 
 const args = new Set(process.argv.slice(2));
@@ -13,6 +15,10 @@ const checkStep = process.env.CI
 
 const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
 const reportDir = path.resolve('test-results', 'task-verification', timestamp);
+const stagingDir = await mkdtemp(
+  path.join(os.tmpdir(), 'selective-designer-verification-')
+);
+console.log(`Verification staging: ${stagingDir}`);
 
 const steps = [
   {
@@ -61,11 +67,15 @@ const formatCommand = ({ command, args }) =>
     .join(' ');
 
 const runStep = async (step) =>
-  new Promise((resolve) => {
+  new Promise((resolve, reject) => {
     const startedAt = new Date();
     const logPath = path.join(reportDir, `${step.id}.log`);
-    const log = createWriteStream(logPath, { flags: 'a' });
+    const log = createWriteStream(path.join(stagingDir, `${step.id}.log`), {
+      flags: 'a',
+    });
 
+    const logged = finished(log);
+    void logged.catch(() => {});
     log.write(`$ ${formatCommand(step)}\n\n`);
     console.log(`\n$ ${formatCommand(step)}`);
 
@@ -91,13 +101,19 @@ const runStep = async (step) =>
       log.write(message);
     });
 
-    child.on('close', (code, signal) => {
+    child.on('close', async (code, signal) => {
       const finishedAt = new Date();
       log.end(
         `\nexitCode=${code ?? 'null'} signal=${signal ?? 'null'} durationMs=${
           finishedAt.getTime() - startedAt.getTime()
         }\n`
       );
+      try {
+        await logged;
+      } catch (error) {
+        reject(error);
+        return;
+      }
       resolve({
         ...step,
         code,
@@ -139,26 +155,33 @@ const writeSummary = async (results) => {
   ];
 
   const summaryPath = path.join(reportDir, 'summary.md');
-  await writeFile(summaryPath, lines.join('\n'));
+  await writeFile(path.join(stagingDir, 'summary.md'), lines.join('\n'));
   return { failed, summaryPath };
 };
 
-await mkdir(reportDir, { recursive: true });
-
 const results = [];
-for (const step of steps) {
-  const result = await runStep(step);
-  results.push(result);
-
-  if (result.code !== 0) {
-    break;
+try {
+  for (const step of steps) {
+    const result = await runStep(step);
+    results.push(result);
+    if (result.code !== 0) break;
   }
-}
-
-const { failed, summaryPath } = await writeSummary(results);
-
-console.log(`\nVerification report: ${summaryPath}`);
-
-if (failed) {
-  process.exitCode = failed.code ?? 1;
+  const { failed, summaryPath } = await writeSummary(results);
+  if (failed) process.exitCode = failed.code ?? 1;
+  console.log(`\nVerification report: ${summaryPath}`);
+} catch (error) {
+  process.exitCode = 1;
+  console.error('Task verification failed:', error);
+} finally {
+  try {
+    await mkdir(reportDir, { recursive: true });
+    await cp(stagingDir, reportDir, { recursive: true });
+    await rm(stagingDir, { recursive: true, force: true });
+  } catch (error) {
+    process.exitCode ||= 1;
+    console.error(
+      `Verification publication failed; retained ${stagingDir}:`,
+      error
+    );
+  }
 }
