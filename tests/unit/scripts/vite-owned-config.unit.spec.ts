@@ -176,3 +176,120 @@ it('keeps getter-only shadows and lifecycle setters local to the writable facade
   expect(source.closeServer).toBe(original);
   expect(sourceSetter).not.toHaveBeenCalled();
 });
+
+it.each(['own', 'inherited'] as const)(
+  'uses derived receivers for %s source getters and setters',
+  (kind) => {
+    const state = new WeakMap<object, boolean>();
+    const receivers: object[] = [];
+    const accessor = {
+      get enabled() {
+        receivers.push(this);
+        return state.get(this) ?? true;
+      },
+      set enabled(value: boolean) {
+        receivers.push(this);
+        state.set(this, value);
+      },
+    };
+    const source = Object.freeze(
+      kind === 'own'
+        ? Object.defineProperties(
+            { name: 'receivers' },
+            Object.getOwnPropertyDescriptors(accessor)
+          )
+        : Object.assign(Object.create(accessor), { name: 'receivers' })
+    );
+    const facade = withE2EViteOwnership({ plugins: [source] })
+      .plugins![1] as Plugin & { enabled: boolean };
+    facade.enabled = false;
+    const child = Object.create(facade) as typeof facade;
+    expect(child.enabled).toBe(true);
+    child.enabled = false;
+    expect(child.enabled).toBe(false);
+    const alternate = {};
+    expect(Reflect.set(facade, 'enabled', true, alternate)).toBe(true);
+    expect(Reflect.get(facade, 'enabled', alternate)).toBe(true);
+    expect(receivers).toEqual([
+      source,
+      child,
+      child,
+      child,
+      alternate,
+      alternate,
+    ]);
+    expect(state.get(source)).toBe(false);
+    expect(state.get(child)).toBe(false);
+  }
+);
+it('puts new, data and getter-only shadows on the actual derived receiver', () => {
+  const source = Object.freeze({
+    name: 'parent',
+    get enabled() {
+      return true;
+    },
+  });
+  const facade = withE2EViteOwnership({ plugins: [source] })
+    .plugins![1] as Plugin & { enabled: boolean };
+  const child = Object.create(facade);
+  const symbol = Symbol('child');
+  child.fresh = 42;
+  child.name = 'child';
+  child.enabled = false;
+  child[symbol] = 'value';
+  expect(Object.keys(child)).toEqual(['fresh', 'name', 'enabled']);
+  expect(Reflect.ownKeys(child)).toContain(symbol);
+  expect(Object.hasOwn(facade, 'fresh')).toBe(false);
+  expect(Object.hasOwn(facade, symbol)).toBe(false);
+  expect(facade.name).toBe('parent');
+  expect(facade.enabled).toBe(true);
+  const state = new WeakMap<object, number>();
+  Object.defineProperty(facade, 'local', {
+    configurable: true,
+    get() {
+      return state.get(this);
+    },
+    set(value: number) {
+      state.set(this, value);
+    },
+  });
+  child.local = 7;
+  expect(child.local).toBe(7);
+  expect(Reflect.get(facade, 'local')).toBeUndefined();
+});
+it('respects alternate receiver descriptors and extensibility when creating shadows', () => {
+  const source = Object.freeze({ name: 'parent' });
+  const facade = withE2EViteOwnership({ plugins: [source] })
+    .plugins![1] as Plugin;
+  const readonly = Object.defineProperty({}, 'x', {
+    value: 1,
+    writable: false,
+    configurable: true,
+  });
+  const setter = vi.fn();
+  const accessor = Object.defineProperty({}, 'x', {
+    configurable: true,
+    get: () => 1,
+    set: setter,
+  });
+  expect(Reflect.set(facade, 'x', 2, readonly)).toBe(false);
+  expect(Reflect.set(facade, 'x', 2, accessor)).toBe(false);
+  expect(setter).not.toHaveBeenCalled();
+  expect(Reflect.set(facade, 'x', 2, Object.preventExtensions({}))).toBe(false);
+  expect(Reflect.set(facade, 'x', 2, Object.freeze({}))).toBe(false);
+  expect(Reflect.set(facade, 'x', 2, 1)).toBe(false);
+  const writable = Object.defineProperty({}, 'x', {
+    value: 1,
+    writable: true,
+    configurable: false,
+    enumerable: false,
+  });
+  expect(Reflect.set(facade, 'x', 2, writable)).toBe(true);
+  expect(Object.getOwnPropertyDescriptor(writable, 'x')).toEqual({
+    value: 2,
+    writable: true,
+    configurable: false,
+    enumerable: false,
+  });
+  expect(Object.hasOwn(facade, 'x')).toBe(false);
+});

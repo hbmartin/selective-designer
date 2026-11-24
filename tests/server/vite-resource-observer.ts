@@ -60,6 +60,29 @@ export function createViteResourceObserver(
   }
   const released = new WeakMap<ResolvedConfig, unknown[]>();
   const historical = new Set<unknown>();
+  const ownedAggregates = new WeakMap<AggregateError, readonly unknown[]>();
+  function normalizeFailures(values: readonly unknown[]) {
+    const failures: unknown[] = [];
+    const seen = new Set<unknown>();
+    const expanded = new Set<AggregateError>();
+    function append(value: unknown) {
+      if (value instanceof AggregateError) {
+        const parts = ownedAggregates.get(value);
+        if (parts) {
+          if (expanded.has(value)) return;
+          expanded.add(value);
+          for (const part of parts) append(part);
+          return;
+        }
+      }
+      if (!seen.has(value)) {
+        seen.add(value);
+        failures.push(value);
+      }
+    }
+    for (const value of values) append(value);
+    return failures;
+  }
   const context = new AsyncLocalStorage<{
     token: object;
   }>();
@@ -389,12 +412,15 @@ export function createViteResourceObserver(
             }
             const distinct = [...new Set(failures)];
             if (distinct.length === 1) throw distinct[0];
-            if (distinct.length > 1)
-              throw new AggregateError(
+            if (distinct.length > 1) {
+              const aggregate = new AggregateError(
                 distinct,
                 'E2E environment cleanup failed after initialization',
                 { cause: distinct[0] }
               );
+              ownedAggregates.set(aggregate, Object.freeze([...distinct]));
+              throw aggregate;
+            }
           };
           const owner = capture(scope, token, environment);
           for (const part of parts)
@@ -470,16 +496,13 @@ export function createViteResourceObserver(
         break;
     }
     const outcomes = await Promise.allSettled(scope.hooks);
-    const failures = [
-      ...new Set([
-        ...scope.failures,
-        ...outcomes.flatMap((outcome) =>
-          outcome.status === 'rejected' ? [outcome.reason as unknown] : []
-        ),
-        ...scope.resources.flatMap((resource) => resource.failures),
-      ]),
-    ];
-    return failures;
+    return normalizeFailures([
+      ...scope.failures,
+      ...outcomes.flatMap((outcome) =>
+        outcome.status === 'rejected' ? [outcome.reason as unknown] : []
+      ),
+      ...scope.resources.flatMap((resource) => resource.failures),
+    ]);
   }
   function settleScope(scope: Scope) {
     begin(scope.token, attemptFor(scope));
