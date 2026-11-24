@@ -345,3 +345,95 @@ it('releases each final-settlement scope before a stuck sibling settles', async 
   expect(await batch).toEqual([]);
   expect(observer.release(pending)).toBe(false);
 });
+
+it('observes a live scope without initiating disposal or carrying a deadline to its next restart', async () => {
+  vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'performance'] });
+  const watcher = { close: vi.fn(async () => {}) };
+  const closeEnvironment = vi.fn(async () => {});
+  const closeWebsocket = vi.fn(async () => {});
+  const environment = { init: async () => {}, close: closeEnvironment };
+  const websocket = { close: closeWebsocket };
+  const config = {
+    plugins: [],
+    environments: {
+      client: { dev: { createEnvironment: async () => environment } },
+    },
+  } as unknown as ResolvedConfig;
+  const observer = createViteResourceObserver();
+  observer.register(config);
+  const env = await config.environments.client!.dev.createEnvironment(
+    'client',
+    config,
+    { ws: websocket } as never
+  );
+  await env.init({ watcher } as never);
+  await watcher.close();
+  await observer.boundRestart(config, Promise.resolve());
+  expect(await observer.settleStarted(config)).toEqual([]);
+  expect(closeEnvironment).not.toHaveBeenCalled();
+  expect(closeWebsocket).not.toHaveBeenCalled();
+  expect(observer.release(config)).toBe(false);
+  await vi.advanceTimersByTimeAsync(6000);
+  const native = Promise.withResolvers<void>();
+  const restarting = observer.boundRestart(config, native.promise);
+  let completed = false;
+  void restarting.then(() => {
+    completed = true;
+  });
+  await vi.advanceTimersByTimeAsync(6000);
+  expect(completed).toBe(false);
+  native.resolve();
+  await restarting;
+  await observer.settleAll();
+  expect(closeEnvironment).toHaveBeenCalledOnce();
+  expect(closeWebsocket).toHaveBeenCalledOnce();
+});
+
+it('keeps released configurations terminal across all entry points and saved factories', async () => {
+  const failure = new Error('Historical retirement failure');
+  const f = fixture(vi.fn().mockRejectedValue(failure));
+  await f.initialize();
+  const factory = f.config.environments.client!.dev.createEnvironment;
+  expect(await f.observer.settle(f.config)).toEqual([failure]);
+  expect(f.observer.release(f.config)).toBe(true);
+  const action = vi.fn(() => 'returned');
+  expect(f.observer.run(f.config, action)).toBe('returned');
+  expect(f.observer.dispose(f.config, action)).toBe('returned');
+  f.observer.register(f.config);
+  await f.observer.boundRestart(f.config, Promise.resolve());
+  await factory('client', f.config, { ws: { close: async () => {} } } as never);
+  expect(await f.observer.settleStarted(f.config)).toEqual([failure]);
+  expect(await f.observer.settle(f.config)).toEqual([failure]);
+  expect(await f.observer.settleAll()).toEqual([failure]);
+  expect(f.observer.release(f.config)).toBe(false);
+  expect(action).toHaveBeenCalledTimes(2);
+});
+
+it('records unchanged frozen instrumentation once while discovering a newly writable factory', async () => {
+  const plugin = Object.freeze({ name: 'frozen', closeServer: async () => {} });
+  const original = vi.fn(async () => ({
+    init: async () => {},
+    close: async () => {},
+  }));
+  const dev = Object.defineProperty({}, 'createEnvironment', {
+    value: original,
+    configurable: true,
+    writable: false,
+  });
+  const config = {
+    plugins: [plugin],
+    environments: { client: { dev } },
+  } as unknown as ResolvedConfig;
+  const observer = createViteResourceObserver();
+  for (let i = 0; i < 5; i++) observer.prepare(config);
+  Object.defineProperty(dev, 'createEnvironment', {
+    value: original,
+    configurable: true,
+    writable: true,
+  });
+  observer.prepare(config);
+  expect(config.environments.client!.dev.createEnvironment).not.toBe(original);
+  const failures = await observer.settleAll();
+  expect(failures).toHaveLength(2);
+  expect(failures.every((error) => error instanceof TypeError)).toBe(true);
+});

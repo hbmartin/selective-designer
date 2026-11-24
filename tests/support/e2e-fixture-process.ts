@@ -318,17 +318,7 @@ export async function launchE2EFixture(
     try {
       await dispose();
     } catch (cleanupError) {
-      throw new E2EFixtureLaunchError(
-        error,
-        transportErrors.length
-          ? new AggregateError(
-              [cleanupError, ...transportErrors],
-              'Fixture cleanup and transport diagnostics',
-              { cause: cleanupError }
-            )
-          : cleanupError,
-        retryCleanup
-      );
+      throw new E2EFixtureLaunchError(error, cleanupError, retryCleanup);
     }
     reportTransportErrors();
     throw error;

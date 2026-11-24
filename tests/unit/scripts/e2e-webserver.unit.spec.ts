@@ -13,6 +13,7 @@ const mocks = vi.hoisted(() => ({
   create: vi.fn(),
   spawn: vi.fn(),
   release: vi.fn(),
+  refresh: vi.fn(),
 }));
 vi.mock('@electric-sql/pglite', () => ({
   PGlite: class {
@@ -40,7 +41,7 @@ vi.mock('@tests/server/vite-owned-config', () => ({
   ) => ({
     config: { ...inline, plugins: [plugin, ...(inline.plugins ?? [])] },
     remove: async () => {},
-    refresh: async () => {},
+    refresh: mocks.refresh,
     ignoreBridge: () => {},
   }),
 }));
@@ -122,6 +123,7 @@ beforeEach(() => {
   vi.spyOn(console, 'log').mockImplementation(() => {});
   vi.spyOn(console, 'error').mockImplementation(() => {});
   mocks.ready.mockResolvedValue(undefined);
+  mocks.refresh.mockResolvedValue(undefined);
   mocks.dbClose.mockResolvedValue(undefined);
   mocks.socketStart.mockResolvedValue(undefined);
   mocks.socketStop.mockResolvedValue(undefined);
@@ -1670,4 +1672,84 @@ it('preserves cached retirement intent after shutdown begins during its close ho
   gate.resolve();
   await Promise.all([restarting, closing]);
   expect(intent).toEqual([false, false]);
+});
+
+it.each([false, true])(
+  'reconciles shutdown during configuration refresh; failure=%s',
+  async (fails) => {
+    const refresh = deferred<void>();
+    const failure = new Error('Configuration refresh rejected');
+    mocks.refresh.mockReturnValue(refresh.promise);
+    const native = vi.fn(async () => {});
+    mocks.create.mockImplementation(async (inline) => {
+      const server = { config: {}, close: closeVite, listen, restart: native };
+      inline.plugins[0].configureServer.handler(server);
+      return server;
+    });
+    const owner = (await startE2EWebserver({ setupScripts: [] }))!;
+    const restarting = owner.vite.restart().catch((error: unknown) => error);
+    await vi.advanceTimersByTimeAsync(0);
+    const closing = owner.close();
+    if (fails) refresh.reject(failure);
+    else refresh.resolve();
+    const [error] = await Promise.all([restarting, closing]);
+    expect(error).toEqual(
+      fails
+        ? failure
+        : expect.objectContaining({
+            message: 'E2E restart cancelled before starting',
+          })
+    );
+    expect(native).not.toHaveBeenCalled();
+    expect(closeVite).toHaveBeenCalledOnce();
+    expect(console.error).not.toHaveBeenCalled();
+  }
+);
+
+it('gives newly discovered candidate cleanup its own budget after slow replacement listening', async () => {
+  const source = restartResources();
+  const listening = deferred<void>();
+  let stable!: RestartTestServer;
+  let register!: (server: object) => void;
+  let marker!: () => Promise<void>;
+  const candidateClose = vi.fn(
+    () => new Promise<void>((resolve) => setTimeout(resolve, 10))
+  );
+  const raw = vi.fn(async () => {
+    register({ config: {}, close: candidateClose, restart: vi.fn() });
+    const incoming: RestartTestServer = {
+      config: {},
+      close: closeVite,
+      listen: vi.fn(() => listening.promise),
+      restart: vi.fn(async () => {}),
+    };
+    register(incoming);
+    await source.watcher.close();
+    await marker();
+    Object.assign(stable, incoming);
+    await stable.listen();
+  });
+  mocks.create.mockImplementation(async (inline) => {
+    register = inline.plugins[0].configureServer.handler;
+    source.config.plugins = inline.plugins;
+    stable = { config: source.config, close: closeVite, listen, restart: raw };
+    register(stable);
+    marker = () => inline.plugins[0].closeServer({ reason: 'restart' });
+    await source.initialize();
+    return stable;
+  });
+  const owner = (await startE2EWebserver({ setupScripts: [] }))!;
+  const restarting = owner.vite.restart();
+  let completed = false;
+  void restarting.then(() => {
+    completed = true;
+  });
+  await vi.advanceTimersByTimeAsync(6000);
+  expect(completed).toBe(false);
+  listening.resolve();
+  await vi.advanceTimersByTimeAsync(10);
+  await restarting;
+  expect(candidateClose).toHaveBeenCalledOnce();
+  expect(console.error).not.toHaveBeenCalled();
+  await owner.close();
 });

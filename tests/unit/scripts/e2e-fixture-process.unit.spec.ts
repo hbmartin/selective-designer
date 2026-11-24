@@ -467,3 +467,36 @@ it('reports transport diagnostics once without failing successful cleanup', asyn
   );
   warning.mockRestore();
 });
+
+it('reports passive transport errors once without duplicating the failed-launch aggregate', async () => {
+  const launchError = new Error('Authorization failed');
+  const cleanupError = new Error('Cleanup inspection unavailable');
+  const transportError = new Error('Passive IPC channel diagnostic');
+  const warning = vi.spyOn(console, 'warn').mockImplementation(() => {});
+  const inspect = mocks.inspect.getMockImplementation()!;
+  mocks.inspect.mockImplementationOnce(inspect).mockImplementationOnce(() => {
+    throw cleanupError;
+  });
+  child.send.mockImplementation((_message, callback) => {
+    child.emit('error', transportError);
+    callback(launchError);
+  });
+  try {
+    let failure!: import('@tests/support/e2e-fixture-process').E2EFixtureLaunchError;
+    await launchE2EFixture().catch((error) => {
+      failure = error;
+    });
+    expect(failure.errors).toEqual([
+      launchError,
+      expect.objectContaining({ cause: cleanupError }),
+    ]);
+    expect(warning).toHaveBeenCalledExactlyOnceWith(
+      'E2E fixture transport diagnostic:',
+      transportError
+    );
+    await failure.retryCleanup();
+    expect(warning).toHaveBeenCalledOnce();
+  } finally {
+    warning.mockRestore();
+  }
+});
