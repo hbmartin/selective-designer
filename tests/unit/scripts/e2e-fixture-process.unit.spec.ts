@@ -500,3 +500,63 @@ it('reports passive transport errors once without duplicating the failed-launch 
     warning.mockRestore();
   }
 });
+
+it.each([
+  ['restarted', 'restart-failed'],
+  ['abandoned-change-delivered', 'abandoned-change-failed'],
+])(
+  'rejects %s promptly on its explicit failure outcome',
+  async (success, failure) => {
+    const fixture = await launchE2EFixture();
+    const waiting = fixture.message(success, { failureTypes: [failure] });
+    child.emit('message', { type: failure, error: 'Original action failure' });
+    await Promise.all([
+      expect(waiting).rejects.toThrow(`${failure}: Original action failure`),
+      vi.advanceTimersByTimeAsync(20),
+    ]);
+    expect(performance.now()).toBeLessThan(100);
+    await fixture.dispose();
+  }
+);
+it.each(['success-first', 'failure-first'])(
+  'uses chronological buffered outcomes after disconnect: %s',
+  async (order) => {
+    const fixture = await launchE2EFixture();
+    const success = { type: 'restarted' };
+    const failure = { type: 'restart-failed', error: 'Buffered rejection' };
+    for (const message of order === 'success-first'
+      ? [success, failure]
+      : [failure, success])
+      child.emit('message', message);
+    child.emit('exit', 0, null);
+    child.emit('disconnect');
+    const outcome = fixture.message('restarted', {
+      failureTypes: ['restart-failed'],
+    });
+    if (order === 'success-first')
+      await expect(outcome).resolves.toEqual(success);
+    else await expect(outcome).rejects.toThrow('Buffered rejection');
+    await expect(fixture.message('restart-failed')).resolves.toEqual(failure);
+    await fixture.dispose();
+  }
+);
+it('limits repeated action outcomes to an explicit buffer index without consuming history', async () => {
+  const fixture = await launchE2EFixture();
+  child.emit('message', { type: 'restarted' });
+  const afterIndex = fixture.messages.length;
+  child.emit('message', {
+    type: 'restart-failed',
+    error: 'Second action failed',
+  });
+  await expect(
+    fixture.message('restarted', {
+      afterIndex,
+      failureTypes: ['restart-failed'],
+    })
+  ).rejects.toThrow('Second action failed');
+  await expect(fixture.message('restarted')).resolves.toEqual({
+    type: 'restarted',
+  });
+  expect(fixture.messages).toHaveLength(afterIndex + 1);
+  await fixture.dispose();
+});

@@ -437,3 +437,196 @@ it('records unchanged frozen instrumentation once while discovering a newly writ
   expect(failures).toHaveLength(2);
   expect(failures.every((error) => error instanceof TypeError)).toBe(true);
 });
+
+async function resourceFixture(close: () => Promise<void>) {
+  const websocket = { close: vi.fn(async () => {}) };
+  const optimizer = { close: vi.fn(async () => {}) };
+  const bundled = { close: vi.fn(async () => {}) };
+  const closes = {
+    websocket: websocket.close,
+    optimizer: optimizer.close,
+    bundled: bundled.close,
+  };
+  const environment = {
+    hot: websocket,
+    depsOptimizer: optimizer,
+    bundledDev: bundled,
+    init: async () => {},
+    close,
+  } as unknown as DevEnvironment;
+  const config = {
+    plugins: [],
+    environments: {
+      client: { dev: { createEnvironment: async () => environment } },
+    },
+  } as unknown as ResolvedConfig;
+  const observer = createViteResourceObserver();
+  observer.register(config);
+  await config.environments.client!.dev.createEnvironment('client', config, {
+    ws: websocket,
+  } as never);
+  return {
+    observer,
+    config,
+    environment,
+    websocket,
+    optimizer,
+    bundled,
+    closes,
+  };
+}
+it('reserves one retirement across dependent parts and captured closer delegation', async () => {
+  const native = vi.fn(async () => {});
+  const f = await resourceFixture(native);
+  const captured = f.environment.close;
+  const wrapper = vi.fn(async () => {
+    await captured();
+  });
+  f.environment.close = wrapper;
+  expect(
+    await Promise.all([
+      f.observer.settle(f.config),
+      f.observer.settle(f.config),
+    ])
+  ).toEqual([[], []]);
+  expect(wrapper).toHaveBeenCalledOnce();
+  expect(native).toHaveBeenCalledOnce();
+  expect(f.closes.optimizer).toHaveBeenCalledOnce();
+  expect(f.closes.bundled).toHaveBeenCalledOnce();
+  expect(f.closes.websocket).toHaveBeenCalledOnce();
+  await f.observer.settleAll();
+  expect(wrapper).toHaveBeenCalledOnce();
+});
+it('closes the independent websocket while a deferred environment wrapper retains its own parts', async () => {
+  const gate = Promise.withResolvers<void>();
+  const entered = Promise.withResolvers<void>();
+  const native = vi.fn(async () => {});
+  const f = await resourceFixture(native);
+  const previous = f.environment.close;
+  const wrapper = vi.fn(async () => {
+    entered.resolve();
+    await gate.promise;
+    await previous();
+  });
+  f.environment.close = wrapper;
+  const finishing = f.observer.settle(f.config);
+  try {
+    await entered.promise;
+    await vi.waitFor(() => expect(f.closes.websocket).toHaveBeenCalledOnce());
+    expect(native).not.toHaveBeenCalled();
+    expect(f.closes.optimizer).not.toHaveBeenCalled();
+    expect(f.closes.bundled).not.toHaveBeenCalled();
+  } finally {
+    gate.resolve();
+  }
+  expect(await finishing).toEqual([]);
+  expect(wrapper).toHaveBeenCalledOnce();
+  expect(native).toHaveBeenCalledOnce();
+  expect(f.closes.optimizer).toHaveBeenCalledOnce();
+});
+it('attempts the native closer once after a reserved wrapper rejects before delegation', async () => {
+  const failure = new Error('Outer wrapper rejected');
+  const native = vi.fn(async () => {});
+  const f = await resourceFixture(native);
+  const wrapper = vi.fn(async () => {
+    throw failure;
+  });
+  f.environment.close = wrapper;
+  expect(await f.observer.settle(f.config)).toEqual([failure]);
+  expect(wrapper).toHaveBeenCalledOnce();
+  expect(native).toHaveBeenCalledOnce();
+  expect(f.closes.optimizer).toHaveBeenCalledOnce();
+  expect(await f.observer.settleAll()).toEqual([failure]);
+  expect(wrapper).toHaveBeenCalledOnce();
+});
+it('drains failed-init parts without waiting recursively on the environment retirement', async () => {
+  const startup = new Error('Initialization rejected');
+  const cleanup = new Error('Custom close rejected');
+  const hot = { close: vi.fn(async () => {}) };
+  const hotClose = hot.close;
+  const optimizerClose = vi.fn(async () => {});
+  const environment = {
+    hot,
+    depsOptimizer: { close: optimizerClose },
+    init: async () => {
+      throw startup;
+    },
+    close: vi.fn(async () => {
+      throw cleanup;
+    }),
+  } as unknown as DevEnvironment;
+  const config = {
+    plugins: [],
+    environments: {
+      client: { dev: { createEnvironment: async () => environment } },
+    },
+  } as unknown as ResolvedConfig;
+  const observer = createViteResourceObserver();
+  observer.register(config);
+  const env = await config.environments.client!.dev.createEnvironment(
+    'client',
+    config,
+    { ws: { close: async () => {} } } as never
+  );
+  await expect(env.init()).rejects.toBe(startup);
+  expect(await observer.settle(config)).toEqual([cleanup]);
+  expect(hotClose).toHaveBeenCalledOnce();
+  expect(optimizerClose).toHaveBeenCalledOnce();
+});
+it('coalesces throwing getter episodes while discovering recovery without a descriptor change', async () => {
+  let broken = true;
+  const failures: Error[] = [];
+  const hook = vi.fn(async () => {});
+  const plugin = {
+    name: 'recovering',
+    get closeServer() {
+      if (!broken) return hook;
+      const error = new Error(`Read failed ${failures.length}`);
+      failures.push(error);
+      throw error;
+    },
+    set closeServer(value) {
+      Object.defineProperty(this, 'closeServer', {
+        value,
+        configurable: true,
+        writable: true,
+      });
+    },
+  };
+  const config = {
+    plugins: [plugin],
+    environments: {},
+  } as unknown as ResolvedConfig;
+  const observer = createViteResourceObserver();
+  for (let i = 0; i < 5; i++) observer.prepare(config);
+  expect(failures).toHaveLength(5);
+  broken = false;
+  observer.prepare(config);
+  await observer.run(config, () => plugin.closeServer());
+  expect(hook).toHaveBeenCalledOnce();
+  expect(await observer.settle(config)).toEqual([failures[0]]);
+});
+it('records a new read failure when an inherited accessor owner changes', async () => {
+  const first = new Error('First accessor');
+  const second = new Error('Replacement accessor');
+  const getter = function (this: { reason: Error }) {
+    throw this.reason;
+  };
+  const one = Object.defineProperty({ reason: first }, 'closeServer', {
+    get: getter,
+  });
+  const two = Object.defineProperty({ reason: second }, 'closeServer', {
+    get: getter,
+  });
+  const plugin = Object.assign(Object.create(one), { name: 'inherited' });
+  const config = {
+    plugins: [plugin],
+    environments: {},
+  } as unknown as ResolvedConfig;
+  const observer = createViteResourceObserver();
+  observer.prepare(config);
+  Object.setPrototypeOf(plugin, two);
+  observer.prepare(config);
+  observer.prepare(config);
+  expect(await observer.settle(config)).toEqual([first, second]);
+});

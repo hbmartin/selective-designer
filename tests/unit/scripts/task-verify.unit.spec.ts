@@ -12,6 +12,10 @@ const mocks = vi.hoisted(() => ({
   publishWait: undefined as Promise<void> | undefined,
   publishEntered: undefined as (() => void) | undefined,
   logFailure: false,
+  logOpenFailure: false,
+  partialSummaryFailure: false,
+  summaryFailure: false,
+  copyFailureName: undefined as string | undefined,
 }));
 vi.mock('node:child_process', () => ({ spawn: mocks.spawn }));
 vi.mock('node:fs', async (importOriginal) => {
@@ -19,6 +23,7 @@ vi.mock('node:fs', async (importOriginal) => {
   return {
     ...actual,
     createWriteStream(...args: Parameters<typeof actual.createWriteStream>) {
+      if (mocks.logOpenFailure) throw new Error('Log creation rejected');
       if (mocks.logFailure)
         return new Writable({
           write(_chunk, _encoding, callback) {
@@ -43,7 +48,25 @@ vi.mock('node:fs/promises', async (importOriginal) => {
       mocks.publishEntered?.();
       await mocks.publishWait;
       if (mocks.publishFailure) throw new Error('Publication denied');
+      if (
+        mocks.copyFailureName &&
+        (args[0] === mocks.staging ||
+          path.basename(String(args[0])) === mocks.copyFailureName)
+      )
+        throw new Error('Controlled artifact copy failure');
       return actual.cp(...args);
+    },
+    async writeFile(...args: Parameters<typeof actual.writeFile>) {
+      const name = path.basename(String(args[0]));
+      if (
+        (name === 'summary.md' && mocks.summaryFailure) ||
+        (name === 'partial-summary.md' && mocks.partialSummaryFailure)
+      ) {
+        // A failed write may leave a stale/partial summary behind.
+        await actual.writeFile(args[0], 'Status: passed\n');
+        throw new Error('Summary write rejected');
+      }
+      return actual.writeFile(...args);
     },
   };
 });
@@ -54,6 +77,10 @@ afterEach(async () => {
   mocks.publishWait = undefined;
   mocks.publishEntered = undefined;
   mocks.logFailure = false;
+  mocks.logOpenFailure = false;
+  mocks.partialSummaryFailure = false;
+  mocks.summaryFailure = false;
+  mocks.copyFailureName = undefined;
   vi.unstubAllEnvs();
   process.exitCode = previousExitCode;
   if (root) await rm(root, { recursive: true, force: true });
@@ -70,6 +97,7 @@ async function run(
     entered?: () => void;
     initialStatus?: number;
     spawnFailure?: boolean;
+    syncSpawnFailure?: boolean;
   } = {}
 ) {
   vi.resetModules();
@@ -93,6 +121,7 @@ async function run(
   const error = vi.spyOn(console, 'error').mockImplementation(() => {});
   let count = 0;
   mocks.spawn.mockImplementation(() => {
+    if (options.syncSpawnFailure) throw new Error('Synchronous spawn rejected');
     const child = Object.assign(new EventEmitter(), {
       stdout: new EventEmitter(),
       stderr: new EventEmitter(),
@@ -193,8 +222,18 @@ it.each(['SIGINT', 'SIGTERM'] as const)(
 );
 
 it('preserves a genuine step failure observed before interruption', async () => {
-  await run(0, false, { signal: 'SIGINT', afterClose: true });
+  const { output } = await run(0, false, {
+    signal: 'SIGINT',
+    afterClose: true,
+  });
   expect(process.exitCode).toBe(2);
+  const [report] = await readdir(path.join(output, 'task-verification'));
+  const summary = await readFile(
+    path.join(output, 'task-verification', report!, 'summary.md'),
+    'utf8'
+  );
+  expect(summary).toContain('Status: failed');
+  expect(summary).toContain('Interrupted: SIGINT');
 });
 
 it('does not announce a published report after copy failure', async () => {
@@ -323,4 +362,110 @@ it('bounds a stalled publication and retains staging without announcing success'
     publish.resolve();
     vi.useRealTimers();
   }
+});
+
+async function reportDirectory(output: string) {
+  const [report] = await readdir(path.join(output, 'task-verification'));
+  return path.join(output, 'task-verification', report!);
+}
+it('publishes a failed attempt and diagnostic after a log rejection despite child exit zero', async () => {
+  mocks.logFailure = true;
+  const { output } = await run();
+  const directory = await reportDirectory(output);
+  const summary = await readFile(path.join(directory, 'summary.md'), 'utf8');
+  expect(summary).toContain('Status: failed');
+  expect(summary).toContain('FAIL `pnpm format:changed`');
+  expect(summary).toContain('Diagnostic: Log write rejected');
+  expect(summary).toContain('Exit: 0');
+  expect(process.exitCode).toBe(1);
+  expect(mocks.spawn).toHaveBeenCalledOnce();
+});
+it.each(['spawn', 'log-open'] as const)(
+  'records an attempted step before synchronous %s failure',
+  async (kind) => {
+    mocks.logOpenFailure = kind === 'log-open';
+    const { output } = await run(undefined, false, {
+      syncSpawnFailure: kind === 'spawn',
+    });
+    const summary = await readFile(
+      path.join(await reportDirectory(output), 'summary.md'),
+      'utf8'
+    );
+    expect(summary).toContain('FAIL `pnpm format:changed`');
+    expect(summary).toContain(
+      kind === 'spawn' ? 'Synchronous spawn rejected' : 'Log creation rejected'
+    );
+    expect(summary).toContain('Status: failed');
+    expect(mocks.spawn).toHaveBeenCalledTimes(kind === 'spawn' ? 1 : 0);
+    expect(process.exitCode).toBe(1);
+  }
+);
+it('publishes final evidence after an initial partial summary write rejects', async () => {
+  mocks.partialSummaryFailure = true;
+  const { output } = await run(undefined, false, { signal: 'SIGTERM' });
+  const directory = await reportDirectory(output);
+  expect(await readFile(path.join(directory, 'summary.md'), 'utf8')).toContain(
+    'Status: interrupted'
+  );
+  expect(
+    await readFile(path.join(directory, 'format-changed.log'), 'utf8')
+  ).toContain('after cleanup');
+  expect(console.error).toHaveBeenCalledWith(
+    'Verification partial summary failed:',
+    expect.any(Error)
+  );
+  expect(process.exitCode).toBe(143);
+});
+it.each([undefined, 'SIGTERM'] as const)(
+  'publishes incomplete logs and retains staging when the final summary fails: signal=%s',
+  async (signal) => {
+    mocks.summaryFailure = true;
+    const { output } = await run(undefined, false, { signal });
+    const directory = await reportDirectory(output);
+    expect(
+      await readFile(path.join(directory, 'format-changed.log'), 'utf8')
+    ).toContain('after cleanup');
+    expect(await readdir(directory)).not.toContain('summary.md');
+    expect(await readdir(mocks.staging)).toContain('format-changed.log');
+    expect(console.log).not.toHaveBeenCalledWith(
+      expect.stringContaining('Verification report:')
+    );
+    expect(console.error).toHaveBeenCalledWith(
+      `Incomplete verification artifacts: ${directory}; retained staging: ${mocks.staging}`
+    );
+    expect(process.exitCode).toBe(signal ? 143 : 1);
+  }
+);
+it('removes an earlier copied summary when interruption makes the final revision unwritable', async () => {
+  let copies = 0;
+  mocks.publishEntered = () => {
+    if (++copies === 1) {
+      mocks.summaryFailure = true;
+      process.emit('SIGINT');
+    }
+  };
+  const { output } = await run();
+  const directory = await reportDirectory(output);
+  expect(await readdir(directory)).not.toContain('summary.md');
+  expect(await readFile(path.join(directory, 'test.log'), 'utf8')).toContain(
+    'after cleanup'
+  );
+  expect(console.log).not.toHaveBeenCalledWith(
+    expect.stringContaining('Verification report:')
+  );
+  expect(process.exitCode).toBe(130);
+});
+it('copies remaining readable logs when one artifact fails and retains the incomplete staging', async () => {
+  mocks.copyFailureName = 'check-ci.log';
+  const { output } = await run();
+  const directory = await reportDirectory(output);
+  const files = await readdir(directory);
+  expect(files).toContain('format-changed.log');
+  expect(files).toContain('test.log');
+  expect(files).not.toContain('summary.md');
+  expect(await readdir(mocks.staging)).toContain('check-ci.log');
+  expect(console.error).toHaveBeenCalledWith(
+    expect.stringContaining('Incomplete verification artifacts:')
+  );
+  expect(process.exitCode).toBe(1);
 });
