@@ -11,6 +11,8 @@ type NativeClose = {
   nativeAttempted: boolean;
   native: () => Promise<unknown>;
   parent?: NativeClose;
+  independent?: boolean;
+  retirement?: Promise<void>;
 };
 type Scope = {
   token: object;
@@ -69,8 +71,10 @@ export function createViteResourceObserver(
       string,
       {
         descriptor?: PropertyDescriptor;
+        owner?: object;
         extensible: boolean;
         value: unknown;
+        phase: 'read' | 'install';
         error: unknown;
       }
     >
@@ -172,6 +176,31 @@ export function createViteResourceObserver(
     });
     return resource;
   }
+  function retire(scope: Scope, resource: NativeClose) {
+    // Reserve before yielding. Public wrappers stay separate so a captured
+    // closer can delegate without awaiting its own outer retirement.
+    resource.retirement ??= observed(
+      Promise.resolve().then(async () => {
+        if (!resource.attempted) {
+          try {
+            await resource.target.close();
+          } catch (error) {
+            scope.failures.push(error);
+          }
+        }
+        while (resource.pending.size)
+          await Promise.allSettled(resource.pending);
+        if (!resource.nativeAttempted) {
+          try {
+            await resource.native();
+          } catch (error) {
+            scope.failures.push(error);
+          }
+        }
+      })
+    );
+    return resource.retirement;
+  }
   async function closePublicParts(
     scope: Scope,
     token: object,
@@ -189,8 +218,9 @@ export function createViteResourceObserver(
     const outcomes = await Promise.allSettled(
       targets.map(async (target) => {
         const resource = capture(scope, token, target);
-        if (!resource.attempted) await target.close();
-        else await Promise.allSettled(resource.pending);
+        // This runs inside the environment closer: waiting on its parent here
+        // would deadlock. The shared websocket has independent retirement.
+        if (!resource.independent) await retire(scope, resource);
       })
     );
     const failures = outcomes.flatMap((outcome) =>
@@ -210,28 +240,38 @@ export function createViteResourceObserver(
     install: (value: unknown) => void
   ) {
     let descriptor: PropertyDescriptor | undefined;
+    let descriptorOwner: object | undefined;
     for (
       let owner: object | null = target;
       owner;
       owner = Object.getPrototypeOf(owner)
     ) {
       descriptor = Object.getOwnPropertyDescriptor(owner, key);
-      if (descriptor) break;
+      if (descriptor) {
+        descriptorOwner = owner;
+        break;
+      }
     }
     const extensible = Object.isExtensible(target);
     const previous = instrumentationFailures.get(target)?.get(key);
+    const unchanged =
+      previous &&
+      previous.owner === descriptorOwner &&
+      previous.extensible === extensible &&
+      ['value', 'get', 'set', 'writable', 'configurable', 'enumerable'].every(
+        (part) =>
+          Reflect.get(previous.descriptor ?? {}, part) ===
+          Reflect.get(descriptor ?? {}, part)
+      );
     let value: unknown;
+    let phase: 'read' | 'install' = 'read';
     try {
       value = Reflect.get(target, key);
+      phase = 'install';
       if (
-        previous &&
-        previous.extensible === extensible &&
-        previous.value === value &&
-        ['value', 'get', 'set', 'writable', 'configurable', 'enumerable'].every(
-          (part) =>
-            Reflect.get(previous.descriptor ?? {}, part) ===
-            Reflect.get(descriptor ?? {}, part)
-        )
+        unchanged &&
+        previous.phase === 'install' &&
+        previous.value === value
       ) {
         if (!scope.failures.includes(previous.error))
           scope.failures.push(previous.error);
@@ -240,8 +280,24 @@ export function createViteResourceObserver(
       install(value);
       instrumentationFailures.get(target)?.delete(key);
     } catch (error) {
+      if (
+        unchanged &&
+        previous.phase === phase &&
+        (phase === 'read' || previous.value === value)
+      ) {
+        if (!scope.failures.includes(previous.error))
+          scope.failures.push(previous.error);
+        return;
+      }
       const failures = instrumentationFailures.get(target) ?? new Map();
-      failures.set(key, { descriptor, extensible, value, error });
+      failures.set(key, {
+        descriptor,
+        owner: descriptorOwner,
+        extensible,
+        value,
+        phase,
+        error,
+      });
       instrumentationFailures.set(target, failures);
       scope.failures.push(error);
     }
@@ -282,7 +338,9 @@ export function createViteResourceObserver(
           const scope = scopes.get(token)?.scope;
           if (!scope) return original(...args);
           const [, , factoryContext] = args;
-          capture(scope, token, factoryContext.ws);
+          const websocket = capture(scope, token, factoryContext.ws);
+          websocket.independent = true;
+          websocket.parent = undefined;
           const operation = observed(
             Promise.resolve().then(() => original(...args))
           );
@@ -330,7 +388,8 @@ export function createViteResourceObserver(
               );
           };
           const owner = capture(scope, token, environment);
-          for (const part of parts) if (part !== owner) part.parent ??= owner;
+          for (const part of parts)
+            if (part !== owner && !part.independent) part.parent ??= owner;
           const listen = environment.listen;
           if (listen)
             environment.listen = function (server) {
@@ -373,26 +432,8 @@ export function createViteResourceObserver(
       count = scope.resources.length;
       const outcomes = await Promise.allSettled(
         scope.resources.map(async (resource) => {
-          if (resource.parent) {
-            if (!resource.parent.attempted)
-              await Promise.resolve()
-                .then(() => resource.parent!.target.close())
-                .catch((error: unknown) => scope.failures.push(error));
-            while (resource.parent.pending.size)
-              await Promise.allSettled(resource.parent.pending);
-          }
-          if (!resource.attempted)
-            await Promise.resolve()
-              .then(() => resource.target.close())
-              .catch((error: unknown) => {
-                scope.failures.push(error);
-              });
-          // An already-running wrapper owns any pre-delegation work.
-          while (resource.pending.size)
-            await Promise.allSettled(resource.pending);
-          // An outer wrapper may fail before delegating. This is the native
-          // closer's first attempt, never a retry or replay of the wrapper.
-          if (!resource.nativeAttempted) await resource.native();
+          if (resource.parent) await retire(scope, resource.parent);
+          await retire(scope, resource);
         })
       );
       for (const outcome of outcomes)

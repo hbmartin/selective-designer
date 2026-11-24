@@ -180,6 +180,10 @@ try {
       httpPort: (owner.vite.httpServer!.address() as AddressInfo).port,
     });
     process.on('message', (message: unknown) => {
+      if (message === 'disconnect-action') {
+        process.disconnect();
+        void replyToE2EFixtureAction(async () => {}, 'delivered', 'failed');
+      }
       if (message === 'start-pipe-holder') {
         const holder = spawn(
           process.execPath,

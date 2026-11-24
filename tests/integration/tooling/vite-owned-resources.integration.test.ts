@@ -783,3 +783,29 @@ it('decorates the final application-selected logger while forwarding its live st
     );
   });
 });
+
+it('runs a transform installed on an immutable plugin facade during configuration', async () => {
+  await harness(async ({ create, root }) => {
+    await writeFile(
+      path.join(root, 'frozen.js'),
+      'export const value = "before";'
+    );
+    const transform = vi.fn((code: string, id: string) =>
+      id.endsWith('/frozen.js') ? code.replace('before', 'after') : undefined
+    );
+    const plugin = Object.freeze({
+      name: 'frozen-late-transform',
+      configResolved(config: ResolvedConfig) {
+        config.plugins.find(
+          (candidate) => candidate.name === 'frozen-late-transform'
+        )!.transform = transform;
+      },
+    });
+    const server = await create({ plugins: [plugin] });
+    expect((await server.transformRequest('/frozen.js'))?.code).toContain(
+      'after'
+    );
+    expect(transform).toHaveBeenCalled();
+    expect(Object.hasOwn(plugin, 'transform')).toBe(false);
+  });
+});

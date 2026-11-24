@@ -14,6 +14,7 @@ import { beforeDeadline } from './promise-deadline';
 export type E2EFixturePorts = { database?: number; http?: number };
 export type E2EFixtureMessage = {
   type: string;
+  error?: string;
   databaseUrl?: string;
   httpPort?: number;
   pid?: number;
@@ -290,9 +291,25 @@ export async function launchE2EFixture(
           await delay(Math.min(20, Math.max(0, deadline - performance.now())));
         }
       },
-      async message(type: string) {
+      async message(
+        type: string,
+        options: { failureTypes?: readonly string[]; afterIndex?: number } = {}
+      ) {
         const deadline = performance.now() + 20_000;
-        while (!messages.some((message) => message.type === type)) {
+        while (true) {
+          const outcome = messages
+            .slice(options.afterIndex ?? 0)
+            .find(
+              (message) =>
+                message.type === type ||
+                options.failureTypes?.includes(message.type)
+            );
+          if (outcome) {
+            if (outcome.type === type) return outcome;
+            throw new Error(
+              `Fixture action failed: ${outcome.type}: ${outcome.error ?? 'No error reported'}; output=${output}`
+            );
+          }
           if (ipcDrained)
             throw new Error(`Fixture IPC closed before ${type}: ${output}`);
           const remaining = deadline - performance.now();
@@ -300,7 +317,6 @@ export async function launchE2EFixture(
             throw new Error(`Fixture message timed out: ${type}`);
           await delay(Math.min(20, remaining));
         }
-        return messages.find((message) => message.type === type)!;
       },
       async ready() {
         const ready = await this.message('ready');

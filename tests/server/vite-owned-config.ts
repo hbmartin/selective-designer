@@ -63,7 +63,12 @@ function writablePlugin(source: Plugin): Plugin {
     set(object, key, value: unknown, receiver) {
       return Object.hasOwn(object, key)
         ? Reflect.set(object, key, value, receiver)
-        : Reflect.set(source, key, value, source);
+        : Reflect.defineProperty(object, key, {
+            value,
+            writable: true,
+            enumerable: true,
+            configurable: true,
+          });
     },
     has: (object, key) => key in object || key in source,
     ownKeys: (object) => [
@@ -75,6 +80,7 @@ function writablePlugin(source: Plugin): Plugin {
       const descriptor = Object.getOwnPropertyDescriptor(source, key);
       return descriptor && { ...descriptor, configurable: true };
     },
+    preventExtensions: () => false,
   });
   for (const key of lifecycleKeys) {
     let installed: { source: unknown; value: unknown } | undefined;
@@ -206,10 +212,9 @@ export async function createOwnedViteConfig(
       ignoreBridge: (_server: ViteDevServer) => {},
       remove: async () => {},
     };
-  const directory = await realpath(
-    await mkdtemp(path.join(os.tmpdir(), 'e2e-vite-config-'))
-  );
-  const bridge = path.join(directory, 'vite.config.mjs');
+  const allocated = await mkdtemp(path.join(os.tmpdir(), 'e2e-vite-config-'));
+  let directory = allocated;
+  let bridge: string;
   let previous: string | undefined;
   async function refresh() {
     const selected = inline.configFile
@@ -228,10 +233,12 @@ export async function createOwnedViteConfig(
     previous = content;
   }
   try {
+    directory = await realpath(allocated);
+    bridge = path.join(directory, 'vite.config.mjs');
     await refresh();
   } catch (error) {
     try {
-      await rm(directory, { recursive: true, force: true });
+      await rm(allocated, { recursive: true, force: true });
     } catch (cleanupError) {
       throw new AggregateError(
         [error, cleanupError],

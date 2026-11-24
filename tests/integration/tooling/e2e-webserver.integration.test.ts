@@ -214,7 +214,7 @@ it('preserves data through Vite restart, then releases both listeners', async ()
       'create table restart_evidence (value int); insert into restart_evidence values (42)'
     );
     fixture.child.send('restart');
-    await fixture.message('restarted');
+    await fixture.message('restarted', { failureTypes: ['restart-failed'] });
     expect(
       (await client.query('select value from restart_evidence')).rows
     ).toEqual([{ value: 42 }]);
@@ -467,18 +467,12 @@ it.each(['restart-fail', 'restart-recover'])(
       );
       const rounds = mode === 'restart-recover' ? 3 : 1;
       for (let round = 0; round < rounds; round++) {
-        const count = fixture.messages.filter(
-          (message) => message.type === 'restarted'
-        ).length;
+        const afterIndex = fixture.messages.length;
         fixture.child.send('restart');
-        await expect
-          .poll(
-            () =>
-              fixture.messages.filter((message) => message.type === 'restarted')
-                .length,
-            { timeout: 20_000 }
-          )
-          .toBe(count + 1);
+        await fixture.message('restarted', {
+          failureTypes: ['restart-failed'],
+          afterIndex,
+        });
         expect(
           (await client.query('select value from partial_restart')).rows
         ).toEqual([{ value: 42 }]);
@@ -574,14 +568,16 @@ it('retires failed restart watchers before an env change and keeps one live inst
     );
     await observation();
     fixture.child.send('restart');
-    await fixture.message('restarted');
+    await fixture.message('restarted', { failureTypes: ['restart-failed'] });
     expect(await observation()).toMatchObject({
       instances: 2,
       watchersOpen: 1,
       instancesClosed: 1,
     });
     fixture.child.send('abandoned-env-change');
-    await fixture.message('abandoned-change-delivered');
+    await fixture.message('abandoned-change-delivered', {
+      failureTypes: ['abandoned-change-failed'],
+    });
     expect(await observation()).toMatchObject({
       instances: 2,
       watchersOpen: 1,
@@ -654,3 +650,19 @@ it.each(['SIGINT', 'SIGTERM'] as const)(
   },
   40_000
 );
+
+it('observes a real disconnected response channel without crashing the launcher', async () => {
+  const fixture = await launch();
+  try {
+    await fixture.ready();
+    fixture.child.send('disconnect-action');
+    await fixture.waitForOutput('E2E fixture response transport diagnostic:');
+    expect(fixture.output()).toContain('ERR_IPC_CHANNEL_CLOSED');
+    expect(fixture.output()).not.toContain("Unhandled 'error' event");
+    signalFixtureProcess(fixture.identity, 'SIGTERM');
+    expect(await fixture.waitForExit()).toEqual([0, null]);
+    await expectListenersClosed(fixture);
+  } finally {
+    await fixture.dispose();
+  }
+}, 30_000);
