@@ -1,5 +1,6 @@
 import {
   access,
+  chmod,
   readFile,
   readdir,
   rm,
@@ -76,7 +77,11 @@ it.each(['SIGINT', 'SIGTERM'] as const)(
   20000
 );
 
-async function verifyRecoveryMode(mask: number, setgid: boolean) {
+async function verifyRecoveryMode(
+  mask: number,
+  setgid: boolean,
+  mode?: number
+) {
   const fixture = createWorkflowFixture();
   fixtures.push(fixture);
   const parent = path.join(fixture.cwd, 'test-results', 'task-verification');
@@ -96,7 +101,17 @@ import { syncBuiltinESMExports } from 'node:module';
 process.umask(${mask});
 await io.mkdir(${JSON.stringify(parent)}, { recursive: true });
 ${setgid ? `await io.chmod(${JSON.stringify(parent)}, 0o2775);` : ''}
-const write = io.writeFile.bind(io), remove = io.rm.bind(io), temporary = io.mkdtemp.bind(io);
+const write = io.writeFile.bind(io), remove = io.rm.bind(io), temporary = io.mkdtemp.bind(io), mkdir = io.mkdir.bind(io);
+${
+  mode === undefined
+    ? ''
+    : `io.mkdir = async (...args) => {
+  const result = await mkdir(...args);
+  if (path.dirname(String(args[0])) === ${JSON.stringify(parent)})
+    await io.chmod(args[0], ${mode});
+  return result;
+};`
+}
 io.mkdtemp = async (...args) => {
   const directory = await temporary(...args);
   if (String(args[0]).includes('selective-designer-verification-'))
@@ -116,6 +131,7 @@ await import(${JSON.stringify(pathToFileURL(path.resolve('scripts/task-verify.mj
 `
   );
   let staging: string | undefined;
+  let ordinary: string | undefined;
   const failures: unknown[] = [];
   try {
     const result = await runFixtureCommand(process.execPath, [entry], fixture, {
@@ -125,7 +141,7 @@ await import(${JSON.stringify(pathToFileURL(path.resolve('scripts/task-verify.mj
     expect(result.error).toBeUndefined();
     expect(result.status).toBe(1);
     const reports = await readdir(parent);
-    const ordinary = path.join(
+    ordinary = path.join(
       parent,
       reports.find((name) => !name.includes('-incomplete-'))!
     );
@@ -142,8 +158,9 @@ await import(${JSON.stringify(pathToFileURL(path.resolve('scripts/task-verify.mj
       stat(recovery),
       stat(staging),
     ]);
-    const expected = (0o777 & ~mask) | (setgid ? 0o2000 : 0);
-    expect(originalStat.mode & 0o7777).toBe(expected);
+    const originalMode = mode ?? (0o777 & ~mask) | (setgid ? 0o2000 : 0);
+    const expected = 0o700 | (originalMode & 0o3075);
+    expect(originalStat.mode & 0o7777).toBe(originalMode);
     expect(recoveryStat.mode & 0o7777).toBe(expected);
     expect(recoveryStat.gid).toBe(originalStat.gid);
     expect(stagingStat.mode & 0o777).toBe(0o700);
@@ -159,6 +176,19 @@ await import(${JSON.stringify(pathToFileURL(path.resolve('scripts/task-verify.mj
   } catch (error) {
     failures.push(error);
   } finally {
+    try {
+      // Only repair our fixture's directory, including after an earlier assertion failed.
+      const candidate =
+        ordinary ??
+        (await readdir(parent)).find((name) => !name.includes('-incomplete-'));
+      if (candidate)
+        await chmod(
+          path.isAbsolute(candidate) ? candidate : path.join(parent, candidate),
+          0o700
+        );
+    } catch (error) {
+      failures.push(error);
+    }
     try {
       const recorded =
         staging ??
@@ -179,9 +209,22 @@ await import(${JSON.stringify(pathToFileURL(path.resolve('scripts/task-verify.mj
       { cause: failures[0] }
     );
 }
-it.skipIf(process.platform === 'win32').each([0o022, 0o077])(
-  'matches actual report and recovery modes under isolated process umask %s',
-  (mask) => verifyRecoveryMode(mask, false),
+it.skipIf(process.platform === 'win32').each([
+  { label: '0o022', mask: 0o022 },
+  { label: '0o077', mask: 0o077 },
+])(
+  'prepares recovery under isolated process umask $label',
+  ({ mask }) => verifyRecoveryMode(mask, false),
+  20000
+);
+it.skipIf(process.platform === 'win32').each([
+  { label: '0o000', mode: 0o000 },
+  { label: '0o555', mode: 0o555 },
+  { label: '0o777', mode: 0o777 },
+  { label: '0o1777', mode: 0o1777 },
+])(
+  'publishes real logs from inaccessible or permissive report mode $label',
+  ({ mode }) => verifyRecoveryMode(0o022, false, mode),
   20000
 );
 it.runIf(process.platform === 'linux')(
