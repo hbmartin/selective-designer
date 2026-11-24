@@ -1,5 +1,6 @@
 import { afterEach, expect, it, vi } from 'vitest';
 import type { DevEnvironment, ResolvedConfig } from 'vite';
+import { describeE2EFailure } from '@tests/server/e2e-terminal';
 import { createViteResourceObserver } from '@tests/server/vite-resource-observer';
 
 function fixture(close: () => Promise<void>) {
@@ -730,8 +731,112 @@ it('drains pending failed-init siblings and orders native and part errors withou
     cause: native,
   });
   const failures = await observer.settle(config);
-  expect(failures).toContain(hot);
-  expect(failures).toContain(optimizer);
+  expect(failures).toEqual([hot, optimizer, native]);
+  const diagnostic = describeE2EFailure(
+    new AggregateError(failures, 'Cleanup failed')
+  );
+  expect(diagnostic).toBe(
+    'Cleanup failed\nHot close failed\nOptimizer close failed\nEnvironment close failed'
+  );
   expect(nativeClose).toHaveBeenCalledOnce();
   expect(bundledClose).toHaveBeenCalledOnce();
+});
+
+async function failedCloseFixture(
+  observer: ReturnType<typeof createViteResourceObserver>,
+  native: unknown,
+  part: unknown
+) {
+  const environment = {
+    hot: {
+      close: async () => {
+        throw part;
+      },
+    },
+    init: async () => {
+      throw new Error('Initialization rejected');
+    },
+    close: async () => {
+      throw native;
+    },
+  } as unknown as DevEnvironment;
+  const config = {
+    plugins: [],
+    environments: {
+      client: { dev: { createEnvironment: async () => environment } },
+    },
+  } as unknown as ResolvedConfig;
+  observer.register(config);
+  const env = await config.environments.client!.dev.createEnvironment(
+    'client',
+    config,
+    { ws: { close: async () => {} } } as never
+  );
+  await expect(env.init()).rejects.toThrow('Initialization rejected');
+  const aggregate = await env.close().then(
+    () => {
+      throw new Error('Expected close failure');
+    },
+    (error: unknown) => {
+      if (!(error instanceof AggregateError)) throw error;
+      return error;
+    }
+  );
+  return { config, aggregate };
+}
+it('normalizes only owned aggregates and retains exact results across release', async () => {
+  const observer = createViteResourceObserver();
+  const native = new Error('native');
+  const part = new Error('part');
+  const f = await failedCloseFixture(observer, native, part);
+  expect(f.aggregate.errors).toEqual([native, part]);
+  expect(f.aggregate.cause).toBe(native);
+  const result = await observer.settle(f.config);
+  expect(result).toEqual([part, native]);
+  expect(await observer.settle(f.config)).toBe(result);
+  expect(observer.release(f.config)).toBe(true);
+  expect(await observer.settle(f.config)).toBe(result);
+  expect(await observer.settleStarted(f.config)).toBe(result);
+  expect(await observer.settleAll()).toEqual([part, native]);
+});
+it('normalizes nested owned snapshots without traversing later aggregate mutations or cycles', async () => {
+  const observer = createViteResourceObserver();
+  const native = new Error('native');
+  const firstPart = new Error('first part');
+  const secondPart = new Error('second part');
+  const first = await failedCloseFixture(observer, native, firstPart);
+  const second = await failedCloseFixture(
+    observer,
+    first.aggregate,
+    secondPart
+  );
+  expect(second.aggregate.errors).toEqual([first.aggregate, secondPart]);
+  first.aggregate.errors.splice(
+    0,
+    first.aggregate.errors.length,
+    first.aggregate
+  );
+  second.aggregate.errors.splice(
+    0,
+    second.aggregate.errors.length,
+    second.aggregate
+  );
+  expect(await observer.settle(second.config)).toEqual([
+    secondPart,
+    native,
+    firstPart,
+  ]);
+  expect(await observer.settle(first.config)).toEqual([firstPart, native]);
+  expect(await observer.settleAll()).toEqual([firstPart, native, secondPart]);
+});
+it('preserves foreign aggregate identity and context inside an owned wrapper', async () => {
+  const observer = createViteResourceObserver();
+  const leaf = new Error('plugin detail');
+  const foreign = new AggregateError([leaf], 'Plugin context', { cause: leaf });
+  const part = new Error('part');
+  const f = await failedCloseFixture(observer, foreign, part);
+  expect(f.aggregate.errors).toEqual([foreign, part]);
+  expect(await observer.settle(f.config)).toEqual([part, foreign]);
+  expect(foreign.errors).toEqual([leaf]);
+  expect(foreign.cause).toBe(leaf);
 });

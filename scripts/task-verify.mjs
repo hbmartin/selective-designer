@@ -1,6 +1,15 @@
 import { spawn } from 'node:child_process';
 import { createWriteStream } from 'node:fs';
-import { cp, mkdir, mkdtemp, readdir, rm, writeFile } from 'node:fs/promises';
+import {
+  chmod,
+  cp,
+  mkdir,
+  mkdtemp,
+  readdir,
+  rm,
+  rmdir,
+  writeFile,
+} from 'node:fs/promises';
 import { finished } from 'node:stream/promises';
 import os from 'node:os';
 import path from 'node:path';
@@ -15,6 +24,7 @@ const checkStep = process.env.CI
 
 const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
 const reportDir = path.resolve('test-results', 'task-verification', timestamp);
+const reportDirectoryMode = 0o777 & ~process.umask();
 const stagingDir = await mkdtemp(
   path.join(os.tmpdir(), 'selective-designer-verification-')
 );
@@ -75,9 +85,11 @@ let interruptionSummary;
 let summaryWrites = Promise.resolve();
 let publicationRevision = 0;
 let published = false;
+let publicationAccepted = false;
 const publicationFailures = new Set();
 let originalDestinationStale = false;
 let recoveryAllocation;
+let ownedRecoveryDirectory;
 let forced = false;
 const interrupted = Promise.withResolvers();
 const results = [];
@@ -114,7 +126,7 @@ function stopCurrent(signal) {
 }
 function onSignal(signal) {
   if (interruptedSignal) return;
-  if (published) {
+  if (publicationAccepted) {
     armDeadline();
     return;
   }
@@ -302,13 +314,23 @@ async function recoverArtifacts() {
   let directory = reportDir;
   if (originalDestinationStale) {
     try {
-      recoveryAllocation ??= mkdtemp(
-        path.join(path.dirname(reportDir), `${timestamp}-incomplete-`)
-      );
+      recoveryAllocation ??= (async () => {
+        const allocated = await mkdtemp(
+          path.join(path.dirname(reportDir), `${timestamp}-incomplete-`)
+        );
+        ownedRecoveryDirectory = allocated;
+        try {
+          await chmod(allocated, reportDirectoryMode);
+        } catch (error) {
+          publicationFailure(error, 'recovery permissions');
+          throw error;
+        }
+        return allocated;
+      })();
       directory = await recoveryAllocation;
     } catch (error) {
       publicationFailure(error, 'recovery allocation');
-      return { type: 'retained_only' };
+      return { type: 'retained_only', directory: ownedRecoveryDirectory };
     }
   }
   let names;
@@ -322,9 +344,11 @@ async function recoverArtifacts() {
   }
   const outcomes = await Promise.allSettled(
     names.map((name) =>
-      cp(path.join(stagingDir, name), path.join(directory, name), {
-        recursive: true,
-      })
+      Promise.resolve().then(() =>
+        cp(path.join(stagingDir, name), path.join(directory, name), {
+          recursive: true,
+        })
+      )
     )
   );
   for (const outcome of outcomes)
@@ -337,16 +361,40 @@ async function recoverArtifacts() {
 async function publish(summaryReady) {
   try {
     await mkdir(reportDir, { recursive: true });
-    if (!summaryReady || originalDestinationStale) return recoverArtifacts();
-    await cp(stagingDir, reportDir, {
-      recursive: true,
-      filter: (source) =>
-        source !== path.join(stagingDir, 'partial-summary.md'),
-    });
-    return { type: 'complete', directory: reportDir };
+    if (summaryReady && !originalDestinationStale) {
+      await cp(stagingDir, reportDir, {
+        recursive: true,
+        filter: (source) =>
+          source !== path.join(stagingDir, 'partial-summary.md'),
+      });
+      return { type: 'complete', directory: reportDir };
+    }
   } catch (error) {
     publicationFailure(error, 'publication');
-    return recoverArtifacts();
+  }
+  // Recovery has one boundary. A rejection here must not re-enter recovery.
+  try {
+    return await recoverArtifacts();
+  } catch (error) {
+    publicationFailure(error, 'recovery');
+    return {
+      type: 'retained_only',
+      directory: ownedRecoveryDirectory ?? reportDir,
+    };
+  }
+}
+async function removeEmptyRecoveryDirectory() {
+  if (!ownedRecoveryDirectory || forced) return false;
+  try {
+    const names = await readdir(ownedRecoveryDirectory);
+    if (names.length || forced) return false;
+    // Nonrecursive removal preserves any partial data or a racing writer.
+    await rmdir(ownedRecoveryDirectory);
+    return true;
+  } catch (error) {
+    if (error?.code === 'ENOENT') return true;
+    publicationFailure(error, 'recovery cleanup');
+    return false;
   }
 }
 async function finalize() {
@@ -386,6 +434,16 @@ async function finalize() {
       if (forced)
         throw new Error('Verification publication exceeded its deadline');
       if (revision !== publicationRevision) continue;
+      publicationAccepted = true;
+      if (outcome.type !== 'complete') {
+        const removed = await removeEmptyRecoveryDirectory();
+        if (forced)
+          throw new Error(
+            'Verification recovery cleanup exceeded its deadline'
+          );
+        if (removed && outcome.directory === ownedRecoveryDirectory)
+          outcome.directory = undefined;
+      }
       if (outcome.type === 'complete') {
         published = true;
         console.log(

@@ -54,13 +54,13 @@ function writablePlugin(source: Plugin): Plugin {
     });
   if (!immutable) return source;
   const target = Object.create(Object.getPrototypeOf(source)) as Plugin;
-  const facade = new Proxy(target, {
+  const facade: Plugin = new Proxy(target, {
     get(object, key, receiver) {
       return Object.hasOwn(object, key)
         ? Reflect.get(object, key, receiver)
-        : Reflect.get(source, key, source);
+        : Reflect.get(source, key, receiver === facade ? source : receiver);
     },
-    set(object, key, value: unknown, receiver) {
+    set(object, key, value: unknown, receiver): boolean {
       if (Object.hasOwn(object, key))
         return Reflect.set(object, key, value, receiver);
       for (
@@ -70,10 +70,27 @@ function writablePlugin(source: Plugin): Plugin {
       ) {
         const descriptor = Object.getOwnPropertyDescriptor(owner, key);
         if (!descriptor) continue;
-        if (descriptor.set) return Reflect.set(source, key, value, source);
+        if (descriptor.set)
+          return Reflect.set(
+            source,
+            key,
+            value,
+            receiver === facade ? source : receiver
+          );
         break;
       }
-      return Reflect.defineProperty(object, key, {
+      const destination = receiver === facade ? object : receiver;
+      if (
+        (typeof destination !== 'object' || destination === null) &&
+        typeof destination !== 'function'
+      )
+        return false;
+      const own = Reflect.getOwnPropertyDescriptor(destination, key);
+      if (own) {
+        if (!('value' in own) || !own.writable) return false;
+        return Reflect.defineProperty(destination, key, { value });
+      }
+      return Reflect.defineProperty(destination, key, {
         value,
         writable: true,
         enumerable: true,
