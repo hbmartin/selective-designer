@@ -52,6 +52,74 @@ it('adds writable plugin-local properties without mutating immutable sources', (
   expect(Reflect.deleteProperty(plugin, 'local')).toBe(false);
   expect(Reflect.preventExtensions(plugin)).toBe(false);
 });
+it('rejects source-only deletion while local deletion reveals the source again', () => {
+  const symbol = Symbol('source');
+  const source = Object.freeze({ name: 'deletion', value: 42, [symbol]: 7 });
+  const facade = withE2EViteOwnership({ plugins: [source] })
+    .plugins![1] as Plugin & { value: number; [symbol]: number };
+  const alias = new Proxy(new Proxy(facade, {}), {});
+  for (const key of ['value', symbol]) {
+    expect(Reflect.deleteProperty(alias, key)).toBe(false);
+    expect(Reflect.has(alias, key)).toBe(true);
+    expect(Object.hasOwn(alias, key)).toBe(true);
+    expect(Reflect.set(alias, key, 100)).toBe(true);
+    expect(Reflect.deleteProperty(alias, key)).toBe(true);
+    expect(Reflect.get(alias, key)).toBe(Reflect.get(source, key));
+    expect(Reflect.deleteProperty(alias, key)).toBe(false);
+  }
+  expect(Reflect.deleteProperty(alias, 'missing')).toBe(true);
+  expect(Reflect.deleteProperty(alias, 'toString')).toBe(true);
+  expect(alias.toString).toBe(source.toString);
+  Object.defineProperty(facade, 'locked', { value: 1, configurable: false });
+  expect(Reflect.deleteProperty(alias, 'locked')).toBe(false);
+});
+it.each(['revoked', 'throwing-descriptor'] as const)(
+  'does not let a %s receiver alias probe replace ordinary read or accessor behavior',
+  (kind) => {
+    const probeFailure = new Error('Descriptor probe rejected');
+    const accessorFailure = new Error('Source accessor rejected');
+    const source = Object.freeze({
+      name: 'probe',
+      value: 42,
+      get self() {
+        return this;
+      },
+      get rejected() {
+        throw accessorFailure;
+      },
+      set rejected(_value: number) {
+        throw accessorFailure;
+      },
+    });
+    const facade = withE2EViteOwnership({ plugins: [source] })
+      .plugins![1] as Plugin;
+    const revocable = Proxy.revocable({}, {});
+    revocable.revoke();
+    const receiver =
+      kind === 'revoked'
+        ? revocable.proxy
+        : new Proxy(
+            {},
+            {
+              getOwnPropertyDescriptor: () => {
+                throw probeFailure;
+              },
+            }
+          );
+    expect(Reflect.get(facade, 'value', receiver)).toBe(42);
+    expect(Reflect.get(facade, 'missing', receiver)).toBeUndefined();
+    expect(Reflect.get(facade, 'self', receiver)).toBe(receiver);
+    expect(() => Reflect.get(facade, 'rejected', receiver)).toThrow(
+      accessorFailure
+    );
+    expect(() => Reflect.set(facade, 'rejected', 1, receiver)).toThrow(
+      accessorFailure
+    );
+    expect(() => Reflect.set(facade, 'fresh', 1, receiver)).toThrow(
+      kind === 'revoked' ? TypeError : probeFailure
+    );
+  }
+);
 it('cleans the allocated directory when realpath fails', async () => {
   await expect(createOwnedViteConfig({}, { name: 'owner' })).rejects.toBe(
     mocks.canonicalization

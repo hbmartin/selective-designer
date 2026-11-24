@@ -109,12 +109,15 @@ function armDeadline() {
       if (!current?.closed) current?.child?.kill('SIGKILL');
       current?.log?.end();
     } finally {
+      const attemptedDirectory = acceptedPublication
+        ? acceptedPublication.directory
+        : ownedRecoveryDirectory;
       const destination =
         acceptedPublication?.type === 'complete'
           ? `report ${path.join(reportDir, 'summary.md')}`
           : acceptedPublication?.type === 'incomplete'
             ? `incomplete artifacts ${acceptedPublication.directory}; retained ${stagingDir}`
-            : `retained ${stagingDir}${ownedRecoveryDirectory ? `; attempted destination: ${ownedRecoveryDirectory}` : ''}`;
+            : `retained ${stagingDir}${attemptedDirectory ? `; attempted destination: ${attemptedDirectory}` : ''}`;
       console.error(
         `Verification finalization exceeded ten seconds; ${destination}`
       );
@@ -330,12 +333,20 @@ async function recoverArtifacts() {
             throw new Error(
               'Verification report destination is not a directory'
             );
-          const mode = ordinary.mode & 0o7777;
+          const mode = 0o700 | (ordinary.mode & 0o3075);
           await chmod(allocated, mode);
           const recovery = await stat(allocated);
-          if (!recovery.isDirectory() || (recovery.mode & 0o7777) !== mode)
+          const actualMode = recovery.mode & 0o7777;
+          const clearedSetgid =
+            (mode & 0o2000) !== 0 &&
+            actualMode === (mode & ~0o2000) &&
+            recovery.gid === ordinary.gid;
+          if (
+            !recovery.isDirectory() ||
+            (actualMode !== mode && !clearedSetgid)
+          )
             throw new Error(
-              'Verification recovery directory mode does not match the report directory'
+              'Verification recovery directory permissions do not match the requested mode and group'
             );
         } catch (error) {
           publicationFailure(error, 'recovery permissions');
