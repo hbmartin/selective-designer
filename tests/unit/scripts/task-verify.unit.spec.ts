@@ -16,6 +16,11 @@ const mocks = vi.hoisted(() => ({
   partialSummaryFailure: false,
   summaryFailure: false,
   copyFailureName: undefined as string | undefined,
+  removalFailure: false,
+  recoveryAllocationFailure: false,
+  recoveryDirectory: '',
+  recoveryAllocations: 0,
+  summaryWrites: [] as { name: string; text: string }[],
 }));
 vi.mock('node:child_process', () => ({ spawn: mocks.spawn }));
 vi.mock('node:fs', async (importOriginal) => {
@@ -39,10 +44,26 @@ vi.mock('node:fs/promises', async (importOriginal) => {
   return {
     ...actual,
     async mkdtemp(prefix: string) {
+      if (prefix.includes('-incomplete-')) {
+        mocks.recoveryAllocations++;
+        if (mocks.recoveryAllocationFailure)
+          throw new Error('Recovery allocation denied');
+      }
       const directory = await actual.mkdtemp(prefix);
       if (prefix.includes('selective-designer-verification-'))
         mocks.staging = directory;
+      if (prefix.includes('-incomplete-')) mocks.recoveryDirectory = directory;
       return directory;
+    },
+    async rm(...args: Parameters<typeof actual.rm>) {
+      if (
+        mocks.removalFailure &&
+        path.basename(String(args[0])) === 'summary.md'
+      )
+        throw Object.assign(new Error('Stale summary removal denied'), {
+          code: 'EACCES',
+        });
+      return actual.rm(...args);
     },
     async cp(...args: Parameters<typeof actual.cp>) {
       mocks.publishEntered?.();
@@ -58,6 +79,7 @@ vi.mock('node:fs/promises', async (importOriginal) => {
     },
     async writeFile(...args: Parameters<typeof actual.writeFile>) {
       const name = path.basename(String(args[0]));
+      mocks.summaryWrites.push({ name, text: String(args[1]) });
       if (
         (name === 'summary.md' && mocks.summaryFailure) ||
         (name === 'partial-summary.md' && mocks.partialSummaryFailure)
@@ -81,6 +103,11 @@ afterEach(async () => {
   mocks.partialSummaryFailure = false;
   mocks.summaryFailure = false;
   mocks.copyFailureName = undefined;
+  mocks.removalFailure = false;
+  mocks.recoveryAllocationFailure = false;
+  mocks.recoveryDirectory = '';
+  mocks.recoveryAllocations = 0;
+  mocks.summaryWrites = [];
   vi.unstubAllEnvs();
   process.exitCode = previousExitCode;
   if (root) await rm(root, { recursive: true, force: true });
@@ -365,7 +392,8 @@ it('bounds a stalled publication and retains staging without announcing success'
 });
 
 async function reportDirectory(output: string) {
-  const [report] = await readdir(path.join(output, 'task-verification'));
+  const reports = await readdir(path.join(output, 'task-verification'));
+  const report = reports.find((name) => !name.includes('-incomplete-'));
   return path.join(output, 'task-verification', report!);
 }
 it('publishes a failed attempt and diagnostic after a log rejection despite child exit zero', async () => {
@@ -468,4 +496,149 @@ it('copies remaining readable logs when one artifact fails and retains the incom
     expect.stringContaining('Incomplete verification artifacts:')
   );
   expect(process.exitCode).toBe(1);
+});
+
+it.each(['before-copy', 'after-copy'] as const)(
+  'publishes readable logs to one fresh directory after %s summary-removal failure',
+  async (stage) => {
+    mocks.removalFailure = true;
+    mocks.summaryFailure = stage === 'before-copy';
+    if (stage === 'after-copy') mocks.copyFailureName = 'check-ci.log';
+    const { output } = await run();
+    const original = await reportDirectory(output);
+    expect(mocks.recoveryAllocations).toBe(1);
+    expect(mocks.recoveryDirectory).not.toBe(original);
+    expect(path.dirname(mocks.recoveryDirectory)).toBe(path.dirname(original));
+    const files = await readdir(mocks.recoveryDirectory);
+    expect(files).toContain('format-changed.log');
+    expect(files).toContain('test.log');
+    expect(files).not.toContain('summary.md');
+    expect(files).not.toContain('partial-summary.md');
+    expect(await readdir(mocks.staging)).toContain('format-changed.log');
+    expect(console.error).toHaveBeenCalledWith(
+      `Stale/untrusted verification destination: ${path.join(original, 'summary.md')}`
+    );
+    expect(console.error).toHaveBeenCalledWith(
+      `Incomplete verification artifacts: ${mocks.recoveryDirectory}; retained staging: ${mocks.staging}`
+    );
+    expect(console.log).not.toHaveBeenCalledWith(
+      expect.stringContaining('Verification report:')
+    );
+    expect(process.exitCode).toBe(1);
+  }
+);
+it('reports an undeletable earlier summary as untrusted without mixing recovery logs into it', async () => {
+  let copies = 0;
+  mocks.publishEntered = () => {
+    if (++copies === 1) {
+      mocks.summaryFailure = true;
+      mocks.removalFailure = true;
+      process.emit('SIGINT');
+    }
+  };
+  const { output } = await run();
+  const original = await reportDirectory(output);
+  expect(await readFile(path.join(original, 'summary.md'), 'utf8')).toContain(
+    'Status: passed'
+  );
+  expect(await readdir(mocks.recoveryDirectory)).not.toContain('summary.md');
+  expect(
+    await readFile(path.join(mocks.recoveryDirectory, 'test.log'), 'utf8')
+  ).toContain('after cleanup');
+  expect(console.error).toHaveBeenCalledWith(
+    `Stale/untrusted verification destination: ${path.join(original, 'summary.md')}`
+  );
+  expect(console.log).not.toHaveBeenCalledWith(
+    expect.stringContaining('Verification report:')
+  );
+  expect(process.exitCode).toBe(130);
+});
+it('retains staging and reports allocation failure once without retrying', async () => {
+  mocks.summaryFailure = true;
+  mocks.removalFailure = true;
+  mocks.recoveryAllocationFailure = true;
+  const { error } = await run();
+  expect(mocks.recoveryAllocations).toBe(1);
+  const reports = error.mock.calls.filter((call) =>
+    String(call[0]).startsWith('Verification recovery allocation failed;')
+  );
+  expect(reports).toHaveLength(1);
+  expect(await readdir(mocks.staging)).toContain('format-changed.log');
+  expect(console.error).toHaveBeenCalledWith(
+    expect.stringContaining('Verification artifacts remain unpublished;')
+  );
+  expect(console.log).not.toHaveBeenCalledWith(
+    expect.stringContaining('Verification report:')
+  );
+  expect(process.exitCode).toBe(1);
+});
+it('keeps a failed fresh destination diagnostic-only when no copy succeeds', async () => {
+  mocks.removalFailure = true;
+  const { error } = await run(undefined, true);
+  expect(mocks.recoveryAllocations).toBe(1);
+  expect(await readdir(mocks.recoveryDirectory)).toEqual([]);
+  expect(error).not.toHaveBeenCalledWith(
+    expect.stringContaining('Incomplete verification artifacts:')
+  );
+  expect(error).toHaveBeenCalledWith(
+    expect.stringContaining('Verification artifacts remain unpublished;')
+  );
+  const roots = error.mock.calls.filter((call) =>
+    String(call[0]).startsWith('Verification publication failed;')
+  );
+  expect(roots).toHaveLength(1);
+  expect(
+    error.mock.calls.filter((call) => call[1] === roots[0]![1])
+  ).toHaveLength(1);
+  const copies = error.mock.calls.filter((call) =>
+    String(call[0]).startsWith('Verification artifact copy failed;')
+  );
+  expect(copies).toHaveLength(3);
+  expect(new Set(copies.map((call) => call[1])).size).toBe(3);
+});
+it('publishes only the final summary and formats pending duration without units', async () => {
+  const { output } = await run(undefined, false, { signal: 'SIGINT' });
+  const directory = await reportDirectory(output);
+  expect(await readdir(directory)).toContain('summary.md');
+  expect(await readdir(directory)).not.toContain('partial-summary.md');
+  const partial = mocks.summaryWrites.find(
+    (entry) => entry.name === 'partial-summary.md'
+  )!.text;
+  expect(partial).toContain('Duration: pending\n');
+  expect(partial).not.toContain('pendingms');
+  expect(await readFile(path.join(directory, 'summary.md'), 'utf8')).toMatch(
+    /Duration: \d+ms/
+  );
+});
+it('keeps one interruption deadline through a stalled fresh recovery copy', async () => {
+  vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+  const exit = vi
+    .spyOn(process, 'exit')
+    .mockImplementation(() => undefined as never);
+  const gate = Promise.withResolvers<void>();
+  const entered = Promise.withResolvers<void>();
+  mocks.publishWait = gate.promise;
+  mocks.publishEntered = entered.resolve;
+  mocks.summaryFailure = true;
+  mocks.removalFailure = true;
+  try {
+    const running = run(undefined, false, { signal: 'SIGTERM' });
+    await entered.promise;
+    expect(mocks.recoveryAllocations).toBe(1);
+    await vi.advanceTimersByTimeAsync(9000);
+    process.emit('SIGINT');
+    expect(exit).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(exit).toHaveBeenCalledExactlyOnceWith(143);
+    gate.resolve();
+    await running;
+    expect(console.log).not.toHaveBeenCalledWith(
+      expect.stringContaining('Verification report:')
+    );
+    expect(process.exitCode).toBe(143);
+    expect(await readdir(mocks.staging)).toContain('format-changed.log');
+  } finally {
+    gate.resolve();
+    vi.useRealTimers();
+  }
 });

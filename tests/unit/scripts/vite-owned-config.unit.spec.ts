@@ -71,3 +71,108 @@ it('retains canonicalization before a secondary directory cleanup failure', asyn
     errors: [mocks.canonicalization, cleanup],
   });
 });
+
+it.each(['own', 'inherited'] as const)(
+  'forwards a frozen plugin %s accessor setter with the source receiver',
+  (kind) => {
+    let enabled = true;
+    let reads = 0;
+    let source: object;
+    const setter = vi.fn(function (this: object, value: boolean) {
+      expect(this).toBe(source);
+      enabled = value;
+    });
+    const accessor = {
+      get enabled() {
+        reads++;
+        return enabled;
+      },
+      set enabled(value: boolean) {
+        setter.call(this, value);
+      },
+    };
+    source = Object.freeze(
+      kind === 'own'
+        ? Object.defineProperties(
+            { name: 'accessor' },
+            Object.getOwnPropertyDescriptors(accessor)
+          )
+        : Object.assign(Object.create(accessor), { name: 'accessor' })
+    );
+    const facade = withE2EViteOwnership({ plugins: [source as Plugin] })
+      .plugins![1] as Plugin & { enabled: boolean };
+    facade.enabled = false;
+    expect(reads).toBe(0);
+    expect(setter).toHaveBeenCalledOnce();
+    expect(enabled).toBe(false);
+    expect(facade.enabled).toBe(false);
+  }
+);
+it('preserves setter exceptions and gives explicit local descriptors precedence', () => {
+  const failure = new Error('Setter rejected');
+  const sourceSetter = vi.fn((_value: boolean) => {
+    throw failure;
+  });
+  const source = Object.freeze({
+    name: 'setter',
+    get enabled() {
+      return true;
+    },
+    set enabled(value: boolean) {
+      sourceSetter(value);
+    },
+  });
+  const facade = withE2EViteOwnership({ plugins: [source] })
+    .plugins![1] as Plugin & { enabled: boolean };
+  expect(() => {
+    facade.enabled = false;
+  }).toThrow(failure);
+  expect(facade.enabled).toBe(true);
+  let local = true;
+  const localSetter = vi.fn(function (this: object, value: boolean) {
+    expect(this).toBe(facade);
+    local = value;
+  });
+  Object.defineProperty(facade, 'enabled', {
+    configurable: true,
+    get: () => local,
+    set: localSetter,
+  });
+  facade.enabled = false;
+  expect(local).toBe(false);
+  expect(sourceSetter).toHaveBeenCalledOnce();
+  Object.defineProperty(facade, 'enabled', { value: true, writable: false });
+  expect(Reflect.set(facade, 'enabled', false)).toBe(false);
+  Reflect.deleteProperty(facade, 'enabled');
+  expect(() => {
+    facade.enabled = false;
+  }).toThrow(failure);
+});
+it('keeps getter-only shadows and lifecycle setters local to the writable facade', () => {
+  const original = async () => {};
+  const sourceSetter = vi.fn();
+  const source = Object.freeze({
+    name: 'local-overrides',
+    get enabled() {
+      return true;
+    },
+    get closeServer() {
+      return original;
+    },
+    set closeServer(value) {
+      sourceSetter(value);
+    },
+  });
+  const facade = withE2EViteOwnership({ plugins: [source] })
+    .plugins![1] as Plugin & { enabled: boolean };
+  facade.enabled = false;
+  expect(facade.enabled).toBe(false);
+  expect(source.enabled).toBe(true);
+  Reflect.deleteProperty(facade, 'enabled');
+  expect(facade.enabled).toBe(true);
+  const replacement = async () => {};
+  facade.closeServer = replacement;
+  expect(facade.closeServer).toBe(replacement);
+  expect(source.closeServer).toBe(original);
+  expect(sourceSetter).not.toHaveBeenCalled();
+});

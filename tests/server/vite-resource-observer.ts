@@ -12,7 +12,7 @@ type NativeClose = {
   native: () => Promise<unknown>;
   parent?: NativeClose;
   independent?: boolean;
-  retirement?: Promise<void>;
+  retirement?: Promise<readonly unknown[]>;
 };
 type Scope = {
   token: object;
@@ -181,10 +181,12 @@ export function createViteResourceObserver(
     // closer can delegate without awaiting its own outer retirement.
     resource.retirement ??= observed(
       Promise.resolve().then(async () => {
+        const failures: unknown[] = [];
         if (!resource.attempted) {
           try {
             await resource.target.close();
           } catch (error) {
+            failures.push(error);
             scope.failures.push(error);
           }
         }
@@ -194,9 +196,11 @@ export function createViteResourceObserver(
           try {
             await resource.native();
           } catch (error) {
+            failures.push(error);
             scope.failures.push(error);
           }
         }
+        return [...new Set([...failures, ...resource.failures])];
       })
     );
     return resource.retirement;
@@ -220,18 +224,20 @@ export function createViteResourceObserver(
         const resource = capture(scope, token, target);
         // This runs inside the environment closer: waiting on its parent here
         // would deadlock. The shared websocket has independent retirement.
-        if (!resource.independent) await retire(scope, resource);
+        return resource.independent || Object.is(target, environment)
+          ? []
+          : retire(scope, resource);
       })
     );
-    const failures = outcomes.flatMap((outcome) =>
-      outcome.status === 'rejected' ? [outcome.reason as unknown] : []
-    );
-    if (failures.length)
-      throw new AggregateError(
-        failures,
-        'E2E partially initialized environment cleanup failed',
-        { cause: failures[0] }
-      );
+    return [
+      ...new Set(
+        outcomes.flatMap((outcome) =>
+          outcome.status === 'rejected'
+            ? [outcome.reason as unknown]
+            : outcome.value
+        )
+      ),
+    ];
   }
   function instrument(
     scope: Scope,
@@ -374,17 +380,20 @@ export function createViteResourceObserver(
             }
             if (initializationFailed) {
               try {
-                await closePublicParts(scope, token, environment);
+                failures.push(
+                  ...(await closePublicParts(scope, token, environment))
+                );
               } catch (error) {
                 failures.push(error);
               }
             }
-            if (failures.length === 1) throw failures[0];
-            if (failures.length > 1)
+            const distinct = [...new Set(failures)];
+            if (distinct.length === 1) throw distinct[0];
+            if (distinct.length > 1)
               throw new AggregateError(
-                failures,
+                distinct,
                 'E2E environment cleanup failed after initialization',
-                { cause: failures[0] }
+                { cause: distinct[0] }
               );
           };
           const owner = capture(scope, token, environment);

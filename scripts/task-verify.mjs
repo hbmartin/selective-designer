@@ -75,6 +75,9 @@ let interruptionSummary;
 let summaryWrites = Promise.resolve();
 let publicationRevision = 0;
 let published = false;
+const publicationFailures = new Set();
+let originalDestinationStale = false;
+let recoveryAllocation;
 let forced = false;
 const interrupted = Promise.withResolvers();
 const results = [];
@@ -253,7 +256,7 @@ async function writeSummary(filename) {
     '',
     ...results.flatMap((result) => [
       `- ${!result.finishedAt ? 'INCOMPLETE' : result.code === 0 && result.failures.length === 0 ? 'PASS' : 'FAIL'} \`${formatCommand(result)}\``,
-      `  - Duration: ${result.durationMs ?? 'pending'}ms`,
+      `  - Duration: ${result.durationMs === undefined ? 'pending' : `${result.durationMs}ms`}`,
       `  - Log: ${path.relative(process.cwd(), result.logPath)}`,
       `  - Exit: ${result.code ?? 'null'}; signal: ${result.signal ?? 'null'}`,
       ...result.failures.map((failure) => `  - Diagnostic: ${failure}`),
@@ -281,39 +284,69 @@ function queueSummary(filename = 'summary.md') {
 }
 function publicationFailure(error, stage) {
   rememberFailure(1);
+  if (publicationFailures.has(error)) return;
+  publicationFailures.add(error);
   console.error(`Verification ${stage} failed; retained ${stagingDir}:`, error);
 }
-async function publish(summaryReady) {
-  await mkdir(reportDir, { recursive: true });
+async function recoverArtifacts() {
   const summaryPath = path.join(reportDir, 'summary.md');
-  if (!summaryReady) await rm(summaryPath, { force: true });
+  if (!originalDestinationStale) {
+    try {
+      await rm(summaryPath, { force: true });
+    } catch (error) {
+      originalDestinationStale = true;
+      publicationFailure(error, 'summary removal');
+      console.error(`Stale/untrusted verification destination: ${summaryPath}`);
+    }
+  }
+  let directory = reportDir;
+  if (originalDestinationStale) {
+    try {
+      recoveryAllocation ??= mkdtemp(
+        path.join(path.dirname(reportDir), `${timestamp}-incomplete-`)
+      );
+      directory = await recoveryAllocation;
+    } catch (error) {
+      publicationFailure(error, 'recovery allocation');
+      return { type: 'retained_only' };
+    }
+  }
+  let names;
   try {
+    names = (await readdir(stagingDir)).filter(
+      (name) => name !== 'summary.md' && name !== 'partial-summary.md'
+    );
+  } catch (error) {
+    publicationFailure(error, 'artifact listing');
+    return { type: 'retained_only', directory };
+  }
+  const outcomes = await Promise.allSettled(
+    names.map((name) =>
+      cp(path.join(stagingDir, name), path.join(directory, name), {
+        recursive: true,
+      })
+    )
+  );
+  for (const outcome of outcomes)
+    if (outcome.status === 'rejected')
+      publicationFailure(outcome.reason, 'artifact copy');
+  return outcomes.some((outcome) => outcome.status === 'fulfilled')
+    ? { type: 'incomplete', directory }
+    : { type: 'retained_only', directory };
+}
+async function publish(summaryReady) {
+  try {
+    await mkdir(reportDir, { recursive: true });
+    if (!summaryReady || originalDestinationStale) return recoverArtifacts();
     await cp(stagingDir, reportDir, {
       recursive: true,
       filter: (source) =>
-        summaryReady || source !== path.join(stagingDir, 'summary.md'),
+        source !== path.join(stagingDir, 'partial-summary.md'),
     });
-    return summaryReady;
+    return { type: 'complete', directory: reportDir };
   } catch (error) {
     publicationFailure(error, 'publication');
-    // One unreadable file must not prevent independent evidence copying.
-    await rm(summaryPath, { force: true });
-    const names = (await readdir(stagingDir)).filter(
-      (name) => name !== 'summary.md'
-    );
-    const outcomes = await Promise.allSettled(
-      names.map((name) =>
-        cp(path.join(stagingDir, name), path.join(reportDir, name), {
-          recursive: true,
-        })
-      )
-    );
-    for (const outcome of outcomes)
-      if (outcome.status === 'rejected')
-        publicationFailure(outcome.reason, 'artifact copy');
-    if (!outcomes.some((outcome) => outcome.status === 'fulfilled'))
-      throw error;
-    return false;
+    return recoverArtifacts();
   }
 }
 async function finalize() {
@@ -349,11 +382,11 @@ async function finalize() {
         throw new Error(
           'Verification finalization already exceeded its deadline'
         );
-      const complete = await publish(summaryReady);
+      const outcome = await publish(summaryReady);
       if (forced)
         throw new Error('Verification publication exceeded its deadline');
       if (revision !== publicationRevision) continue;
-      if (complete) {
+      if (outcome.type === 'complete') {
         published = true;
         console.log(
           `\nVerification report: ${path.join(reportDir, 'summary.md')}`
@@ -363,9 +396,13 @@ async function finalize() {
         } catch (error) {
           publicationFailure(error, 'staging removal');
         }
+      } else if (outcome.type === 'incomplete') {
+        console.error(
+          `Incomplete verification artifacts: ${outcome.directory}; retained staging: ${stagingDir}`
+        );
       } else {
         console.error(
-          `Incomplete verification artifacts: ${reportDir}; retained staging: ${stagingDir}`
+          `Verification artifacts remain unpublished; retained staging: ${stagingDir}${outcome.directory ? `; attempted destination: ${outcome.directory}` : ''}`
         );
       }
       break;

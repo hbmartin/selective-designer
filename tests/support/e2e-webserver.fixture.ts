@@ -4,7 +4,10 @@ import path from 'node:path';
 import { writeFile } from 'node:fs/promises';
 import type { ViteDevServer } from 'vite';
 import { waitForE2EFixtureAuthorization } from './e2e-fixture-authorization';
-import { replyToE2EFixtureAction } from './e2e-fixture-action';
+import {
+  notifyE2EFixture,
+  replyToE2EFixtureAction,
+} from './e2e-fixture-action';
 
 await waitForE2EFixtureAuthorization();
 const { runE2EWebserverCommand, startE2EWebserver } =
@@ -38,7 +41,7 @@ if (mode.startsWith('final-flush')) {
     stream.write = ((...args: Parameters<typeof stream.write>) => {
       if (args[0] === '' && ++emptyWrites > 2 && !outputReleased) {
         heldOutput.push(() => write(...args));
-        process.send?.({ type: 'flush-held' });
+        notifyE2EFixture({ type: 'flush-held' });
         return true;
       }
       return write(...args);
@@ -60,7 +63,7 @@ try {
   if (mode === 'config-plugin-failure')
     await writeFile(
       path.join(root, 'vite.config.mjs'),
-      `export default { plugins: [{ name: 'early-config-file-plugin', enforce: 'pre', configureServer: { order: 'pre', handler(server) { const close = server.watcher.close.bind(server.watcher); server.watcher.close = async () => { await close(); process.send?.({ type: 'early-watcher-closed' }); }; throw new Error('Fixture early config plugin failure'); } } }] };`
+      `import { notifyE2EFixture } from ${JSON.stringify(path.resolve('tests/support/e2e-fixture-action.ts'))}; export default { plugins: [{ name: 'early-config-file-plugin', enforce: 'pre', configureServer: { order: 'pre', handler(server) { const close = server.watcher.close.bind(server.watcher); server.watcher.close = async () => { await close(); notifyE2EFixture({ type: 'early-watcher-closed' }); }; throw new Error('Fixture early config plugin failure'); } } }] };`
     );
   const start = mode.startsWith('programmatic')
     ? startE2EWebserver
@@ -68,7 +71,7 @@ try {
   const owner = await start({
     databasePort: ports.database ?? 0,
     onDatabaseReady: (databaseUrl) =>
-      process.send?.({ type: 'database-ready', databaseUrl }),
+      notifyE2EFixture({ type: 'database-ready', databaseUrl }),
     setupScripts: mode.startsWith('failure-')
       ? Array.from({ length: 5 }, (_, index) =>
           index === Number(mode.split('-')[1])
@@ -118,13 +121,13 @@ try {
               await released;
             }
             if (mode === 'race-creation') {
-              process.send?.({ type: 'failure-gate' });
+              notifyE2EFixture({ type: 'failure-gate' });
               await released;
               throw new Error('Fixture genuine creation failure');
             }
             if (mode === 'race-listening') {
               server.listen = async () => {
-                process.send?.({ type: 'failure-gate' });
+                notifyE2EFixture({ type: 'failure-gate' });
                 await released;
                 throw new Error('Fixture genuine listening failure');
               };
@@ -141,7 +144,7 @@ try {
               const listen = server.listen.bind(server);
               server.listen = async (...args) => {
                 await listen(...args);
-                process.send?.({
+                notifyE2EFixture({
                   type: 'listening',
                   httpPort: (server.httpServer!.address() as AddressInfo).port,
                 });
@@ -166,7 +169,7 @@ try {
             )
               await released;
             if (mode.startsWith('race-')) {
-              process.send?.({ type: 'cleanup-gate' });
+              notifyE2EFixture({ type: 'cleanup-gate' });
               await cleanupReleased;
             }
           },
@@ -175,7 +178,7 @@ try {
     },
   });
   if (owner) {
-    process.send?.({
+    notifyE2EFixture({
       type: 'ready',
       httpPort: (owner.vite.httpServer!.address() as AddressInfo).port,
     });
@@ -195,10 +198,10 @@ try {
         holder.once('error', (error) => {
           throw error;
         });
-        process.send?.({ type: 'pipe-holder', pid: holder.pid });
+        notifyE2EFixture({ type: 'pipe-holder', pid: holder.pid });
       }
       if (message === 'inspect-instances')
-        process.send?.({
+        notifyE2EFixture({
           type: 'instances',
           instances: servers.length,
           instancesClosed,
@@ -228,13 +231,13 @@ try {
       if (message === 'close')
         void Promise.all([owner.close(), owner.close()]).then(
           () =>
-            process.send?.({
+            notifyE2EFixture({
               type: 'closed',
               watchersClosed: watchers.every((watcher) => watcher.closed),
               instances: servers.length,
             }),
           () =>
-            process.send?.({
+            notifyE2EFixture({
               type: 'close-failed',
               exitCode: process.exitCode ?? 'unset',
             })
@@ -244,7 +247,7 @@ try {
         for (const write of heldOutput.splice(0)) write();
       }
       if (typeof message === 'string' && message.startsWith('ping'))
-        process.send?.({
+        notifyE2EFixture({
           type: message.replace('ping', 'pong'),
           exitCode: process.exitCode ?? 'unset',
         });
@@ -255,13 +258,13 @@ try {
     `Fixture startup failed: ${error instanceof Error ? error.message : String(error)}`
   );
   if (mode === 'programmatic-startup-timeout') {
-    process.send?.({
+    notifyE2EFixture({
       type: 'startup-failed',
       exitCode: process.exitCode ?? 'unset',
     });
     process.on('message', (message: unknown) => {
       if (message === 'ping-after-startup-timeout')
-        process.send?.({
+        notifyE2EFixture({
           type: 'pong-after-startup-timeout',
           exitCode: process.exitCode ?? 'unset',
         });
