@@ -8,6 +8,7 @@ import {
   readdir,
   rm,
   rmdir,
+  stat,
   writeFile,
 } from 'node:fs/promises';
 import { finished } from 'node:stream/promises';
@@ -24,7 +25,6 @@ const checkStep = process.env.CI
 
 const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
 const reportDir = path.resolve('test-results', 'task-verification', timestamp);
-const reportDirectoryMode = 0o777 & ~process.umask();
 const stagingDir = await mkdtemp(
   path.join(os.tmpdir(), 'selective-designer-verification-')
 );
@@ -84,8 +84,7 @@ let terminalTimer;
 let interruptionSummary;
 let summaryWrites = Promise.resolve();
 let publicationRevision = 0;
-let published = false;
-let publicationAccepted = false;
+let acceptedPublication;
 const publicationFailures = new Set();
 let originalDestinationStale = false;
 let recoveryAllocation;
@@ -110,8 +109,14 @@ function armDeadline() {
       if (!current?.closed) current?.child?.kill('SIGKILL');
       current?.log?.end();
     } finally {
+      const destination =
+        acceptedPublication?.type === 'complete'
+          ? `report ${path.join(reportDir, 'summary.md')}`
+          : acceptedPublication?.type === 'incomplete'
+            ? `incomplete artifacts ${acceptedPublication.directory}; retained ${stagingDir}`
+            : `retained ${stagingDir}${ownedRecoveryDirectory ? `; attempted destination: ${ownedRecoveryDirectory}` : ''}`;
       console.error(
-        `Verification finalization exceeded ten seconds; ${published ? `report ${path.join(reportDir, 'summary.md')}` : `retained ${stagingDir}`}`
+        `Verification finalization exceeded ten seconds; ${destination}`
       );
       process.exit(exitStatus());
     }
@@ -126,7 +131,7 @@ function stopCurrent(signal) {
 }
 function onSignal(signal) {
   if (interruptedSignal) return;
-  if (publicationAccepted) {
+  if (acceptedPublication) {
     armDeadline();
     return;
   }
@@ -320,7 +325,18 @@ async function recoverArtifacts() {
         );
         ownedRecoveryDirectory = allocated;
         try {
-          await chmod(allocated, reportDirectoryMode);
+          const ordinary = await stat(reportDir);
+          if (!ordinary.isDirectory())
+            throw new Error(
+              'Verification report destination is not a directory'
+            );
+          const mode = ordinary.mode & 0o7777;
+          await chmod(allocated, mode);
+          const recovery = await stat(allocated);
+          if (!recovery.isDirectory() || (recovery.mode & 0o7777) !== mode)
+            throw new Error(
+              'Verification recovery directory mode does not match the report directory'
+            );
         } catch (error) {
           publicationFailure(error, 'recovery permissions');
           throw error;
@@ -434,8 +450,8 @@ async function finalize() {
       if (forced)
         throw new Error('Verification publication exceeded its deadline');
       if (revision !== publicationRevision) continue;
-      publicationAccepted = true;
-      if (outcome.type !== 'complete') {
+      acceptedPublication = outcome;
+      if (outcome.type === 'retained_only') {
         const removed = await removeEmptyRecoveryDirectory();
         if (forced)
           throw new Error(
@@ -445,7 +461,6 @@ async function finalize() {
           outcome.directory = undefined;
       }
       if (outcome.type === 'complete') {
-        published = true;
         console.log(
           `\nVerification report: ${path.join(reportDir, 'summary.md')}`
         );

@@ -293,3 +293,165 @@ it('respects alternate receiver descriptors and extensibility when creating shad
   });
   expect(Object.hasOwn(facade, 'x')).toBe(false);
 });
+
+it.each(['writable', 'frozen', 'getter'] as const)(
+  'keeps %s source shadows writable through nested forwarding wrappers',
+  (kind) => {
+    const sources = {
+      writable: Object.preventExtensions({ name: 'writable', transform: 1 }),
+      frozen: Object.freeze({ name: 'frozen', transform: 1 }),
+      getter: Object.freeze({
+        name: 'getter',
+        get transform() {
+          return 1;
+        },
+      }),
+    };
+    const source = sources[kind];
+    const facade = withE2EViteOwnership({
+      plugins: [source as unknown as Plugin],
+    }).plugins![1] as unknown as { transform: number };
+    const outer = new Proxy(new Proxy(facade, {}), {});
+    outer.transform = 2;
+    expect(Object.getOwnPropertyDescriptor(facade, 'transform')).toEqual({
+      value: 2,
+      writable: true,
+      enumerable: true,
+      configurable: true,
+    });
+    facade.transform = 3;
+    outer.transform = 4;
+    expect(facade.transform).toBe(4);
+    expect(Object.keys(facade)).toContain('transform');
+    expect(source.transform).toBe(1);
+    expect(Reflect.deleteProperty(outer, 'transform')).toBe(true);
+    expect(outer.transform).toBe(1);
+  }
+);
+it('uses the source for private accessors through aliases without binding methods', () => {
+  class Source {
+    name = 'private-accessors';
+    #value = 1;
+    get value() {
+      return this.#value;
+    }
+    set value(value: number) {
+      this.#value = value;
+    }
+    method() {
+      return this;
+    }
+  }
+  const source = Object.freeze(new Source());
+  const facade = withE2EViteOwnership({ plugins: [source] })
+    .plugins![1] as unknown as Source;
+  const alias = new Proxy(new Proxy(facade, {}), {});
+  alias.value = 2;
+  expect(alias.value).toBe(2);
+  expect(Reflect.get(facade, 'value', alias)).toBe(2);
+  expect(source.value).toBe(2);
+  expect(alias.method).toBe(source.method);
+  expect(alias.method()).toBe(alias);
+  expect(() => Object.create(alias).value).toThrow(TypeError);
+});
+it('preserves actual derived and local-accessor receivers through aliases', () => {
+  const state = new WeakMap<object, number>();
+  const source = Object.freeze({
+    name: 'receivers',
+    get value() {
+      return state.get(this) ?? 0;
+    },
+    set value(value: number) {
+      state.set(this, value);
+    },
+  });
+  const facade = withE2EViteOwnership({ plugins: [source] })
+    .plugins![1] as Plugin & { value: number; local: number };
+  const alias = new Proxy(facade, {});
+  const derived = Object.create(alias) as typeof facade;
+  const foreign = {};
+  alias.value = 1;
+  derived.value = 2;
+  Reflect.set(facade, 'value', 3, foreign);
+  expect(state.get(source)).toBe(1);
+  expect(derived.value).toBe(2);
+  expect(Reflect.get(facade, 'value', foreign)).toBe(3);
+  Object.defineProperty(facade, 'local', {
+    configurable: true,
+    get() {
+      return state.get(this);
+    },
+    set(value: number) {
+      state.set(this, value);
+    },
+  });
+  alias.local = 4;
+  derived.local = 5;
+  expect(state.get(alias)).toBe(4);
+  expect(state.get(derived)).toBe(5);
+  expect(state.has(facade)).toBe(false);
+});
+it('allows forwarding-wrapper traps to reject source shadows', () => {
+  const source = Object.freeze({ name: 'rejecting', transform: 1 });
+  const facade = withE2EViteOwnership({
+    plugins: [source as unknown as Plugin],
+  }).plugins![1] as unknown as { transform: number };
+  const define = vi.fn(() => false);
+  const outer = new Proxy(facade, { defineProperty: define });
+  expect(Reflect.set(outer, 'transform', 2)).toBe(false);
+  expect(define).toHaveBeenCalledExactlyOnceWith(facade, 'transform', {
+    value: 2,
+    writable: true,
+    enumerable: true,
+    configurable: true,
+  });
+  expect(facade.transform).toBe(1);
+});
+it('hides and protects alias bookkeeping against observing wrappers', () => {
+  const facade = withE2EViteOwnership({
+    plugins: [Object.freeze({ name: 'hidden' })],
+  }).plugins![1] as Plugin & { added: number };
+  let marker: symbol | undefined;
+  let token: unknown;
+  const outer = new Proxy(facade, {
+    getOwnPropertyDescriptor(object, key) {
+      const descriptor = Reflect.getOwnPropertyDescriptor(object, key);
+      if (typeof key === 'symbol') {
+        marker = key;
+        token = descriptor?.value;
+      }
+      return descriptor;
+    },
+  });
+  outer.added = 1;
+  expect(marker).toBeTypeOf('symbol');
+  expect(token).toEqual({});
+  expect(token).not.toBe(facade);
+  expect(Reflect.ownKeys(facade)).not.toContain(marker);
+  expect(Reflect.defineProperty(outer, marker!, { configurable: false })).toBe(
+    false
+  );
+  expect(Reflect.deleteProperty(outer, marker!)).toBe(false);
+  expect(Reflect.preventExtensions(outer)).toBe(false);
+  expect(() => Reflect.ownKeys(outer)).not.toThrow();
+  outer.added = 2;
+  expect(facade.added).toBe(2);
+});
+it('retains facade-wide lifecycle overlays across aliases and derived objects', () => {
+  const original = async () => {};
+  const source = Object.freeze({
+    name: 'shared-lifecycle',
+    closeServer: original,
+  });
+  const facade = withE2EViteOwnership({ plugins: [source] })
+    .plugins![1] as Plugin;
+  const alias = new Proxy(facade, {});
+  const child = Object.create(alias) as Plugin;
+  const sibling = Object.create(facade) as Plugin;
+  const replacement = async () => {};
+  child.closeServer = replacement;
+  expect(facade.closeServer).toBe(replacement);
+  expect(alias.closeServer).toBe(replacement);
+  expect(sibling.closeServer).toBe(replacement);
+  expect(source.closeServer).toBe(original);
+});

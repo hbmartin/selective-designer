@@ -21,9 +21,20 @@ const mocks = vi.hoisted(() => ({
   recoveryDirectory: '',
   recoveryAllocations: 0,
   permissionFailure: false,
+  metadataFailure: undefined as
+    | 'source-stat'
+    | 'source-kind'
+    | 'recovery-stat'
+    | 'recovery-kind'
+    | 'recovery-mode'
+    | undefined,
+  ordinaryDirectory: '',
+  ordinaryMode: undefined as number | undefined,
+  permissionTargets: [] as { path: string; mode: number }[],
+  cleanupInspections: [] as string[],
   permissionWait: undefined as Promise<void> | undefined,
   permissionEntered: undefined as (() => void) | undefined,
-  cleanupFailure: undefined as 'inspect' | 'remove' | undefined,
+  cleanupFailure: undefined as 'inspect' | 'remove' | 'missing' | undefined,
   cleanupWait: undefined as Promise<void> | undefined,
   cleanupEntered: undefined as (() => void) | undefined,
   copies: [] as string[],
@@ -66,7 +77,47 @@ vi.mock('node:fs/promises', async (importOriginal) => {
       if (prefix.includes('-incomplete-')) mocks.recoveryDirectory = directory;
       return directory;
     },
+    async mkdir(...args: Parameters<typeof actual.mkdir>) {
+      const result = await actual.mkdir(...args);
+      const directory = String(args[0]);
+      if (
+        path.basename(path.dirname(directory)) === 'task-verification' &&
+        !directory.includes('-incomplete-')
+      ) {
+        mocks.ordinaryDirectory = directory;
+        if (mocks.ordinaryMode !== undefined)
+          await actual.chmod(directory, mocks.ordinaryMode);
+      }
+      return result;
+    },
+    async stat(directory: string) {
+      if (
+        (directory === mocks.ordinaryDirectory &&
+          mocks.metadataFailure === 'source-stat') ||
+        (directory === mocks.recoveryDirectory &&
+          mocks.metadataFailure === 'recovery-stat')
+      )
+        throw new Error('Controlled directory metadata failure');
+      const result = await actual.stat(directory);
+      if (
+        (directory === mocks.ordinaryDirectory &&
+          mocks.metadataFailure === 'source-kind') ||
+        (directory === mocks.recoveryDirectory &&
+          mocks.metadataFailure === 'recovery-kind')
+      )
+        result.mode = 0o100644;
+      if (
+        directory === mocks.recoveryDirectory &&
+        mocks.metadataFailure === 'recovery-mode'
+      )
+        result.mode ^= 0o010;
+      return result;
+    },
     async chmod(...args: Parameters<typeof actual.chmod>) {
+      mocks.permissionTargets.push({
+        path: String(args[0]),
+        mode: Number(args[1]),
+      });
       mocks.permissionEntered?.();
       await mocks.permissionWait;
       if (mocks.permissionFailure)
@@ -75,10 +126,15 @@ vi.mock('node:fs/promises', async (importOriginal) => {
     },
     async readdir(...args: Parameters<typeof actual.readdir>) {
       if (String(args[0]) === mocks.recoveryDirectory) {
+        mocks.cleanupInspections.push(String(args[0]));
         mocks.cleanupEntered?.();
         await mocks.cleanupWait;
         if (mocks.cleanupFailure === 'inspect')
           throw new Error('Recovery inspection denied');
+        if (mocks.cleanupFailure === 'missing')
+          throw Object.assign(new Error('Recovery directory vanished'), {
+            code: 'ENOENT',
+          });
       }
       return actual.readdir(...args);
     },
@@ -146,6 +202,11 @@ afterEach(async () => {
   mocks.recoveryDirectory = '';
   mocks.recoveryAllocations = 0;
   mocks.permissionFailure = false;
+  mocks.metadataFailure = undefined;
+  mocks.ordinaryDirectory = '';
+  mocks.ordinaryMode = undefined;
+  mocks.permissionTargets = [];
+  mocks.cleanupInspections = [];
   mocks.permissionWait = undefined;
   mocks.permissionEntered = undefined;
   mocks.cleanupFailure = undefined;
@@ -693,24 +754,21 @@ it('keeps one interruption deadline through a stalled fresh recovery copy', asyn
   }
 });
 
-it.skipIf(process.platform === 'win32').each([0o022, 0o077])(
-  'matches ordinary report permissions under umask %s while keeping staging private',
-  async (mask) => {
-    const previous = process.umask(mask);
+it.skipIf(process.platform === 'win32').each([0o755, 0o700, 0o2755])(
+  'copies the actual ordinary report mode %s and keeps staging private',
+  async (mode) => {
+    mocks.ordinaryMode = mode;
     mocks.summaryFailure = true;
     mocks.removalFailure = true;
-    try {
-      const { output } = await run();
-      expect((await stat(await reportDirectory(output))).mode & 0o777).toBe(
-        0o777 & ~mask
-      );
-      expect((await stat(mocks.recoveryDirectory)).mode & 0o777).toBe(
-        0o777 & ~mask
-      );
-      expect((await stat(mocks.staging)).mode & 0o777).toBe(0o700);
-    } finally {
-      process.umask(previous);
-    }
+    const { output } = await run();
+    expect((await stat(await reportDirectory(output))).mode & 0o7777).toBe(
+      mode
+    );
+    expect((await stat(mocks.recoveryDirectory)).mode & 0o7777).toBe(mode);
+    expect((await stat(mocks.staging)).mode & 0o777).toBe(0o700);
+    expect(mocks.permissionTargets).toEqual([
+      { path: mocks.recoveryDirectory, mode },
+    ]);
   }
 );
 it('retains staging on a permission failure before copying and removes only its empty allocation', async () => {
@@ -873,11 +931,14 @@ it('reuses the allocation through interruption and removes it only after the fin
   mocks.summaryFailure = true;
   mocks.removalFailure = true;
   let copies = 0;
+  const removalsAtCopy: string[][] = [];
   mocks.publishEntered = () => {
-    expect(mocks.removals).toEqual([]);
+    removalsAtCopy.push([...mocks.removals]);
     if (++copies === 1) process.emit('SIGINT');
   };
   await run(undefined, true);
+  expect(removalsAtCopy).toHaveLength(6);
+  expect(removalsAtCopy).toEqual(Array.from({ length: 6 }, () => []));
   expect(mocks.recoveryAllocations).toBe(1);
   expect(mocks.copies).toHaveLength(6); // Three recovery copies for each publication revision.
   expect(mocks.removals).toEqual([mocks.recoveryDirectory]);
@@ -945,3 +1006,116 @@ it.each(['permission', 'cleanup'] as const)(
     }
   }
 );
+
+it.each(['stall', 'inspect', 'missing'] as const)(
+  'announces successful incomplete recovery without %s cleanup inspection',
+  async (fault) => {
+    const gate = Promise.withResolvers<void>();
+    mocks.summaryFailure = true;
+    mocks.removalFailure = true;
+    mocks.cleanupWait = fault === 'stall' ? gate.promise : undefined;
+    mocks.cleanupFailure = fault === 'stall' ? undefined : fault;
+    const running = run();
+    try {
+      await vi.waitFor(() =>
+        expect(console.error).toHaveBeenCalledWith(
+          expect.stringContaining('Incomplete verification artifacts:')
+        )
+      );
+    } finally {
+      gate.resolve();
+      await running;
+    }
+    expect(mocks.cleanupInspections).toEqual([]);
+    expect(mocks.removals).toEqual([]);
+    expect(console.error).toHaveBeenCalledWith(
+      `Incomplete verification artifacts: ${mocks.recoveryDirectory}; retained staging: ${mocks.staging}`
+    );
+    expect(vi.mocked(console.error).mock.calls.flat().join('\n')).not.toContain(
+      'artifacts: undefined'
+    );
+    const actual =
+      await vi.importActual<typeof import('node:fs/promises')>(
+        'node:fs/promises'
+      );
+    expect(await actual.readdir(mocks.recoveryDirectory)).toContain('test.log');
+    expect(await actual.readdir(mocks.staging)).toContain('summary.md');
+  }
+);
+it.each([
+  'source-stat',
+  'source-kind',
+  'recovery-stat',
+  'recovery-kind',
+  'recovery-mode',
+] as const)(
+  'retains staging without copies when permission metadata fails: %s',
+  async (fault) => {
+    mocks.metadataFailure = fault;
+    mocks.summaryFailure = true;
+    mocks.removalFailure = true;
+    const { error } = await run();
+    expect(mocks.copies).toEqual([]);
+    expect(mocks.recoveryAllocations).toBe(1);
+    expect(
+      error.mock.calls.filter((call) =>
+        String(call[0]).startsWith('Verification recovery permissions failed;')
+      )
+    ).toHaveLength(1);
+    expect(error).toHaveBeenCalledWith(
+      expect.stringContaining('Verification artifacts remain unpublished;')
+    );
+    expect(
+      mocks.permissionTargets.every(
+        (target) => target.path === mocks.recoveryDirectory
+      )
+    ).toBe(true);
+    const actual =
+      await vi.importActual<typeof import('node:fs/promises')>(
+        'node:fs/promises'
+      );
+    expect(await actual.readdir(mocks.staging)).toContain('test.log');
+    expect((await actual.stat(mocks.ordinaryDirectory)).isDirectory()).toBe(
+      true
+    );
+    expect(process.exitCode).toBe(1);
+  }
+);
+it('includes accepted recovered evidence when terminal output flushing reaches its deadline', async () => {
+  vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+  const exit = vi
+    .spyOn(process, 'exit')
+    .mockImplementation(() => undefined as never);
+  const entered = Promise.withResolvers<void>();
+  const callbacks: (() => void)[] = [];
+  vi.spyOn(process.stdout, 'write').mockImplementation((...args) => {
+    if (args[0] === '') {
+      const callback = args.find((value) => typeof value === 'function');
+      callbacks.push(() => {
+        if (typeof callback === 'function') callback();
+      });
+      entered.resolve();
+    }
+    return true;
+  });
+  mocks.summaryFailure = true;
+  mocks.removalFailure = true;
+  const running = run(undefined, false, { signal: 'SIGTERM' });
+  try {
+    await entered.promise;
+    expect(console.error).toHaveBeenCalledWith(
+      `Incomplete verification artifacts: ${mocks.recoveryDirectory}; retained staging: ${mocks.staging}`
+    );
+    await vi.advanceTimersByTimeAsync(9000);
+    process.emit('SIGINT');
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(exit).toHaveBeenCalledExactlyOnceWith(143);
+    expect(console.error).toHaveBeenCalledWith(
+      `Verification finalization exceeded ten seconds; incomplete artifacts ${mocks.recoveryDirectory}; retained ${mocks.staging}`
+    );
+  } finally {
+    for (const callback of callbacks) callback();
+    await running;
+    vi.useRealTimers();
+  }
+});
