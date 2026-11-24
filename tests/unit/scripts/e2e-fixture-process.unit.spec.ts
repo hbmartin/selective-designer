@@ -508,7 +508,11 @@ it.each([
   'rejects %s promptly on its explicit failure outcome',
   async (success, failure) => {
     const fixture = await launchE2EFixture();
-    const waiting = fixture.message(success, { failureTypes: [failure] });
+    const afterIndex = fixture.messages.length;
+    const waiting = fixture.message(success, {
+      failureTypes: [failure],
+      afterIndex,
+    });
     child.emit('message', { type: failure, error: 'Original action failure' });
     await Promise.all([
       expect(waiting).rejects.toThrow(`${failure}: Original action failure`),
@@ -524,6 +528,7 @@ it.each(['success-first', 'failure-first'])(
     const fixture = await launchE2EFixture();
     const success = { type: 'restarted' };
     const failure = { type: 'restart-failed', error: 'Buffered rejection' };
+    const afterIndex = fixture.messages.length;
     for (const message of order === 'success-first'
       ? [success, failure]
       : [failure, success])
@@ -532,6 +537,7 @@ it.each(['success-first', 'failure-first'])(
     child.emit('disconnect');
     const outcome = fixture.message('restarted', {
       failureTypes: ['restart-failed'],
+      afterIndex,
     });
     if (order === 'success-first')
       await expect(outcome).resolves.toEqual(success);
@@ -558,5 +564,47 @@ it('limits repeated action outcomes to an explicit buffer index without consumin
     type: 'restarted',
   });
   expect(fixture.messages).toHaveLength(afterIndex + 1);
+  await fixture.dispose();
+});
+
+it('rejects a missing action cursor immediately without changing historical lookups', async () => {
+  const fixture = await launchE2EFixture();
+  await expect(
+    // @ts-expect-error Failure-aware waits require a pre-send cursor.
+    fixture.message('restarted', { failureTypes: ['restart-failed'] })
+  ).rejects.toThrow('require a cursor captured before sending');
+  child.emit('message', { type: 'restarted' });
+  await expect(fixture.message('restarted')).resolves.toEqual({
+    type: 'restarted',
+  });
+  await fixture.dispose();
+});
+it.each([-1, 0.5, NaN, Infinity, 10000])(
+  'rejects invalid action cursor %s before waiting',
+  async (afterIndex) => {
+    const fixture = await launchE2EFixture();
+    await expect(
+      fixture.message('restarted', {
+        failureTypes: ['restart-failed'],
+        afterIndex,
+      })
+    ).rejects.toThrow('integer within the current buffer');
+    await fixture.dispose();
+  }
+);
+it('ignores an earlier failure and accepts a fast response buffered after the pre-send cursor', async () => {
+  const fixture = await launchE2EFixture();
+  child.emit('message', { type: 'restart-failed', error: 'Old action' });
+  const afterIndex = fixture.messages.length;
+  child.emit('message', { type: 'restarted' });
+  await expect(
+    fixture.message('restarted', {
+      failureTypes: ['restart-failed'],
+      afterIndex,
+    })
+  ).resolves.toEqual({ type: 'restarted' });
+  await expect(fixture.message('restart-failed')).resolves.toMatchObject({
+    error: 'Old action',
+  });
   await fixture.dispose();
 });

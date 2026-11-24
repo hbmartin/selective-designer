@@ -630,3 +630,108 @@ it('records a new read failure when an inherited accessor owner changes', async 
   observer.prepare(config);
   expect(await observer.settle(config)).toEqual([first, second]);
 });
+
+it('rejects direct failed-init close with its part failure while settlement keeps the same failure', async () => {
+  const startup = new Error('Original initialization failure');
+  const failure = new Error('Hot channel cleanup failed');
+  const hotClose = vi.fn(async () => {
+    throw failure;
+  });
+  const nativeClose = vi.fn(async () => {});
+  const environment = {
+    hot: { close: hotClose },
+    init: async () => {
+      throw startup;
+    },
+    close: nativeClose,
+  } as unknown as DevEnvironment;
+  const config = {
+    plugins: [],
+    environments: {
+      client: { dev: { createEnvironment: async () => environment } },
+    },
+  } as unknown as ResolvedConfig;
+  const observer = createViteResourceObserver();
+  observer.register(config);
+  const env = await config.environments.client!.dev.createEnvironment(
+    'client',
+    config,
+    { ws: { close: async () => {} } } as never
+  );
+  await expect(env.init()).rejects.toBe(startup);
+  const closing = env.close();
+  const outcomes = await Promise.allSettled([closing, observer.settle(config)]);
+  expect(outcomes).toEqual([
+    { status: 'rejected', reason: failure },
+    { status: 'fulfilled', value: [failure] },
+  ]);
+  await expect(env.close()).rejects.toBe(failure);
+  expect(await observer.settle(config)).toEqual([failure]);
+  expect(nativeClose).toHaveBeenCalledOnce();
+  expect(hotClose).toHaveBeenCalledOnce();
+});
+it('drains pending failed-init siblings and orders native and part errors without replay', async () => {
+  const startup = new Error('Initialization failed');
+  const native = new Error('Environment close failed');
+  const hot = new Error('Hot close failed');
+  const optimizer = new Error('Optimizer close failed');
+  const gate = Promise.withResolvers<void>();
+  const hotClose = vi.fn(async () => {
+    throw hot;
+  });
+  const optimizerClose = vi.fn(async () => {
+    throw optimizer;
+  });
+  const bundledClose = vi.fn(() => gate.promise);
+  const nativeClose = vi.fn(async () => {
+    throw native;
+  });
+  const environment = {
+    hot: { close: hotClose },
+    depsOptimizer: { close: optimizerClose },
+    bundledDev: { close: bundledClose },
+    init: async () => {
+      throw startup;
+    },
+    close: nativeClose,
+  } as unknown as DevEnvironment;
+  const config = {
+    plugins: [],
+    environments: {
+      client: { dev: { createEnvironment: async () => environment } },
+    },
+  } as unknown as ResolvedConfig;
+  const observer = createViteResourceObserver();
+  observer.register(config);
+  const env = await config.environments.client!.dev.createEnvironment(
+    'client',
+    config,
+    { ws: { close: async () => {} } } as never
+  );
+  await expect(env.init()).rejects.toBe(startup);
+  const closing = env.close();
+  void closing.catch(() => {});
+  let settled = false;
+  void closing
+    .finally(() => {
+      settled = true;
+    })
+    .catch(() => {});
+  try {
+    await vi.waitFor(() => expect(bundledClose).toHaveBeenCalledOnce());
+    expect(hotClose).toHaveBeenCalledOnce();
+    expect(optimizerClose).toHaveBeenCalledOnce();
+    expect(settled).toBe(false);
+  } finally {
+    gate.resolve();
+  }
+  await expect(closing).rejects.toMatchObject({
+    errors: [native, hot, optimizer],
+    cause: native,
+  });
+  const failures = await observer.settle(config);
+  expect(failures).toContain(hot);
+  expect(failures).toContain(optimizer);
+  expect(nativeClose).toHaveBeenCalledOnce();
+  expect(bundledClose).toHaveBeenCalledOnce();
+});

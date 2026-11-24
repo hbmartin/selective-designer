@@ -12,6 +12,9 @@ import {
 import { beforeDeadline } from './promise-deadline';
 
 export type E2EFixturePorts = { database?: number; http?: number };
+type MessageOptions =
+  | { failureTypes?: undefined; afterIndex?: number }
+  | { failureTypes: readonly string[]; afterIndex: number };
 export type E2EFixtureMessage = {
   type: string;
   error?: string;
@@ -291,10 +294,23 @@ export async function launchE2EFixture(
           await delay(Math.min(20, Math.max(0, deadline - performance.now())));
         }
       },
-      async message(
-        type: string,
-        options: { failureTypes?: readonly string[]; afterIndex?: number } = {}
-      ) {
+      async message(type: string, options: MessageOptions = {}) {
+        if (
+          options.failureTypes !== undefined &&
+          options.afterIndex === undefined
+        )
+          throw new Error(
+            'Fixture action waits require a cursor captured before sending'
+          );
+        if (
+          options.afterIndex !== undefined &&
+          (!Number.isInteger(options.afterIndex) ||
+            options.afterIndex < 0 ||
+            options.afterIndex > messages.length)
+        )
+          throw new Error(
+            'Fixture message cursor must be an integer within the current buffer'
+          );
         const deadline = performance.now() + 20_000;
         while (true) {
           const outcome = messages

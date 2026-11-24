@@ -61,14 +61,24 @@ function writablePlugin(source: Plugin): Plugin {
         : Reflect.get(source, key, source);
     },
     set(object, key, value: unknown, receiver) {
-      return Object.hasOwn(object, key)
-        ? Reflect.set(object, key, value, receiver)
-        : Reflect.defineProperty(object, key, {
-            value,
-            writable: true,
-            enumerable: true,
-            configurable: true,
-          });
+      if (Object.hasOwn(object, key))
+        return Reflect.set(object, key, value, receiver);
+      for (
+        let owner: object | null = source;
+        owner;
+        owner = Object.getPrototypeOf(owner)
+      ) {
+        const descriptor = Object.getOwnPropertyDescriptor(owner, key);
+        if (!descriptor) continue;
+        if (descriptor.set) return Reflect.set(source, key, value, source);
+        break;
+      }
+      return Reflect.defineProperty(object, key, {
+        value,
+        writable: true,
+        enumerable: true,
+        configurable: true,
+      });
     },
     has: (object, key) => key in object || key in source,
     ownKeys: (object) => [

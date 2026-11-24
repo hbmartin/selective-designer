@@ -1,5 +1,8 @@
 import { afterEach, expect, it, vi } from 'vitest';
-import { replyToE2EFixtureAction } from '@tests/support/e2e-fixture-action';
+import {
+  notifyE2EFixture,
+  replyToE2EFixtureAction,
+} from '@tests/support/e2e-fixture-action';
 
 const sendDescriptor = Object.getOwnPropertyDescriptor(process, 'send');
 afterEach(() => {
@@ -108,4 +111,46 @@ it('waits for default IPC callback completion instead of its boolean return', as
   expect(settled).toBe(false);
   finish(null);
   await action;
+});
+
+it.each(['callback', 'throw', 'missing'])(
+  'observes passive %s failure once without changing exit status',
+  async (kind) => {
+    const previous = process.exitCode;
+    const failure = new Error('Notification channel closed');
+    const warning = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const send = vi.fn(
+      (_message: unknown, callback: (error: Error | null) => void) => {
+        if (kind === 'throw') throw failure;
+        queueMicrotask(() => callback(failure));
+        return false;
+      }
+    );
+    if (kind === 'missing') Reflect.deleteProperty(process, 'send');
+    else
+      Object.defineProperty(process, 'send', {
+        configurable: true,
+        value: send,
+      });
+    expect(notifyE2EFixture({ type: 'flush-held' })).toBeUndefined();
+    await vi.waitFor(() => expect(warning).toHaveBeenCalledOnce());
+    expect(process.exitCode).toBe(previous);
+    expect(send).toHaveBeenCalledTimes(kind === 'missing' ? 0 : 1);
+  }
+);
+it('does not await a stalled passive notification callback', async () => {
+  const warning = vi.spyOn(console, 'warn').mockImplementation(() => {});
+  let callback!: (error: Error | null) => void;
+  Object.defineProperty(process, 'send', {
+    configurable: true,
+    value: (_message: unknown, done: typeof callback) => {
+      callback = done;
+      return false;
+    },
+  });
+  expect(notifyE2EFixture({ type: 'cleanup-gate' })).toBeUndefined();
+  expect(callback).toBeTypeOf('function');
+  expect(warning).not.toHaveBeenCalled();
+  callback(new Error('Late callback failure'));
+  await vi.waitFor(() => expect(warning).toHaveBeenCalledOnce());
 });

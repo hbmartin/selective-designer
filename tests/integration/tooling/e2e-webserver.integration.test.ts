@@ -213,8 +213,12 @@ it('preserves data through Vite restart, then releases both listeners', async ()
     await client.query(
       'create table restart_evidence (value int); insert into restart_evidence values (42)'
     );
+    const afterIndex = fixture.messages.length;
     fixture.child.send('restart');
-    await fixture.message('restarted', { failureTypes: ['restart-failed'] });
+    await fixture.message('restarted', {
+      failureTypes: ['restart-failed'],
+      afterIndex,
+    });
     expect(
       (await client.query('select value from restart_evidence')).rows
     ).toEqual([{ value: 42 }]);
@@ -567,16 +571,22 @@ it('retires failed restart watchers before an env change and keeps one live inst
       'create table env_restart(value integer); insert into env_restart values(42)'
     );
     await observation();
+    const afterIndex = fixture.messages.length;
     fixture.child.send('restart');
-    await fixture.message('restarted', { failureTypes: ['restart-failed'] });
+    await fixture.message('restarted', {
+      failureTypes: ['restart-failed'],
+      afterIndex,
+    });
     expect(await observation()).toMatchObject({
       instances: 2,
       watchersOpen: 1,
       instancesClosed: 1,
     });
+    const abandonedAfterIndex = fixture.messages.length;
     fixture.child.send('abandoned-env-change');
     await fixture.message('abandoned-change-delivered', {
       failureTypes: ['abandoned-change-failed'],
+      afterIndex: abandonedAfterIndex,
     });
     expect(await observation()).toMatchObject({
       instances: 2,
@@ -661,6 +671,30 @@ it('observes a real disconnected response channel without crashing the launcher'
     expect(fixture.output()).not.toContain("Unhandled 'error' event");
     signalFixtureProcess(fixture.identity, 'SIGTERM');
     expect(await fixture.waitForExit()).toEqual([0, null]);
+    await expectListenersClosed(fixture);
+  } finally {
+    await fixture.dispose();
+  }
+}, 30_000);
+
+it('keeps disconnected final-flush notifications observed through the terminal deadline', async () => {
+  const fixture = await launch('final-flush-stalled');
+  try {
+    await fixture.ready();
+    fixture.child.send('disconnect-action');
+    await fixture.waitForOutput('ERR_IPC_CHANNEL_CLOSED');
+    const started = performance.now();
+    signalFixtureProcess(fixture.identity, 'SIGTERM');
+    expect(await fixture.waitForExit()).toEqual([1, null]);
+    expect(performance.now() - started).toBeGreaterThanOrEqual(9_000);
+    expect(fixture.output()).toContain(
+      'shutdown remains pending after nine seconds'
+    );
+    expect(fixture.output()).toContain('termination exceeded ten seconds');
+    expect(fixture.output()).toContain(
+      'E2E fixture notification transport diagnostic:'
+    );
+    expect(fixture.output()).not.toContain("Unhandled 'error' event");
     await expectListenersClosed(fixture);
   } finally {
     await fixture.dispose();
