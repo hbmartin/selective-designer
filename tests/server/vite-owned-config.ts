@@ -54,11 +54,26 @@ function writablePlugin(source: Plugin): Plugin {
     });
   if (!immutable) return source;
   const target = Object.create(Object.getPrototypeOf(source)) as Plugin;
+  const aliasKey = Symbol('e2e-plugin-facade');
+  const aliasToken = {};
+  Object.defineProperty(target, aliasKey, {
+    value: aliasToken,
+    configurable: true,
+  });
+  function isAlias(receiver: unknown): boolean {
+    return (
+      receiver === facade ||
+      (((typeof receiver === 'object' && receiver !== null) ||
+        typeof receiver === 'function') &&
+        Reflect.getOwnPropertyDescriptor(receiver, aliasKey)?.value ===
+          aliasToken)
+    );
+  }
   const facade: Plugin = new Proxy(target, {
     get(object, key, receiver) {
       return Object.hasOwn(object, key)
         ? Reflect.get(object, key, receiver)
-        : Reflect.get(source, key, receiver === facade ? source : receiver);
+        : Reflect.get(source, key, isAlias(receiver) ? source : receiver);
     },
     set(object, key, value: unknown, receiver): boolean {
       if (Object.hasOwn(object, key))
@@ -75,7 +90,7 @@ function writablePlugin(source: Plugin): Plugin {
             source,
             key,
             value,
-            receiver === facade ? source : receiver
+            isAlias(receiver) ? source : receiver
           );
         break;
       }
@@ -85,7 +100,9 @@ function writablePlugin(source: Plugin): Plugin {
         typeof destination !== 'function'
       )
         return false;
-      const own = Reflect.getOwnPropertyDescriptor(destination, key);
+      const own = isAlias(receiver)
+        ? undefined
+        : Reflect.getOwnPropertyDescriptor(destination, key);
       if (own) {
         if (!('value' in own) || !own.writable) return false;
         return Reflect.defineProperty(destination, key, { value });
@@ -99,7 +116,11 @@ function writablePlugin(source: Plugin): Plugin {
     },
     has: (object, key) => key in object || key in source,
     ownKeys: (object) => [
-      ...new Set([...Reflect.ownKeys(source), ...Reflect.ownKeys(object)]),
+      ...new Set(
+        [...Reflect.ownKeys(source), ...Reflect.ownKeys(object)].filter(
+          (key) => key !== aliasKey
+        )
+      ),
     ],
     getOwnPropertyDescriptor(object, key) {
       const own = Object.getOwnPropertyDescriptor(object, key);
@@ -107,6 +128,10 @@ function writablePlugin(source: Plugin): Plugin {
       const descriptor = Object.getOwnPropertyDescriptor(source, key);
       return descriptor && { ...descriptor, configurable: true };
     },
+    defineProperty: (object, key, descriptor) =>
+      key !== aliasKey && Reflect.defineProperty(object, key, descriptor),
+    deleteProperty: (object, key) =>
+      key !== aliasKey && Reflect.deleteProperty(object, key),
     preventExtensions: () => false,
   });
   for (const key of lifecycleKeys) {

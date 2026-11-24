@@ -809,3 +809,33 @@ it('runs a transform installed on an immutable plugin facade during configuratio
     expect(Object.hasOwn(plugin, 'transform')).toBe(false);
   });
 });
+
+it('runs a replacement of an existing frozen transform through a forwarding wrapper', async () => {
+  await harness(async ({ create, root }) => {
+    await writeFile(
+      path.join(root, 'wrapped.js'),
+      'export const value = "before";'
+    );
+    const original = vi.fn((code: string) => code);
+    const replacement = vi.fn((code: string, id: string) =>
+      id.endsWith('/wrapped.js') ? code.replace('before', 'after') : undefined
+    );
+    const plugin = Object.freeze({
+      name: 'wrapped-frozen-transform',
+      transform: original,
+      configResolved(config: ResolvedConfig) {
+        const facade = config.plugins.find(
+          (candidate) => candidate.name === 'wrapped-frozen-transform'
+        )!;
+        new Proxy(new Proxy(facade, {}), {}).transform = replacement;
+      },
+    });
+    const server = await create({ plugins: [plugin] });
+    expect((await server.transformRequest('/wrapped.js'))?.code).toContain(
+      'after'
+    );
+    expect(replacement).toHaveBeenCalled();
+    expect(original).not.toHaveBeenCalled();
+    expect(plugin.transform).toBe(original);
+  });
+});
