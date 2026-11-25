@@ -209,48 +209,63 @@ it('surfaces watcher rejection discarded by native Vite close', async () => {
     expect(await observer.settle(server.config)).toEqual([failure]);
   });
 });
-it('joins all sibling close hooks after native Vite rejects early', async () => {
+it('protects immutable lifecycle overlays and joins sibling hooks after native Vite rejects early', async () => {
   await harness(async ({ create, observer }) => {
     const first = new Error('First hook failed');
     const second = new Error('Late sibling failed');
-    let reject!: (error: Error) => void;
-    const delayed = new Promise<void>((_resolve, no) => {
-      reject = no;
+    const delayed = Promise.withResolvers<void>();
+    void delayed.promise.catch(() => {});
+    const siblingStarted = Promise.withResolvers<void>();
+    const immutable = Object.freeze({
+      name: 'delayed-close',
+      closeServer() {
+        siblingStarted.resolve();
+        return delayed.promise;
+      },
     });
-    let entered!: () => void;
-    const siblingStarted = new Promise<void>((yes) => {
-      entered = yes;
-    });
-    const server = await create({
-      plugins: [
-        {
-          name: 'first-close',
-          closeServer() {
-            throw first;
+    try {
+      const server = await create({
+        plugins: [
+          {
+            name: 'first-close',
+            closeServer() {
+              throw first;
+            },
           },
-        },
-        {
-          name: 'delayed-close',
-          closeServer() {
-            entered();
-            return delayed;
-          },
-        },
-      ],
-    });
-    await expect(
-      observer.run(server.config, () => server.close())
-    ).rejects.toBe(first);
-    await siblingStarted;
-    let settled = false;
-    const draining = observer.settle(server.config).then((errors) => {
-      settled = true;
-      return errors;
-    });
-    await Promise.resolve();
-    expect(settled).toBe(false);
-    reject(second);
-    expect(await draining).toEqual([first, second]);
+          immutable,
+        ],
+      });
+      const facade = server.config.plugins.find(
+        (plugin) => plugin.name === immutable.name
+      )!;
+      const alias = new Proxy(new Proxy(facade, {}), {});
+      for (const key of [
+        'configResolved',
+        'configureServer',
+        'closeServer',
+      ] as const) {
+        const wrapper = facade[key];
+        expect(Reflect.deleteProperty(alias, key)).toBe(false);
+        // Check before observer.run prepares again, which could hide lost tracking.
+        expect(facade[key]).toBe(wrapper);
+      }
+      expect(facade.closeServer).not.toBe(immutable.closeServer);
+      await expect(
+        observer.run(server.config, () => server.close())
+      ).rejects.toBe(first);
+      await siblingStarted.promise;
+      let settled = false;
+      const draining = observer.settle(server.config).then((errors) => {
+        settled = true;
+        return errors;
+      });
+      await Promise.resolve();
+      expect(settled).toBe(false);
+      delayed.reject(second);
+      expect(await draining).toEqual([first, second]);
+    } finally {
+      delayed.reject(second);
+    }
   });
 });
 it('retains a transient outer failure without replaying its wrapper', async () => {

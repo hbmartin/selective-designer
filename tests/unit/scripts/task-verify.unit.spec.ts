@@ -198,11 +198,47 @@ vi.mock('node:fs/promises', async (importOriginal) => {
 });
 let root: string | undefined;
 let previousExitCode: typeof process.exitCode;
+async function cleanupVerificationDirectories(
+  paths: { repair: string[]; root?: string; staging?: string },
+  io: Pick<typeof import('node:fs/promises'), 'chmod' | 'rm'>
+) {
+  const failures: unknown[] = [];
+  for (const directory of paths.repair) {
+    try {
+      await io.chmod(directory, 0o700);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException | undefined)?.code !== 'ENOENT')
+        failures.push(error);
+    }
+  }
+  for (const directory of [paths.root, paths.staging]) {
+    if (!directory) continue;
+    try {
+      await io.rm(directory, { recursive: true, force: true });
+    } catch (error) {
+      failures.push(error);
+    }
+  }
+  if (failures.length === 1) throw failures[0];
+  if (failures.length > 1)
+    throw new AggregateError(
+      failures,
+      failures[0] instanceof Error ? failures[0].message : String(failures[0]),
+      { cause: failures[0] }
+    );
+}
 afterEach(async () => {
   const restrictiveDirectories = [
     mocks.ordinaryDirectory,
     mocks.recoveryDirectory,
   ].filter(Boolean);
+  const paths = {
+    repair: restrictiveDirectories,
+    root,
+    staging: mocks.staging,
+  };
+  root = undefined;
+  mocks.staging = '';
   vi.restoreAllMocks();
   mocks.publishWait = undefined;
   mocks.publishEntered = undefined;
@@ -238,14 +274,7 @@ afterEach(async () => {
     await vi.importActual<typeof import('node:fs/promises')>(
       'node:fs/promises'
     );
-  for (const directory of restrictiveDirectories)
-    await actual
-      .chmod(directory, 0o700)
-      .catch((error: NodeJS.ErrnoException) => {
-        if (error.code !== 'ENOENT') throw error;
-      });
-  if (root) await rm(root, { recursive: true, force: true });
-  if (mocks.staging) await rm(mocks.staging, { recursive: true, force: true });
+  await cleanupVerificationDirectories(paths, actual);
 });
 async function run(
   failureAt?: number,
@@ -324,6 +353,100 @@ async function run(
   await import('../../../scripts/task-verify.mjs');
   return { output, error };
 }
+it.each([
+  { label: 'one repair failure', removalFails: false },
+  { label: 'repair and root-removal failures', removalFails: true },
+])('drains owned filesystem cleanup after $label', async ({ removalFails }) => {
+  const actual =
+    await vi.importActual<typeof import('node:fs/promises')>(
+      'node:fs/promises'
+    );
+  const temporary = await actual.mkdtemp(
+    path.join(os.tmpdir(), 'verification-cleanup-')
+  );
+  const ownedRoot = path.join(temporary, 'root');
+  const ordinary = path.join(ownedRoot, 'ordinary');
+  const recovery = path.join(ownedRoot, 'recovery');
+  const staging = path.join(temporary, 'staging');
+  const repairFailure = new Error('First repair rejected');
+  const removalFailure = new Error('Root removal rejected');
+  const calls: string[] = [];
+  try {
+    await actual.mkdir(ordinary, { recursive: true });
+    await actual.mkdir(recovery);
+    await actual.mkdir(staging);
+    const outcome = await cleanupVerificationDirectories(
+      { repair: [ordinary, recovery], root: ownedRoot, staging },
+      {
+        async chmod(target, mode) {
+          calls.push(`repair:${target}`);
+          if (target === ordinary) throw repairFailure;
+          await actual.chmod(target, mode);
+        },
+        async rm(target, options) {
+          calls.push(`remove:${target}`);
+          if (target === ownedRoot && removalFails) throw removalFailure;
+          await actual.rm(target, options);
+        },
+      }
+    ).then(
+      () => undefined,
+      (error: unknown) => error
+    );
+    expect(calls).toEqual([
+      `repair:${ordinary}`,
+      `repair:${recovery}`,
+      `remove:${ownedRoot}`,
+      `remove:${staging}`,
+    ]);
+    await expect(actual.stat(staging)).rejects.toMatchObject({
+      code: 'ENOENT',
+    });
+    if (removalFails) {
+      expect(outcome).toBeInstanceOf(AggregateError);
+      expect(outcome).toMatchObject({
+        message: repairFailure.message,
+        cause: repairFailure,
+        errors: [repairFailure, removalFailure],
+      });
+      expect((await actual.stat(recovery)).isDirectory()).toBe(true);
+    } else {
+      expect(outcome).toBe(repairFailure);
+      await expect(actual.stat(ownedRoot)).rejects.toMatchObject({
+        code: 'ENOENT',
+      });
+    }
+  } finally {
+    await actual.rm(temporary, { recursive: true, force: true });
+  }
+});
+it('ignores absent permission-repair targets and still removes owned roots', async () => {
+  const actual =
+    await vi.importActual<typeof import('node:fs/promises')>(
+      'node:fs/promises'
+    );
+  const temporary = await actual.mkdtemp(
+    path.join(os.tmpdir(), 'verification-missing-')
+  );
+  const ownedRoot = path.join(temporary, 'root');
+  const staging = path.join(temporary, 'staging');
+  try {
+    await actual.mkdir(ownedRoot);
+    await actual.mkdir(staging);
+    await cleanupVerificationDirectories(
+      { repair: [path.join(ownedRoot, 'missing')], root: ownedRoot, staging },
+      actual
+    );
+    await expect(actual.stat(ownedRoot)).rejects.toMatchObject({
+      code: 'ENOENT',
+    });
+    await expect(actual.stat(staging)).rejects.toMatchObject({
+      code: 'ENOENT',
+    });
+  } finally {
+    await actual.rm(temporary, { recursive: true, force: true });
+  }
+});
 it.each([undefined, 1])(
   'publishes complete logs after output deletion on failure=%s',
   async (failureAt) => {
@@ -811,7 +934,7 @@ it.skipIf(process.platform === 'win32').each([
     );
   }
 );
-it.each([
+it.skipIf(process.platform === 'win32').each([
   { label: 'matching group', mismatch: false },
   { label: 'different group', mismatch: true },
 ])('handles cleared setgid with $label', async ({ mismatch }) => {
@@ -922,7 +1045,7 @@ it('starts and drains sibling copies even when a copy throws synchronously', asy
   }
   const { output } = await running;
   const files = await readdir(await reportDirectory(output));
-  expect(files).toEqual(['format-changed.log', 'test.log']);
+  expect(files.sort()).toEqual(['format-changed.log', 'test.log']);
   expect(process.exitCode).toBe(1);
 });
 it('preserves partial data even when every copy rejects', async () => {
@@ -982,7 +1105,7 @@ it('keeps a later valid summary staged once the destination is stale', async () 
   expect(
     await readFile(path.join(mocks.staging, 'summary.md'), 'utf8')
   ).toContain('Interrupted: SIGINT');
-  expect(await readdir(mocks.recoveryDirectory)).toEqual([
+  expect((await readdir(mocks.recoveryDirectory)).sort()).toEqual([
     'check-ci.log',
     'format-changed.log',
     'test.log',
