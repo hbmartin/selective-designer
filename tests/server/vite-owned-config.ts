@@ -138,7 +138,11 @@ function writablePlugin(source: Plugin): Plugin {
     defineProperty: (object, key, descriptor) =>
       key !== aliasKey && Reflect.defineProperty(object, key, descriptor),
     deleteProperty(object, key) {
-      if (key === aliasKey) return false;
+      if (
+        key === aliasKey ||
+        lifecycleKeys.some((lifecycle) => lifecycle === key)
+      )
+        return false;
       if (Object.hasOwn(object, key))
         return Reflect.deleteProperty(object, key);
       return !Object.hasOwn(source, key);

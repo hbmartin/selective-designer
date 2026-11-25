@@ -1,6 +1,7 @@
 import {
   access,
   chmod,
+  mkdir,
   readFile,
   readdir,
   rm,
@@ -9,7 +10,7 @@ import {
 } from 'node:fs/promises';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
-import { afterEach, expect, it } from 'vitest';
+import { afterEach, expect, it, vi } from 'vitest';
 import {
   inspectFixtureProcesses,
   signalFixtureProcess,
@@ -77,10 +78,187 @@ it.each(['SIGINT', 'SIGTERM'] as const)(
   20000
 );
 
+const recoveryIO: {
+  chmod: (target: string, mode: number) => Promise<void>;
+  readFile: (target: string, encoding: 'utf8') => Promise<string>;
+  readdir: (target: string) => Promise<string[]>;
+  rm: (
+    target: string,
+    options: { recursive: boolean; force: boolean }
+  ) => Promise<void>;
+} = { chmod, readFile, readdir, rm };
+async function withRecoveryCleanup(
+  paths: { parent: string; manifest: string },
+  observe: (state: { ordinary?: string; staging?: string }) => Promise<void>,
+  io: typeof recoveryIO = recoveryIO
+) {
+  const state: { ordinary?: string; staging?: string } = {};
+  const failures: unknown[] = [];
+  try {
+    await observe(state);
+  } catch (error) {
+    failures.push(error);
+  }
+  try {
+    let candidate = state.ordinary;
+    if (!candidate) {
+      try {
+        const names = await io.readdir(paths.parent);
+        const name = names.find((entry) => !entry.includes('-incomplete-'));
+        if (name) candidate = path.join(paths.parent, name);
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException | undefined)?.code !== 'ENOENT')
+          throw error;
+      }
+    }
+    if (candidate) await io.chmod(candidate, 0o700);
+  } catch (error) {
+    failures.push(error);
+  }
+  try {
+    let recorded = state.staging;
+    if (!recorded) {
+      let text: string | undefined;
+      try {
+        text = await io.readFile(paths.manifest, 'utf8');
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException | undefined)?.code !== 'ENOENT')
+          throw error;
+      }
+      if (text !== undefined)
+        recorded = (JSON.parse(text) as { directory: string }).directory;
+    }
+    if (recorded) await io.rm(recorded, { recursive: true, force: true });
+  } catch (error) {
+    failures.push(error);
+  }
+  if (failures.length === 1) throw failures[0];
+  if (failures.length > 1)
+    throw new AggregateError(
+      failures,
+      failures[0] instanceof Error ? failures[0].message : String(failures[0]),
+      { cause: failures[0] }
+    );
+}
+
+it('retains the original failure when cleanup finds no allocated parent or manifest', async () => {
+  const fixture = createWorkflowFixture();
+  fixtures.push(fixture);
+  const parent = path.join(fixture.cwd, 'not-created');
+  const manifest = path.join(fixture.support, 'not-created.json');
+  const observation = new Error('Failure before allocation');
+  const io = {
+    chmod: vi.fn(recoveryIO.chmod),
+    readdir: vi.fn(recoveryIO.readdir),
+    readFile: vi.fn(recoveryIO.readFile),
+    rm: vi.fn(recoveryIO.rm),
+  };
+  await expect(
+    withRecoveryCleanup(
+      { parent, manifest },
+      async () => {
+        throw observation;
+      },
+      io
+    )
+  ).rejects.toBe(observation);
+  expect(io.readdir).toHaveBeenCalledExactlyOnceWith(parent);
+  expect(io.readFile).toHaveBeenCalledExactlyOnceWith(manifest, 'utf8');
+  expect(io.chmod).not.toHaveBeenCalled();
+  expect(io.rm).not.toHaveBeenCalled();
+});
+it.each([
+  'discovery',
+  'repair',
+  'manifest-read',
+  'manifest-parse',
+  'removal',
+] as const)(
+  'retains observation and genuine %s failure while draining recovery cleanup',
+  async (fault) => {
+    const fixture = createWorkflowFixture();
+    fixtures.push(fixture);
+    const parent = path.join(fixture.cwd, 'reports');
+    const ordinary = path.join(parent, 'ordinary');
+    const staging = path.join(fixture.support, 'staging');
+    const manifest = path.join(fixture.support, 'staging.json');
+    await mkdir(ordinary, { recursive: true });
+    await mkdir(staging);
+    await writeFile(manifest, JSON.stringify({ directory: staging }));
+    const observation = new Error('Original verification assertion');
+    const secondary = Object.assign(new Error(`Controlled ${fault} failure`), {
+      code: 'EACCES',
+    });
+    const io = {
+      chmod: vi.fn(recoveryIO.chmod),
+      readdir: vi.fn(recoveryIO.readdir),
+      readFile: vi.fn(recoveryIO.readFile),
+      rm: vi.fn(recoveryIO.rm),
+    };
+    if (fault === 'discovery') io.readdir.mockRejectedValueOnce(secondary);
+    if (fault === 'repair') io.chmod.mockRejectedValueOnce(secondary);
+    if (fault === 'manifest-read') io.readFile.mockRejectedValueOnce(secondary);
+    if (fault === 'manifest-parse')
+      await writeFile(manifest, 'malformed manifest');
+    if (fault === 'removal') io.rm.mockRejectedValueOnce(secondary);
+    try {
+      const outcome = await withRecoveryCleanup(
+        { parent, manifest },
+        async () => {
+          throw observation;
+        },
+        io
+      ).then(
+        () => undefined,
+        (error: unknown) => error
+      );
+      expect(outcome).toBeInstanceOf(AggregateError);
+      const aggregate = outcome as AggregateError;
+      expect(aggregate.message).toBe(observation.message);
+      expect(aggregate.cause).toBe(observation);
+      expect(aggregate.errors).toHaveLength(2);
+      expect(aggregate.errors[0]).toBe(observation);
+      if (fault === 'manifest-parse')
+        expect(aggregate.errors[1]).toBeInstanceOf(SyntaxError);
+      else expect(aggregate.errors[1]).toBe(secondary);
+      expect(io.readFile).toHaveBeenCalledExactlyOnceWith(manifest, 'utf8');
+      if (fault === 'discovery' || fault === 'repair')
+        await expect(stat(staging)).rejects.toMatchObject({ code: 'ENOENT' });
+      else expect((await stat(staging)).isDirectory()).toBe(true);
+    } finally {
+      await rm(staging, { recursive: true, force: true });
+    }
+  }
+);
+it('rethrows a sole cleanup failure unchanged after a successful observation', async () => {
+  const failure = Object.assign(new Error('Discovery denied'), {
+    code: 'EACCES',
+  });
+  const io = {
+    chmod: vi.fn(recoveryIO.chmod),
+    readdir: vi.fn(recoveryIO.readdir),
+    readFile: vi.fn(recoveryIO.readFile),
+    rm: vi.fn(recoveryIO.rm),
+  };
+  io.readdir.mockRejectedValueOnce(failure);
+  io.readFile.mockRejectedValueOnce(
+    Object.assign(new Error('Missing manifest'), { code: 'ENOENT' })
+  );
+  await expect(
+    withRecoveryCleanup(
+      { parent: '/synthetic/reports', manifest: '/synthetic/manifest' },
+      async () => {},
+      io
+    )
+  ).rejects.toBe(failure);
+  expect(io.readFile).toHaveBeenCalledOnce();
+});
+
 async function verifyRecoveryMode(
   mask: number,
   setgid: boolean,
-  mode?: number
+  mode?: number,
+  listRecovery: (directory: string) => Promise<string[]> = readdir
 ) {
   const fixture = createWorkflowFixture();
   fixtures.push(fixture);
@@ -130,10 +308,7 @@ syncBuiltinESMExports();
 await import(${JSON.stringify(pathToFileURL(path.resolve('scripts/task-verify.mjs')).href)});
 `
   );
-  let staging: string | undefined;
-  let ordinary: string | undefined;
-  const failures: unknown[] = [];
-  try {
+  await withRecoveryCleanup({ parent, manifest }, async (state) => {
     const result = await runFixtureCommand(process.execPath, [entry], fixture, {
       env: fixtureEnvironment(fixture),
       timeoutMs: 15000,
@@ -141,7 +316,7 @@ await import(${JSON.stringify(pathToFileURL(path.resolve('scripts/task-verify.mj
     expect(result.error).toBeUndefined();
     expect(result.status).toBe(1);
     const reports = await readdir(parent);
-    ordinary = path.join(
+    state.ordinary = path.join(
       parent,
       reports.find((name) => !name.includes('-incomplete-'))!
     );
@@ -152,11 +327,11 @@ await import(${JSON.stringify(pathToFileURL(path.resolve('scripts/task-verify.mj
     const metadata = JSON.parse(await readFile(manifest, 'utf8')) as {
       directory: string;
     };
-    staging = metadata.directory;
+    state.staging = metadata.directory;
     const [originalStat, recoveryStat, stagingStat] = await Promise.all([
-      stat(ordinary),
+      stat(state.ordinary),
       stat(recovery),
-      stat(staging),
+      stat(state.staging),
     ]);
     const originalMode = mode ?? (0o777 & ~mask) | (setgid ? 0o2000 : 0);
     const expected = 0o700 | (originalMode & 0o3075);
@@ -164,50 +339,16 @@ await import(${JSON.stringify(pathToFileURL(path.resolve('scripts/task-verify.mj
     expect(recoveryStat.mode & 0o7777).toBe(expected);
     expect(recoveryStat.gid).toBe(originalStat.gid);
     expect(stagingStat.mode & 0o777).toBe(0o700);
-    expect(await readdir(recovery)).toEqual([
+    expect((await listRecovery(recovery)).sort()).toEqual([
       'check.log',
       'format-changed.log',
       'test.log',
     ]);
     expect(result.stderr).toContain(
-      `Incomplete verification artifacts: ${recovery}; retained staging: ${staging}`
+      `Incomplete verification artifacts: ${recovery}; retained staging: ${state.staging}`
     );
     expect(result.stderr).not.toContain('artifacts: undefined');
-  } catch (error) {
-    failures.push(error);
-  } finally {
-    try {
-      // Only repair our fixture's directory, including after an earlier assertion failed.
-      const candidate =
-        ordinary ??
-        (await readdir(parent)).find((name) => !name.includes('-incomplete-'));
-      if (candidate)
-        await chmod(
-          path.isAbsolute(candidate) ? candidate : path.join(parent, candidate),
-          0o700
-        );
-    } catch (error) {
-      failures.push(error);
-    }
-    try {
-      const recorded =
-        staging ??
-        (await readFile(manifest, 'utf8').then(
-          (text) => (JSON.parse(text) as { directory: string }).directory,
-          () => undefined
-        ));
-      if (recorded) await rm(recorded, { recursive: true, force: true });
-    } catch (error) {
-      failures.push(error);
-    }
-  }
-  if (failures.length === 1) throw failures[0];
-  if (failures.length > 1)
-    throw new AggregateError(
-      failures,
-      'Publication verification and cleanup failed',
-      { cause: failures[0] }
-    );
+  });
 }
 it.skipIf(process.platform === 'win32').each([
   { label: '0o022', mask: 0o022 },
@@ -224,7 +365,10 @@ it.skipIf(process.platform === 'win32').each([
   { label: '0o1777', mode: 0o1777 },
 ])(
   'publishes real logs from inaccessible or permissive report mode $label',
-  ({ mode }) => verifyRecoveryMode(0o022, false, mode),
+  ({ mode }) =>
+    verifyRecoveryMode(0o022, false, mode, async (directory) =>
+      (await readdir(directory)).reverse()
+    ),
   20000
 );
 it.runIf(process.platform === 'linux')(

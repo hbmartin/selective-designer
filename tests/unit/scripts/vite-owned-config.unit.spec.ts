@@ -1,5 +1,6 @@
 import { afterEach, expect, it, vi } from 'vitest';
-import type { Plugin } from 'vite';
+import type { Plugin, ResolvedConfig } from 'vite';
+import { createViteResourceObserver } from '@tests/server/vite-resource-observer';
 import {
   createOwnedViteConfig,
   withE2EViteOwnership,
@@ -19,6 +20,92 @@ vi.mock('node:fs/promises', async (original) => ({
   rm: mocks.rm,
 }));
 afterEach(() => vi.resetAllMocks());
+
+it.each(['direct', 'nested-alias'] as const)(
+  'keeps lifecycle ownership overlays after rejected deletion through %s',
+  async (kind) => {
+    const resolved = vi.fn();
+    const configure = vi.fn();
+    const close = vi.fn();
+    const source = Object.freeze({
+      name: 'protected-lifecycle',
+      configResolved: resolved,
+      configureServer: configure,
+      closeServer: close,
+    });
+    const facade = withE2EViteOwnership({ plugins: [source] })
+      .plugins![1] as Plugin;
+    const receiver =
+      kind === 'direct' ? facade : new Proxy(new Proxy(facade, {}), {});
+    const observer = createViteResourceObserver();
+    const prepare = vi.fn();
+    const register = vi.fn();
+    const config = {
+      plugins: [
+        facade,
+        { name: 'e2e-owned-database', api: { prepare, register } },
+      ],
+      environments: {},
+    } as unknown as ResolvedConfig;
+    observer.prepare(config);
+    for (const key of [
+      'configResolved',
+      'configureServer',
+      'closeServer',
+    ] as const) {
+      const descriptor = Object.getOwnPropertyDescriptor(facade, key);
+      const wrapper = facade[key];
+      expect(wrapper).not.toBe(source[key]);
+      expect(Reflect.deleteProperty(receiver, key)).toBe(false);
+      expect(() => {
+        delete receiver[key];
+      }).toThrow(TypeError);
+      expect(Object.getOwnPropertyDescriptor(facade, key)).toEqual(descriptor);
+      expect(facade[key]).toBe(wrapper);
+    }
+    const invoke = (hook: unknown, value: unknown) => {
+      const callback =
+        typeof hook === 'function'
+          ? (hook as (value: unknown) => unknown)
+          : (hook as { handler: (value: unknown) => unknown }).handler;
+      return callback.call(receiver, value);
+    };
+    await invoke(facade.configResolved, config);
+    expect(prepare).toHaveBeenCalledExactlyOnceWith(config);
+    const server = { config };
+    await invoke(facade.configureServer, server);
+    expect(register).toHaveBeenCalledTimes(2);
+    expect(register).toHaveBeenNthCalledWith(1, server);
+    expect(register).toHaveBeenNthCalledWith(2, server);
+    await invoke(facade.closeServer, server);
+    expect(resolved).toHaveBeenCalledOnce();
+    expect(configure).toHaveBeenCalledOnce();
+    expect(close).toHaveBeenCalledOnce();
+    const replacement = vi.fn();
+    const derived = Object.create(receiver) as Plugin;
+    derived.closeServer = replacement;
+    expect(facade.closeServer).toBe(replacement);
+    expect(source.closeServer).toBe(close);
+  }
+);
+it('protects absent lifecycle slots without sealing their descriptors', () => {
+  const facade = withE2EViteOwnership({
+    plugins: [Object.freeze({ name: 'absent-lifecycle' })],
+  }).plugins![1] as Plugin;
+  for (const key of [
+    'configResolved',
+    'configureServer',
+    'closeServer',
+  ] as const) {
+    expect(Reflect.deleteProperty(facade, key)).toBe(false);
+    expect(Object.getOwnPropertyDescriptor(facade, key)?.configurable).toBe(
+      true
+    );
+    const replacement = vi.fn();
+    facade[key] = replacement;
+    expect(facade[key]).toBe(replacement);
+  }
+});
 
 it('adds writable plugin-local properties without mutating immutable sources', () => {
   let live = 'first';
